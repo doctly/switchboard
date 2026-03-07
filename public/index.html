@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Session Browser</title>
+  <link rel="stylesheet" href="/xterm/css/xterm.css">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <h1>Sessions</h1>
+      <button id="star-toggle" title="Show starred only">&#9733;</button>
+      <button id="archive-toggle" title="Show archived sessions">Archived</button>
+    </div>
+    <div id="search-bar">
+      <input id="search-input" type="text" placeholder="Search by name or ID..." />
+    </div>
+    <div id="sidebar-content"></div>
+  </div>
+  <div id="main">
+    <div id="placeholder">
+      <p>Select a session from the sidebar to begin.</p>
+    </div>
+    <div id="terminal-area">
+      <div id="terminal-header" style="display:none;">
+        <div id="terminal-header-info">
+          <span id="terminal-header-name"></span>
+          <span id="terminal-header-id"></span>
+        </div>
+        <div id="terminal-header-controls">
+          <span id="terminal-header-status"></span>
+          <button id="terminal-stop-btn" title="Stop process">Stop</button>
+          <button id="terminal-restart-btn" title="Restart session">Restart</button>
+        </div>
+      </div>
+      <div id="terminals"></div>
+    </div>
+  </div>
+  <script src="/xterm/lib/xterm.js"></script>
+  <script src="/xterm-addon-fit/lib/addon-fit.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
