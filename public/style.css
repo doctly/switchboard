@@ -1799,6 +1799,153 @@ body { display: flex; flex-direction: column; }
   color: #f5be3c;
 }
 
+/* ========== ADD PROJECT BUTTON ========== */
+#add-project-btn {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.08);
+  color: #555568;
+  font-size: 11px;
+  padding: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+  font-weight: 500;
+  line-height: 1;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+}
+
+#add-project-btn:hover {
+  background: rgba(255,255,255,0.04);
+  border-color: rgba(255,255,255,0.12);
+  color: #888;
+}
+
+/* ========== ADD PROJECT DIALOG ========== */
+.add-project-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.add-project-dialog {
+  background: #1e1e2e;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px;
+  padding: 20px;
+  width: 440px;
+  max-width: 90vw;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+
+.add-project-dialog h3 {
+  margin: 0 0 16px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #d0d0e0;
+}
+
+.add-project-hint {
+  color: #666;
+  font-size: 12px;
+  margin-bottom: 12px;
+  line-height: 1.4;
+}
+
+.add-project-dialog .folder-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.add-project-dialog .folder-input-row input {
+  flex: 1;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: #d0d0e0;
+  font-size: 13px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  outline: none;
+}
+
+.add-project-dialog .folder-input-row input:focus {
+  border-color: rgba(120,130,255,0.4);
+}
+
+.add-project-dialog .folder-input-row input::placeholder {
+  color: #555;
+}
+
+.add-project-browse-btn {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: #b0b0c4;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+
+.add-project-browse-btn:hover {
+  background: rgba(255,255,255,0.1);
+  border-color: rgba(255,255,255,0.15);
+}
+
+.add-project-dialog .add-project-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.add-project-dialog .add-project-actions button {
+  padding: 7px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.1);
+  transition: all 0.15s;
+}
+
+.add-project-cancel-btn {
+  background: transparent;
+  color: #888;
+}
+
+.add-project-cancel-btn:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+.add-project-add-btn {
+  background: rgba(120,130,255,0.15);
+  color: #8088ff;
+  border-color: rgba(120,130,255,0.3) !important;
+}
+
+.add-project-add-btn:hover {
+  background: rgba(120,130,255,0.25);
+}
+
+.add-project-error {
+  color: #ff6b6b;
+  font-size: 12px;
+  margin-top: 8px;
+  display: none;
+}
+
 /* ========== GLOBAL SETTINGS BUTTON ========== */
 #global-settings-btn {
   background: transparent;
@@ -1817,7 +1964,6 @@ body { display: flex; flex-direction: column; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-left: auto;
 }
 
 #global-settings-btn:hover {

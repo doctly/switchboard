@@ -42,6 +42,7 @@ const settingsViewer = document.getElementById('settings-viewer');
 const settingsViewerTitle = document.getElementById('settings-viewer-title');
 const settingsViewerBody = document.getElementById('settings-viewer-body');
 const globalSettingsBtn = document.getElementById('global-settings-btn');
+const addProjectBtn = document.getElementById('add-project-btn');
 const jsonlViewer = document.getElementById('jsonl-viewer');
 const jsonlViewerTitle = document.getElementById('jsonl-viewer-title');
 const jsonlViewerSessionId = document.getElementById('jsonl-viewer-session-id');
@@ -99,6 +100,71 @@ function clearUnread(sessionId) {
   unreadSessions.delete(sessionId);
   const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
   if (item) item.classList.remove('has-unread');
+}
+
+// --- Terminal themes ---
+const TERMINAL_THEMES = {
+  switchboard: {
+    label: 'Switchboard',
+    background: '#1a1a2e', foreground: '#e0e0e0', cursor: '#e94560', selectionBackground: '#3a3a5e',
+    black: '#1a1a2e', red: '#e94560', green: '#0dff00', yellow: '#f5a623', blue: '#7b68ee', magenta: '#c678dd', cyan: '#56b6c2', white: '#c5c8c6',
+    brightBlack: '#555568', brightRed: '#ff6b81', brightGreen: '#69ff69', brightYellow: '#ffd93d', brightBlue: '#8fa8ff', brightMagenta: '#d19afc', brightCyan: '#7ee8e8', brightWhite: '#eaeaea',
+  },
+  ghostty: {
+    label: 'Ghostty',
+    background: '#292c33', foreground: '#ffffff', cursor: '#ffffff', cursorAccent: '#363a43', selectionBackground: '#ffffff', selectionForeground: '#292c33',
+    black: '#1d1f21', red: '#bf6b69', green: '#b7bd73', yellow: '#e9c880', blue: '#88a1bb', magenta: '#ad95b8', cyan: '#95bdb7', white: '#c5c8c6',
+    brightBlack: '#666666', brightRed: '#c55757', brightGreen: '#bcc95f', brightYellow: '#e1c65e', brightBlue: '#83a5d6', brightMagenta: '#bc99d4', brightCyan: '#83beb1', brightWhite: '#eaeaea',
+  },
+  tokyoNight: {
+    label: 'Tokyo Night',
+    background: '#1a1b26', foreground: '#c0caf5', cursor: '#c0caf5', selectionBackground: '#33467c',
+    black: '#15161e', red: '#f7768e', green: '#9ece6a', yellow: '#e0af68', blue: '#7aa2f7', magenta: '#bb9af7', cyan: '#7dcfff', white: '#a9b1d6',
+    brightBlack: '#414868', brightRed: '#f7768e', brightGreen: '#9ece6a', brightYellow: '#e0af68', brightBlue: '#7aa2f7', brightMagenta: '#bb9af7', brightCyan: '#7dcfff', brightWhite: '#c0caf5',
+  },
+  catppuccinMocha: {
+    label: 'Catppuccin Mocha',
+    background: '#1e1e2e', foreground: '#cdd6f4', cursor: '#f5e0dc', selectionBackground: '#45475a',
+    black: '#45475a', red: '#f38ba8', green: '#a6e3a1', yellow: '#f9e2af', blue: '#89b4fa', magenta: '#f5c2e7', cyan: '#94e2d5', white: '#bac2de',
+    brightBlack: '#585b70', brightRed: '#f38ba8', brightGreen: '#a6e3a1', brightYellow: '#f9e2af', brightBlue: '#89b4fa', brightMagenta: '#f5c2e7', brightCyan: '#94e2d5', brightWhite: '#a6adc8',
+  },
+  dracula: {
+    label: 'Dracula',
+    background: '#282a36', foreground: '#f8f8f2', cursor: '#f8f8f2', selectionBackground: '#44475a',
+    black: '#21222c', red: '#ff5555', green: '#50fa7b', yellow: '#f1fa8c', blue: '#bd93f9', magenta: '#ff79c6', cyan: '#8be9fd', white: '#f8f8f2',
+    brightBlack: '#6272a4', brightRed: '#ff6e6e', brightGreen: '#69ff94', brightYellow: '#ffffa5', brightBlue: '#d6acff', brightMagenta: '#ff92df', brightCyan: '#a4ffff', brightWhite: '#ffffff',
+  },
+  nord: {
+    label: 'Nord',
+    background: '#2e3440', foreground: '#d8dee9', cursor: '#d8dee9', selectionBackground: '#434c5e',
+    black: '#3b4252', red: '#bf616a', green: '#a3be8c', yellow: '#ebcb8b', blue: '#81a1c1', magenta: '#b48ead', cyan: '#88c0d0', white: '#e5e9f0',
+    brightBlack: '#4c566a', brightRed: '#bf616a', brightGreen: '#a3be8c', brightYellow: '#ebcb8b', brightBlue: '#81a1c1', brightMagenta: '#b48ead', brightCyan: '#8fbcbb', brightWhite: '#eceff4',
+  },
+  solarizedDark: {
+    label: 'Solarized Dark',
+    background: '#002b36', foreground: '#839496', cursor: '#839496', selectionBackground: '#073642',
+    black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900', blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
+    brightBlack: '#002b36', brightRed: '#cb4b16', brightGreen: '#586e75', brightYellow: '#657b83', brightBlue: '#839496', brightMagenta: '#6c71c4', brightCyan: '#93a1a1', brightWhite: '#fdf6e3',
+  },
+};
+
+let currentThemeName = 'switchboard';
+function getTerminalTheme() {
+  return TERMINAL_THEMES[currentThemeName] || TERMINAL_THEMES.switchboard;
+}
+let TERMINAL_THEME = getTerminalTheme();
+
+// --- Terminal key handler: send modifier+key combos as kitty protocol sequences ---
+function attachTerminalKeyHandler(terminal, getSessionId) {
+  terminal.attachCustomKeyEventHandler((e) => {
+    if (e.type !== 'keydown') return true;
+    // Shift+Enter → kitty protocol: CSI 13 ; 2 u
+    if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      window.api.sendInput(getSessionId(), '\x1b[13;2u');
+      return false;
+    }
+    return true;
+  });
 }
 
 // --- IPC listeners from main process ---
@@ -426,6 +492,12 @@ function updateRunningIndicators() {
     const id = item.dataset.sessionId;
     const running = activePtyIds.has(id);
     item.classList.toggle('has-running-pty', running);
+    if (!running) {
+      item.classList.remove('has-unread', 'needs-attention', 'is-busy', 'has-progress', 'has-error');
+      unreadSessions.delete(id);
+      attentionSessions.delete(id);
+      sessionProgressState.delete(id);
+    }
     const dot = item.querySelector('.session-status-dot');
     if (dot) dot.classList.toggle('running', running);
   });
@@ -507,18 +579,20 @@ async function loadProjects() {
   dedup(cachedAllProjects);
 
   // Reconcile pending sessions: remove ones that now have real data
+  let hasReinjected = false;
   for (const [sid, pending] of [...pendingSessions]) {
     const realExists = allProjects.some(p => p.sessions.some(s => s.sessionId === sid));
     if (realExists) {
       pendingSessions.delete(sid);
     } else {
+      hasReinjected = true;
       // Still pending — re-inject into cached data
       for (const projList of [cachedProjects, cachedAllProjects]) {
         let proj = projList.find(p => p.projectPath === pending.projectPath);
         if (!proj) {
           // Project not in list (no other sessions) — create a synthetic entry
           proj = { folder: pending.folder, projectPath: pending.projectPath, sessions: [] };
-          projList.push(proj);
+          projList.unshift(proj);
         }
         if (!proj.sessions.some(s => s.sessionId === sid)) {
           proj.sessions.unshift(pending.session);
@@ -532,7 +606,7 @@ async function loadProjects() {
     const activeTerminals = await window.api.getActiveTerminals();
     for (const { sessionId, projectPath } of activeTerminals) {
       if (pendingSessions.has(sessionId)) continue; // already tracked
-      const folder = projectPath.replace(/\//g, '-').replace(/^-/, '-');
+      const folder = projectPath.replace(/[/_]/g, '-').replace(/^-/, '-');
       const session = {
         sessionId, summary: 'Terminal', firstPrompt: '', projectPath,
         name: null, starred: 0, archived: 0, messageCount: 0,
@@ -705,7 +779,7 @@ function renderProjects(projects, isSearchResult) {
     if (showRunningOnly) {
       filtered = filtered.filter(s => activePtyIds.has(s.sessionId));
     }
-    if (filtered.length === 0) continue;
+    if (filtered.length === 0 && project.sessions.length > 0) continue;
 
     // === STEP 2: Sort ===
     // Priority: pinned+running > running > pinned > rest (by modified desc)
@@ -1239,16 +1313,18 @@ async function launchNewSession(project, sessionOptions) {
   };
 
   // Track as pending (no .jsonl yet)
-  const folder = projectPath.replace(/\//g, '-').replace(/^-/, '-');
+  const folder = projectPath.replace(/[/_]/g, '-').replace(/^-/, '-');
   pendingSessions.set(sessionId, { session, projectPath, folder });
 
   // Inject into cached project data so it appears in sidebar immediately
   sessionMap.set(sessionId, session);
   for (const projList of [cachedProjects, cachedAllProjects]) {
-    const proj = projList.find(p => p.projectPath === projectPath);
-    if (proj) {
-      proj.sessions.unshift(session);
+    let proj = projList.find(p => p.projectPath === projectPath);
+    if (!proj) {
+      proj = { folder, projectPath, sessions: [] };
+      projList.unshift(proj);
     }
+    proj.sessions.unshift(session);
   }
   renderProjects(showArchived ? cachedAllProjects : cachedProjects);
 
@@ -1270,12 +1346,7 @@ async function launchNewSession(project, sessionOptions) {
   const terminal = new Terminal({
     fontSize: 12,
     fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
-    theme: {
-      background: '#1a1a2e',
-      foreground: '#e0e0e0',
-      cursor: '#e94560',
-      selectionBackground: '#3a3a5e',
-    },
+    theme: TERMINAL_THEME,
     cursorBlink: true,
     scrollback: 10000,
     convertEol: true,
@@ -1294,6 +1365,7 @@ async function launchNewSession(project, sessionOptions) {
   terminal.onData(data => {
     window.api.sendInput(session.sessionId, data);
   });
+  attachTerminalKeyHandler(terminal, () => session.sessionId);
 
   terminal.onResize(({ cols, rows }) => {
     window.api.resizeTerminal(session.sessionId, cols, rows);
@@ -1385,12 +1457,7 @@ async function openSession(session) {
   const terminal = new Terminal({
     fontSize: 12,
     fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
-    theme: {
-      background: '#1a1a2e',
-      foreground: '#e0e0e0',
-      cursor: '#e94560',
-      selectionBackground: '#3a3a5e',
-    },
+    theme: TERMINAL_THEME,
     cursorBlink: true,
     scrollback: 10000,
     convertEol: true,
@@ -1409,6 +1476,7 @@ async function openSession(session) {
   terminal.onData(data => {
     window.api.sendInput(entry.session.sessionId, data);
   });
+  attachTerminalKeyHandler(terminal, () => entry.session.sessionId);
 
   terminal.onResize(({ cols, rows }) => {
     window.api.resizeTerminal(entry.session.sessionId, cols, rows);
@@ -2257,6 +2325,8 @@ async function resolveDefaultSessionOptions(project) {
     options.worktree = true;
     if (effective.worktreeName) options.worktreeName = effective.worktreeName;
   }
+  if (effective.chrome) options.chrome = true;
+  if (effective.preLaunchCmd) options.preLaunchCmd = effective.preLaunchCmd;
   if (effective.addDirs) options.addDirs = effective.addDirs;
   return options;
 }
@@ -2293,10 +2363,15 @@ function showNewSessionPopover(project, anchorEl) {
   popover.appendChild(claudeOptsBtn);
   popover.appendChild(termBtn);
 
-  // Position relative to anchor
+  // Position relative to anchor, flip upward if it would overflow
   document.body.appendChild(popover);
   const rect = anchorEl.getBoundingClientRect();
-  popover.style.top = (rect.bottom + 4) + 'px';
+  const popoverHeight = popover.offsetHeight;
+  if (rect.bottom + 4 + popoverHeight > window.innerHeight) {
+    popover.style.top = (rect.top - popoverHeight - 4) + 'px';
+  } else {
+    popover.style.top = (rect.bottom + 4) + 'px';
+  }
   popover.style.left = rect.left + 'px';
 
   // Close on click outside
@@ -2327,16 +2402,18 @@ async function launchTerminalSession(project) {
   };
 
   // Track as pending
-  const folder = projectPath.replace(/\//g, '-').replace(/^-/, '-');
+  const folder = projectPath.replace(/[/_]/g, '-').replace(/^-/, '-');
   pendingSessions.set(sessionId, { session, projectPath, folder });
 
   // Inject into cached project data
   sessionMap.set(sessionId, session);
   for (const projList of [cachedProjects, cachedAllProjects]) {
-    const proj = projList.find(p => p.projectPath === projectPath);
-    if (proj) {
-      proj.sessions.unshift(session);
+    let proj = projList.find(p => p.projectPath === projectPath);
+    if (!proj) {
+      proj = { folder, projectPath, sessions: [] };
+      projList.unshift(proj);
     }
+    proj.sessions.unshift(session);
   }
   renderProjects(showArchived ? cachedAllProjects : cachedProjects);
 
@@ -2358,12 +2435,7 @@ async function launchTerminalSession(project) {
   const terminal = new Terminal({
     fontSize: 12,
     fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
-    theme: {
-      background: '#1a1a2e',
-      foreground: '#e0e0e0',
-      cursor: '#ffffff',
-      selectionBackground: '#3a3a5e',
-    },
+    theme: TERMINAL_THEME,
     cursorBlink: true,
     scrollback: 10000,
     convertEol: true,
@@ -2381,6 +2453,7 @@ async function launchTerminalSession(project) {
   terminal.onData(data => {
     window.api.sendInput(session.sessionId, data);
   });
+  attachTerminalKeyHandler(terminal, () => session.sessionId);
 
   terminal.onResize(({ cols, rows }) => {
     window.api.resizeTerminal(session.sessionId, cols, rows);
@@ -2423,8 +2496,8 @@ async function showNewSessionDialog(project) {
     { value: null, label: 'Default', desc: 'Prompt for all actions' },
     { value: 'acceptEdits', label: 'Accept Edits', desc: 'Auto-accept file edits, prompt for others' },
     { value: 'plan', label: 'Plan Mode', desc: 'Read-only exploration, no writes' },
-    { value: 'dontAsk', label: "Don't Ask", desc: 'Accept all tool calls automatically' },
-    { value: 'bypassPermissions', label: 'Bypass', desc: 'Skip permission checks entirely' },
+    { value: 'dontAsk', label: "Don't Ask", desc: 'Auto-deny tools not explicitly allowed' },
+    { value: 'bypassPermissions', label: 'Bypass', desc: 'Auto-accept all tool calls' },
   ];
 
   function renderModeGrid() {
@@ -2447,6 +2520,16 @@ async function showNewSessionDialog(project) {
         <label for="nsd-worktree">Worktree</label>
         <input type="text" class="settings-input" id="nsd-worktree-name" placeholder="name (optional)" value="${escapeHtml(effective.worktreeName || '')}" style="width:160px;margin-left:8px;">
       </div>
+    </div>
+    <div class="settings-field">
+      <div class="settings-checkbox-row">
+        <input type="checkbox" id="nsd-chrome" ${effective.chrome ? 'checked' : ''}>
+        <label for="nsd-chrome">Chrome</label>
+      </div>
+    </div>
+    <div class="settings-field">
+      <div class="settings-label">Pre-launch Command</div>
+      <input type="text" class="settings-input" id="nsd-pre-launch" placeholder="e.g. aws-vault exec profile --" value="${escapeHtml(effective.preLaunchCmd || '')}">
     </div>
     <div class="settings-field">
       <div class="settings-label">Add Directories (comma-separated)</div>
@@ -2492,6 +2575,11 @@ async function showNewSessionDialog(project) {
       options.worktree = true;
       options.worktreeName = dialog.querySelector('#nsd-worktree-name').value.trim();
     }
+    if (dialog.querySelector('#nsd-chrome').checked) {
+      options.chrome = true;
+    }
+    const preLaunch = dialog.querySelector('#nsd-pre-launch').value.trim();
+    if (preLaunch) options.preLaunchCmd = preLaunch;
     options.addDirs = dialog.querySelector('#nsd-add-dirs').value.trim();
     close();
     launchNewSession(project, options);
@@ -2551,18 +2639,22 @@ async function openSettingsViewer(scope, projectPath) {
   const permModeValue = fieldValue('permissionMode', '');
   const worktreeValue = fieldValue('worktree', false);
   const worktreeNameValue = fieldValue('worktreeName', '');
+  const chromeValue = fieldValue('chrome', false);
+  const preLaunchValue = fieldValue('preLaunchCmd', '');
   const addDirsValue = fieldValue('addDirs', '');
   const visCountValue = fieldValue('visibleSessionCount', 10);
   const maxAgeValue = fieldValue('sessionMaxAgeDays', 3);
+  const themeValue = fieldValue('terminalTheme', 'switchboard');
 
   settingsViewerBody.innerHTML = `
     <div class="settings-form">
       <div class="settings-section">
-        <div class="settings-section-title">Session Defaults</div>
+        <div class="settings-section-title">Claude CLI Options</div>
+        <div class="settings-hint">These options are passed to the <code>claude</code> command when launching sessions.</div>
 
         <div class="settings-field">
           <div class="settings-field-header">
-            <span class="settings-label">Default Permission Mode</span>
+            <span class="settings-label">Permission Mode</span>
             ${useGlobalCheckbox('permissionMode')}
           </div>
           <select class="settings-select" id="sv-perm-mode" ${fieldDisabled('permissionMode')}>
@@ -2595,6 +2687,17 @@ async function openSettingsViewer(scope, projectPath) {
 
         <div class="settings-field">
           <div class="settings-field-header">
+            <span class="settings-label">Chrome</span>
+            ${useGlobalCheckbox('chrome')}
+          </div>
+          <div class="settings-checkbox-row">
+            <input type="checkbox" id="sv-chrome" ${chromeValue ? 'checked' : ''} ${fieldDisabled('chrome')}>
+            <label for="sv-chrome">Enable Chrome browser automation</label>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-header">
             <span class="settings-label">Additional Directories</span>
             ${useGlobalCheckbox('addDirs')}
           </div>
@@ -2603,7 +2706,33 @@ async function openSettingsViewer(scope, projectPath) {
       </div>
 
       <div class="settings-section">
-        <div class="settings-section-title">Display</div>
+        <div class="settings-section-title">Session Launch</div>
+        <div class="settings-hint">Options that control how sessions are started.</div>
+
+        <div class="settings-field">
+          <div class="settings-field-header">
+            <span class="settings-label">Pre-launch Command</span>
+            ${useGlobalCheckbox('preLaunchCmd')}
+          </div>
+          <div class="settings-hint">Prepended to the claude command (e.g. "aws-vault exec profile --" or "source .env &&")</div>
+          <input type="text" class="settings-input" id="sv-pre-launch" placeholder="e.g. aws-vault exec profile --" value="${escapeHtml(preLaunchValue)}" ${fieldDisabled('preLaunchCmd')}>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Application</div>
+        <div class="settings-hint">Switchboard display and appearance settings.</div>
+
+        ${!isProject ? `<div class="settings-field">
+          <div class="settings-field-header">
+            <span class="settings-label">Terminal Theme</span>
+          </div>
+          <select class="settings-select" id="sv-terminal-theme">
+            ${Object.entries(TERMINAL_THEMES).map(([key, t]) =>
+              `<option value="${key}" ${themeValue === key ? 'selected' : ''}>${escapeHtml(t.label)}</option>`
+            ).join('')}
+          </select>
+        </div>` : ''}
 
         <div class="settings-field">
           <div class="settings-field-header">
@@ -2637,6 +2766,8 @@ async function openSettingsViewer(scope, projectPath) {
         permissionMode: 'sv-perm-mode',
         worktree: 'sv-worktree',
         worktreeName: 'sv-worktree-name',
+        chrome: 'sv-chrome',
+        preLaunchCmd: 'sv-pre-launch',
         addDirs: 'sv-add-dirs',
         visibleSessionCount: 'sv-visible-count',
       };
@@ -2658,6 +2789,8 @@ async function openSettingsViewer(scope, projectPath) {
             permissionMode: () => settingsViewerBody.querySelector('#sv-perm-mode').value || null,
             worktree: () => settingsViewerBody.querySelector('#sv-worktree').checked,
             worktreeName: () => settingsViewerBody.querySelector('#sv-worktree-name').value.trim(),
+            chrome: () => settingsViewerBody.querySelector('#sv-chrome').checked,
+            preLaunchCmd: () => settingsViewerBody.querySelector('#sv-pre-launch').value.trim(),
             addDirs: () => settingsViewerBody.querySelector('#sv-add-dirs').value.trim(),
             visibleSessionCount: () => parseInt(settingsViewerBody.querySelector('#sv-visible-count').value) || 10,
           };
@@ -2668,9 +2801,12 @@ async function openSettingsViewer(scope, projectPath) {
       settings.permissionMode = settingsViewerBody.querySelector('#sv-perm-mode').value || null;
       settings.worktree = settingsViewerBody.querySelector('#sv-worktree').checked;
       settings.worktreeName = settingsViewerBody.querySelector('#sv-worktree-name').value.trim();
+      settings.chrome = settingsViewerBody.querySelector('#sv-chrome').checked;
+      settings.preLaunchCmd = settingsViewerBody.querySelector('#sv-pre-launch').value.trim();
       settings.addDirs = settingsViewerBody.querySelector('#sv-add-dirs').value.trim();
       settings.visibleSessionCount = parseInt(settingsViewerBody.querySelector('#sv-visible-count').value) || 10;
       settings.sessionMaxAgeDays = parseInt(settingsViewerBody.querySelector('#sv-max-age').value) || 3;
+      settings.terminalTheme = settingsViewerBody.querySelector('#sv-terminal-theme').value || 'switchboard';
     }
 
     // Preserve windowBounds and sidebarWidth if they exist
@@ -2682,10 +2818,18 @@ async function openSettingsViewer(scope, projectPath) {
 
     await window.api.setSetting(settingsKey, settings);
 
-    // Update visibleSessionCount and sessionMaxAgeDays
+    // Update visibleSessionCount, sessionMaxAgeDays, and theme
     if (!isProject) {
       if (settings.visibleSessionCount) visibleSessionCount = settings.visibleSessionCount;
       if (settings.sessionMaxAgeDays) sessionMaxAgeDays = settings.sessionMaxAgeDays;
+      if (settings.terminalTheme) {
+        currentThemeName = settings.terminalTheme;
+        TERMINAL_THEME = getTerminalTheme();
+        // Apply to all open terminals
+        for (const [, entry] of openSessions) {
+          entry.terminal.options.theme = TERMINAL_THEME;
+        }
+      }
       renderProjects(showArchived ? cachedAllProjects : cachedProjects);
     }
 
@@ -2701,6 +2845,81 @@ async function openSettingsViewer(scope, projectPath) {
 globalSettingsBtn.addEventListener('click', () => {
   openSettingsViewer('global');
 });
+
+// Add project button
+addProjectBtn.addEventListener('click', () => {
+  showAddProjectDialog();
+});
+
+function showAddProjectDialog() {
+  const overlay = document.createElement('div');
+  overlay.className = 'add-project-overlay';
+
+  const dialog = document.createElement('div');
+  dialog.className = 'add-project-dialog';
+
+  dialog.innerHTML = `
+    <h3>Add Project</h3>
+    <div class="add-project-hint">Select a folder to create a new project. To start a session in an existing project, use the + on its project header.</div>
+    <div class="folder-input-row">
+      <input type="text" id="add-project-path" placeholder="/path/to/project" autocomplete="off" spellcheck="false">
+      <button class="add-project-browse-btn">Browse</button>
+    </div>
+    <div class="add-project-error" id="add-project-error"></div>
+    <div class="add-project-actions">
+      <button class="add-project-cancel-btn">Cancel</button>
+      <button class="add-project-add-btn">Add</button>
+    </div>
+  `;
+
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+
+  const pathInput = dialog.querySelector('#add-project-path');
+  const errorEl = dialog.querySelector('#add-project-error');
+  pathInput.focus();
+
+  function close() {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+  }
+
+  async function addProject() {
+    const projectPath = pathInput.value.trim();
+    if (!projectPath) {
+      errorEl.textContent = 'Please enter a folder path.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    errorEl.style.display = 'none';
+    const result = await window.api.addProject(projectPath);
+    if (result.error) {
+      errorEl.textContent = result.error;
+      errorEl.style.display = 'block';
+      return;
+    }
+    close();
+
+    // Reload projects so the new one appears at the top (with fresh sort)
+    lastProjectSortTime = 0;
+    await loadProjects();
+  }
+
+  dialog.querySelector('.add-project-browse-btn').onclick = async () => {
+    const folder = await window.api.browseFolder();
+    if (folder) pathInput.value = folder;
+  };
+
+  dialog.querySelector('.add-project-cancel-btn').onclick = close;
+  dialog.querySelector('.add-project-add-btn').onclick = addProject;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  function onKey(e) {
+    if (e.key === 'Escape') close();
+    if (e.key === 'Enter') addProject();
+  }
+  document.addEventListener('keydown', onKey);
+}
 
 // --- Sidebar resize ---
 {
@@ -2793,6 +3012,10 @@ document.addEventListener('keydown', (e) => {
     }
     if (global.sessionMaxAgeDays) {
       sessionMaxAgeDays = global.sessionMaxAgeDays;
+    }
+    if (global.terminalTheme && TERMINAL_THEMES[global.terminalTheme]) {
+      currentThemeName = global.terminalTheme;
+      TERMINAL_THEME = getTerminalTheme();
     }
   }
 })();

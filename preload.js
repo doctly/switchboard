@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('api', {
   deleteSetting: (key) => ipcRenderer.invoke('delete-setting', key),
   getEffectiveSettings: (projectPath) => ipcRenderer.invoke('get-effective-settings', projectPath),
 
+  browseFolder: () => ipcRenderer.invoke('browse-folder'),
+  addProject: (projectPath) => ipcRenderer.invoke('add-project', projectPath),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
 
   // Send (fire-and-forget)

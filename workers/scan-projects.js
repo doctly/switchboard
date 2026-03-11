@@ -40,12 +40,14 @@ function deriveProjectPath(folderPath, folder) {
       } catch {}
     }
   } catch {}
-  return '/' + folder.replace(/-/g, '/').replace(/^\//, '');
+  // No cwd found — return null so callers can skip this folder
+  return null;
 }
 
 function readFolderFromFilesystem(folder) {
   const folderPath = path.join(PROJECTS_DIR, folder);
   const projectPath = deriveProjectPath(folderPath, folder);
+  if (!projectPath) return null;
   const sessions = [];
   let mtimeMs = 0;
   try { mtimeMs = fs.statSync(folderPath).mtimeMs; } catch {}
@@ -86,7 +88,7 @@ function readFolderFromFilesystem(folder) {
           }
         }
       } catch {}
-      if (!summary || messageCount < 2) continue;
+      if (!summary || messageCount < 1) continue;
       sessions.push({
         sessionId, folder, projectPath,
         summary, firstPrompt: summary,
@@ -111,7 +113,8 @@ try {
     if (i % 5 === 0 || i === folders.length - 1) {
       parentPort.postMessage({ type: 'progress', text: `Scanning projects (${i + 1}/${folders.length})\u2026` });
     }
-    results.push(readFolderFromFilesystem(folders[i]));
+    const result = readFolderFromFilesystem(folders[i]);
+    if (result) results.push(result);
   }
   parentPort.postMessage({ ok: true, results });
 } catch (err) {

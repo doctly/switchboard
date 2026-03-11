@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, screen, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } = require('electron');
 const { Worker } = require('worker_threads');
 const path = require('path');
 const fs = require('fs');
@@ -259,8 +259,8 @@ function deriveProjectPath(folderPath, folder) {
       } catch {}
     }
   } catch {}
-  // Fallback to the old heuristic
-  return '/' + folder.replace(/-/g, '/').replace(/^\//, '');
+  // No cwd found — return null so callers can skip this folder
+  return null;
 }
 
 /** Parse a single .jsonl file into a session object (or null if invalid) */
@@ -296,7 +296,7 @@ function readSessionFile(filePath, folder, projectPath) {
         textContent += text.slice(0, 500) + '\n';
       }
     }
-    if (!summary || messageCount < 2) return null;
+    if (!summary || messageCount < 1) return null;
     return {
       sessionId, folder, projectPath,
       summary, firstPrompt: summary,
@@ -313,6 +313,7 @@ function readSessionFile(filePath, folder, projectPath) {
 function readFolderFromFilesystem(folder) {
   const folderPath = path.join(PROJECTS_DIR, folder);
   const projectPath = deriveProjectPath(folderPath, folder);
+  if (!projectPath) return { projectPath: null, sessions: [] };
   const sessions = [];
 
   try {
@@ -335,6 +336,13 @@ function refreshFolder(folder) {
   }
 
   const projectPath = deriveProjectPath(folderPath, folder);
+  if (!projectPath) {
+    // Still record mtime so backgroundRefresh doesn't keep retrying
+    let mtimeMs = 0;
+    try { mtimeMs = fs.statSync(folderPath).mtimeMs; } catch {}
+    setFolderMeta(folder, null, mtimeMs);
+    return;
+  }
 
   // Get what's currently cached for this folder
   const cachedSessions = getCachedByFolder(folder);
@@ -438,14 +446,30 @@ function buildProjectsFromCache(showArchived) {
     folderMap.get(row.folder).sessions.push(s);
   }
 
+  // Include empty project directories (no sessions yet)
+  try {
+    const dirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+      .filter(d => d.isDirectory() && d.name !== '.git');
+    for (const d of dirs) {
+      if (!folderMap.has(d.name)) {
+        const projectPath = deriveProjectPath(path.join(PROJECTS_DIR, d.name), d.name);
+        if (projectPath) {
+          folderMap.set(d.name, { folder: d.name, projectPath, sessions: [] });
+        }
+      }
+    }
+  } catch {}
+
   const projects = [];
   for (const proj of folderMap.values()) {
-    if (proj.sessions.length === 0) continue;
     proj.sessions.sort((a, b) => new Date(b.modified) - new Date(a.modified));
     projects.push(proj);
   }
 
   projects.sort((a, b) => {
+    // Empty projects go to the bottom
+    if (a.sessions.length === 0 && b.sessions.length > 0) return 1;
+    if (b.sessions.length === 0 && a.sessions.length > 0) return -1;
     const aDate = a.sessions[0]?.modified || '';
     const bDate = b.sessions[0]?.modified || '';
     return new Date(bDate) - new Date(aDate);
@@ -569,6 +593,49 @@ function populateCacheViaWorker() {
     populatingCache = false;
   });
 }
+
+// --- IPC: browse-folder ---
+ipcMain.handle('browse-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory', 'createDirectory'],
+    title: 'Select Project Folder',
+  });
+  if (result.canceled || !result.filePaths.length) return null;
+  return result.filePaths[0];
+});
+
+// --- IPC: add-project ---
+ipcMain.handle('add-project', (_event, projectPath) => {
+  try {
+    // Validate the path exists and is a directory
+    const stat = fs.statSync(projectPath);
+    if (!stat.isDirectory()) return { error: 'Path is not a directory' };
+
+    // Create the corresponding folder in ~/.claude/projects/ so it persists
+    const folder = projectPath.replace(/[/_]/g, '-').replace(/^-/, '-');
+    const folderPath = path.join(PROJECTS_DIR, folder);
+    if (!fs.existsSync(folderPath)) {
+      fs.mkdirSync(folderPath, { recursive: true });
+    }
+
+    // Seed a minimal .jsonl so deriveProjectPath can read the cwd
+    if (!fs.readdirSync(folderPath).some(f => f.endsWith('.jsonl'))) {
+      const seedId = require('crypto').randomUUID();
+      const seedFile = path.join(folderPath, seedId + '.jsonl');
+      const now = new Date().toISOString();
+      const line = JSON.stringify({ type: 'user', cwd: projectPath, sessionId: seedId, uuid: require('crypto').randomUUID(), timestamp: now, message: { role: 'user', content: 'New project' } });
+      fs.writeFileSync(seedFile, line + '\n');
+    }
+
+    // Immediately index the new folder so it's in cache before frontend renders
+    refreshFolder(folder);
+    notifyRendererProjectsChanged();
+
+    return { ok: true, folder, projectPath };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
 
 // --- IPC: get-projects ---
 ipcMain.handle('open-external', (_event, url) => {
@@ -803,9 +870,12 @@ const SETTING_DEFAULTS = {
   dangerouslySkipPermissions: false,
   worktree: false,
   worktreeName: '',
+  chrome: false,
+  preLaunchCmd: '',
   addDirs: '',
-  visibleSessionCount: 10,
+  visibleSessionCount: 5,
   sidebarWidth: 340,
+  terminalTheme: 'switchboard',
 };
 
 ipcMain.handle('get-effective-settings', (_event, projectPath) => {
@@ -930,7 +1000,7 @@ ipcMain.handle('open-terminal', (_event, sessionId, projectPath, isNew, sessionO
 
   if (!isPlainTerminal) {
     // Snapshot existing .jsonl files before spawning (for new session + fork/plan detection)
-    projectFolder = projectPath.replace(/\//g, '-').replace(/^-/, '-');
+    projectFolder = projectPath.replace(/[/_]/g, '-').replace(/^-/, '-');
     const claudeProjectDir = path.join(PROJECTS_DIR, projectFolder);
     if (fs.existsSync(claudeProjectDir)) {
       try {
@@ -1005,12 +1075,19 @@ ipcMain.handle('open-terminal', (_event, sessionId, projectPath, isNew, sessionO
             claudeCmd += ` "${sessionOptions.worktreeName}"`;
           }
         }
+        if (sessionOptions.chrome) {
+          claudeCmd += ' --chrome';
+        }
         if (sessionOptions.addDirs) {
           const dirs = sessionOptions.addDirs.split(',').map(d => d.trim()).filter(Boolean);
           for (const dir of dirs) {
             claudeCmd += ` --add-dir "${dir}"`;
           }
         }
+      }
+
+      if (sessionOptions?.preLaunchCmd) {
+        claudeCmd = sessionOptions.preLaunchCmd + ' ' + claudeCmd;
       }
 
       ptyProcess = pty.spawn(shell, ['-l', '-i', '-c', claudeCmd], {
