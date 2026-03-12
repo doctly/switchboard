@@ -8,3 +8,4 @@ public/codemirror-bundle.js
 *.pem
 .env
 .cache/
+dev-app-update.yml

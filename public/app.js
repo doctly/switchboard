@@ -3075,22 +3075,48 @@ window.api.onStatusUpdate((text, type) => {
   }
 });
 
-// --- Auto-update toast ---
+// --- Auto-update status + toast ---
+const statusBarUpdater = document.getElementById('status-bar-updater');
+let updaterStatusTimer = null;
+function setUpdaterStatus(text, duration) {
+  if (updaterStatusTimer) clearTimeout(updaterStatusTimer);
+  statusBarUpdater.textContent = text;
+  if (duration) {
+    updaterStatusTimer = setTimeout(() => { statusBarUpdater.textContent = ''; }, duration);
+  }
+}
 const updaterHandler = (type, data) => {
-  if (type === 'update-downloaded') {
-    const dismissed = localStorage.getItem('update-dismissed');
-    if (dismissed === data.version) return;
-
-    const toast = document.getElementById('update-toast');
-    const msg = document.getElementById('update-toast-msg');
-    msg.innerHTML = `New Version Ready<br><span class="update-version">v${data.version}</span>`;
-    toast.classList.remove('hidden');
-
-    document.getElementById('update-restart-btn').onclick = () => window.api.updaterInstall();
-    document.getElementById('update-dismiss-btn').onclick = () => {
-      toast.classList.add('hidden');
-      localStorage.setItem('update-dismissed', data.version);
-    };
+  switch (type) {
+    case 'checking':
+      setUpdaterStatus('Checking for updates…');
+      break;
+    case 'update-available':
+      setUpdaterStatus(`Downloading v${data.version}…`);
+      break;
+    case 'update-not-available':
+      setUpdaterStatus('Up to date', 3000);
+      break;
+    case 'download-progress':
+      setUpdaterStatus(`Updating… ${Math.round(data.percent)}%`);
+      break;
+    case 'update-downloaded': {
+      setUpdaterStatus(`v${data.version} ready — restart to update`);
+      const dismissed = localStorage.getItem('update-dismissed');
+      if (dismissed === data.version) return;
+      const toast = document.getElementById('update-toast');
+      const msg = document.getElementById('update-toast-msg');
+      msg.innerHTML = `New Version Ready<br><span class="update-version">v${data.version}</span>`;
+      toast.classList.remove('hidden');
+      document.getElementById('update-restart-btn').onclick = () => window.api.updaterInstall();
+      document.getElementById('update-dismiss-btn').onclick = () => {
+        toast.classList.add('hidden');
+        localStorage.setItem('update-dismissed', data.version);
+      };
+      break;
+    }
+    case 'error':
+      setUpdaterStatus('Update check failed', 5000);
+      break;
   }
 };
 window.api.onUpdaterEvent(updaterHandler);

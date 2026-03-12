@@ -5,6 +5,8 @@ const fs = require('fs');
 const os = require('os');
 const pty = require('node-pty');
 const log = require('electron-log');
+log.transports.file.level = app.isPackaged ? 'info' : 'debug';
+log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 
 try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
 
@@ -21,20 +23,29 @@ const cleanPtyEnv = Object.fromEntries(
 
 // --- Auto-updater (only in packaged builds) ---
 let autoUpdater = null;
-if (app.isPackaged) {
+if (app.isPackaged || process.env.FORCE_UPDATER) {
   autoUpdater = require('electron-updater').autoUpdater;
   autoUpdater.logger = log;
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  if (!app.isPackaged) autoUpdater.forceDevUpdateConfig = true;
 
-  autoUpdater.on('update-downloaded', (info) => {
-    log.info('Update downloaded, will install on next quit:', info.version);
+  function sendUpdaterEvent(type, data) {
+    log.info(`[updater] ${type}`, data || '');
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('updater-event', 'update-downloaded', info);
+      mainWindow.webContents.send('updater-event', type, data);
     }
-  });
+  }
+  autoUpdater.on('checking-for-update', () => sendUpdaterEvent('checking'));
+  autoUpdater.on('update-available', (info) => sendUpdaterEvent('update-available', info));
+  autoUpdater.on('update-not-available', (info) => sendUpdaterEvent('update-not-available', info));
+  autoUpdater.on('download-progress', (progress) => sendUpdaterEvent('download-progress', progress));
+  autoUpdater.on('update-downloaded', (info) => sendUpdaterEvent('update-downloaded', info));
   autoUpdater.on('error', (err) => {
-    log.error('Auto-update error:', err?.message || String(err));
+    log.error('[updater] Error:', err?.message || String(err));
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('updater-event', 'error', { message: err?.message || String(err) });
+    }
   });
 }
 const {
@@ -139,7 +150,6 @@ function createWindow() {
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return;
     const key = input.key.toLowerCase();
-    if (key === 'r') log.info(`[before-input] key=r ctrl=${input.control} meta=${input.meta} shift=${input.shift} alt=${input.alt}`);
     if (key === 'r' && input.meta) event.preventDefault();
     if (key === 'r' && input.control && input.shift) event.preventDefault();
   });
@@ -1124,13 +1134,13 @@ ipcMain.handle('open-terminal', (_event, sessionId, projectPath, isNew, sessionO
         const code = m[1];
         const payload = m[2].slice(0, 120);
         // Skip notification (9) — already logged below
-        if (code !== '9') log.info(`[OSC ${code}] session=${currentId} payload="${payload}"`);
+        if (code !== '9') log.debug(`[OSC ${code}] session=${currentId} payload="${payload}"`);
       }
       // Parse iTerm2 OSC 9 notification (terminated by BEL \x07 or ST \x1b\\)
       const notifMatch = data.match(/\x1b\]9;([^\x07\x1b]*)(?:\x07|\x1b\\)/);
       if (notifMatch && !notifMatch[1].startsWith('4;')) {
         const message = notifMatch[1];
-        log.info(`[OSC 9] session=${currentId} message="${message}"`);
+        log.debug(`[OSC 9] session=${currentId} message="${message}"`);
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('terminal-notification', currentId, message);
         }
@@ -1141,7 +1151,7 @@ ipcMain.handle('open-terminal', (_event, sessionId, projectPath, isNew, sessionO
       if (progressMatch) {
         const state = parseInt(progressMatch[1]);
         const percent = progressMatch[2] ? parseInt(progressMatch[2]) : -1;
-        log.info(`[OSC 9;4] session=${currentId} state=${state} percent=${percent}`);
+        log.debug(`[OSC 9;4] session=${currentId} state=${state} percent=${percent}`);
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('progress-state', currentId, state, percent);
         }
@@ -1197,7 +1207,6 @@ ipcMain.handle('open-terminal', (_event, sessionId, projectPath, isNew, sessionO
 
 // --- IPC: terminal-input (fire-and-forget) ---
 ipcMain.on('terminal-input', (_event, sessionId, data) => {
-  if (data.length === 1 && data.charCodeAt(0) < 32) log.info(`[terminal-input] session=${sessionId} ctrl-char=0x${data.charCodeAt(0).toString(16)}`);
   const session = activeSessions.get(sessionId);
   if (session && !session.exited) {
     session.pty.write(data);
@@ -1314,7 +1323,7 @@ function detectSessionTransitions(folder) {
 
     const newFiles = currentFiles.filter(f => !session.knownJsonlFiles.has(f));
 
-    log.info(`[detect] session=${sessionId} forkFrom=${session.forkFrom||'none'} folder=${folder} newFiles=${newFiles.length} knownCount=${session.knownJsonlFiles.size} currentCount=${currentFiles.length}`);
+    log.debug(`[detect] session=${sessionId} forkFrom=${session.forkFrom||'none'} folder=${folder} newFiles=${newFiles.length} knownCount=${session.knownJsonlFiles.size} currentCount=${currentFiles.length}`);
 
     if (newFiles.length === 0) continue;
 
@@ -1328,11 +1337,11 @@ function detectSessionTransitions(folder) {
       // File exists but has no parseable content yet — skip and retry next cycle
       if (!signals.forkedFrom && !signals.parentSessionId && !signals.slug && !signals.planContent) {
         emptyFiles.add(newFile);
-        log.info(`[detect] session=${sessionId} skipping empty newFile=${newId}`);
+        log.debug(`[detect] session=${sessionId} skipping empty newFile=${newId}`);
         continue;
       }
 
-      log.info(`[detect] session=${sessionId} checking newFile=${newId} signals=${JSON.stringify({forkedFrom: signals.forkedFrom||null, parentSessionId: signals.parentSessionId||null, slug: signals.slug||null})} forkFrom=${session.forkFrom||'none'}`);
+      log.debug(`[detect] session=${sessionId} checking newFile=${newId} signals=${JSON.stringify({forkedFrom: signals.forkedFrom||null, parentSessionId: signals.parentSessionId||null, slug: signals.slug||null})} forkFrom=${session.forkFrom||'none'}`);
 
       let matched = false;
 
@@ -1495,10 +1504,11 @@ app.whenReady().then(() => {
   if (autoUpdater) {
     const pub = require('./package.json').build?.publish;
     const hasRealRepo = pub && pub.owner && pub.owner !== 'OWNER';
+    log.info('[updater] pub config:', JSON.stringify(pub), 'hasRealRepo:', hasRealRepo);
     if (hasRealRepo) {
-      setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 5000);
+      setTimeout(() => autoUpdater.checkForUpdates().catch(e => log.error('[updater] check failed:', e?.message || String(e))), 5000);
       // Re-check every 4 hours for long-running sessions
-      setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 4 * 60 * 60 * 1000);
+      setInterval(() => autoUpdater.checkForUpdates().catch(e => log.error('[updater] check failed:', e?.message || String(e))), 4 * 60 * 60 * 1000);
     }
   }
 

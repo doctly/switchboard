@@ -93,6 +93,12 @@ body { display: flex; flex-direction: column; }
   color: #4a9;
 }
 
+#status-bar-updater {
+  white-space: nowrap;
+  color: #888;
+  font-style: italic;
+}
+
 /* ========== SIDEBAR ========== */
 #sidebar {
   width: 340px;
