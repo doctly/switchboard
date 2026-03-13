@@ -156,12 +156,13 @@ function getTerminalTheme() {
 }
 let TERMINAL_THEME = getTerminalTheme();
 
-// --- Terminal key handler: send modifier+key combos as kitty protocol sequences ---
-function attachTerminalKeyHandler(terminal, getSessionId) {
+// --- Terminal key bindings ---
+// Shift+Enter → kitty protocol (CSI 13;2u) so Claude Code treats it as newline, not submit.
+// Two layers needed:
+//   1. attachCustomKeyEventHandler returning false — blocks xterm's key pipeline (onKey/onData)
+//   2. preventDefault on capture-phase keydown — prevents browser inserting \n into textarea
+function setupTerminalKeyBindings(terminal, container, getSessionId) {
   terminal.attachCustomKeyEventHandler((e) => {
-    // Shift+Enter → kitty protocol: CSI 13 ; 2 u
-    // Must return false for ALL event types (keydown, keypress, keyup) to prevent
-    // the keypress handler from also sending \r through onData
     if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
       if (e.type === 'keydown') {
         window.api.sendInput(getSessionId(), '\x1b[13;2u');
@@ -170,6 +171,15 @@ function attachTerminalKeyHandler(terminal, getSessionId) {
     }
     return true;
   });
+
+  const textarea = container.querySelector('.xterm-helper-textarea');
+  if (textarea) {
+    textarea.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+      }
+    }, { capture: true });
+  }
 }
 
 // --- IPC listeners from main process ---
@@ -1398,7 +1408,7 @@ async function launchNewSession(project, sessionOptions) {
   terminal.onData(data => {
     window.api.sendInput(session.sessionId, data);
   });
-  attachTerminalKeyHandler(terminal, () => session.sessionId);
+  setupTerminalKeyBindings(terminal, container, () => session.sessionId);
 
   terminal.onResize(({ cols, rows }) => {
     window.api.resizeTerminal(session.sessionId, cols, rows);
@@ -1476,10 +1486,8 @@ async function openSession(session) {
     } else {
       entry.element.classList.add('visible');
       entry.fitAddon.fit();
+      entry.terminal.scrollToBottom();
       entry.terminal.focus();
-      // Defer scrollToBottom — fit() triggers an async re-render and
-      // scrolling before it completes lands at a stale viewport height.
-      requestAnimationFrame(() => entry.terminal.scrollToBottom());
       return;
     }
   }
@@ -1511,7 +1519,7 @@ async function openSession(session) {
   terminal.onData(data => {
     window.api.sendInput(entry.session.sessionId, data);
   });
-  attachTerminalKeyHandler(terminal, () => entry.session.sessionId);
+  setupTerminalKeyBindings(terminal, container, () => entry.session.sessionId);
 
   terminal.onResize(({ cols, rows }) => {
     window.api.resizeTerminal(entry.session.sessionId, cols, rows);
@@ -2488,7 +2496,7 @@ async function launchTerminalSession(project) {
   terminal.onData(data => {
     window.api.sendInput(session.sessionId, data);
   });
-  attachTerminalKeyHandler(terminal, () => session.sessionId);
+  setupTerminalKeyBindings(terminal, container, () => session.sessionId);
 
   terminal.onResize(({ cols, rows }) => {
     window.api.resizeTerminal(session.sessionId, cols, rows);
@@ -3030,23 +3038,6 @@ setTimeout(() => {
   });
 }, 100);
 
-// --- Terminal passthrough for intercepted shortcuts ---
-window.api.onTerminalPassthrough((data) => {
-  if (activeSessionId) window.api.sendInput(activeSessionId, data);
-});
-
-// --- Global keyboard shortcuts ---
-document.addEventListener('keydown', (e) => {
-  // Cmd+T: open new terminal in same project
-  if ((e.metaKey || e.ctrlKey) && e.key === 't') {
-    e.preventDefault();
-    const entry = activeSessionId && openSessions.get(activeSessionId);
-    const projectPath = entry?.session?.projectPath;
-    if (!projectPath) return;
-    const project = cachedAllProjects.find(p => p.projectPath === projectPath);
-    if (project) launchTerminalSession(project);
-  }
-});
 
 // --- Init: restore settings ---
 (async () => {
