@@ -16,6 +16,13 @@ contextBridge.exposeInMainWorld('api', {
   renameSession: (id, name) => ipcRenderer.invoke('rename-session', id, name),
   archiveSession: (id, archived) => ipcRenderer.invoke('archive-session', id, archived),
   openTerminal: (id, projectPath, isNew, sessionOptions) => ipcRenderer.invoke('open-terminal', id, projectPath, isNew, sessionOptions),
+  getSkills: () => ipcRenderer.invoke('get-skills'),
+  readSkill: (filePath) => ipcRenderer.invoke('read-skill', filePath),
+  getAgents: () => ipcRenderer.invoke('get-agents'),
+  readAgent: (filePath) => ipcRenderer.invoke('read-agent', filePath),
+  saveMemory: (filePath, content) => ipcRenderer.invoke('save-memory', filePath, content),
+  saveSkill: (filePath, content) => ipcRenderer.invoke('save-skill', filePath, content),
+  saveAgent: (filePath, content) => ipcRenderer.invoke('save-agent', filePath, content),
   search: (type, query) => ipcRenderer.invoke('search', type, query),
   readSessionJsonl: (sessionId) => ipcRenderer.invoke('read-session-jsonl', sessionId),
 
