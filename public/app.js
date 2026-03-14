@@ -71,6 +71,7 @@ const settingsViewerBody = document.getElementById('settings-viewer-body');
 const globalSettingsBtn = document.getElementById('global-settings-btn');
 const addProjectBtn = document.getElementById('add-project-btn');
 const resortBtn = document.getElementById('resort-btn');
+const collapseToggle = document.getElementById('collapse-toggle');
 const jsonlViewer = document.getElementById('jsonl-viewer');
 const jsonlViewerTitle = document.getElementById('jsonl-viewer-title');
 const jsonlViewerSessionId = document.getElementById('jsonl-viewer-session-id');
@@ -109,6 +110,7 @@ let visibleSessionCount = 10;
 let sessionMaxAgeDays = 3;
 const pendingSessions = new Map(); // sessionId → { session, projectPath, folder }
 let searchMatchIds = null; // null = no search active; Set<string> = matched session IDs
+let projectGroups = { groups: [], groupOrder: [] }; // folder groups for sidebar
 
 // --- Activity tracking ---
 const unreadSessions = new Set(); // sessions with unseen output
@@ -451,6 +453,25 @@ todayToggle.addEventListener('click', () => {
 // --- Re-sort button ---
 resortBtn.addEventListener('click', () => {
   loadProjects({ resort: true });
+});
+
+collapseToggle.addEventListener('click', () => {
+  const headers = sidebarContent.querySelectorAll('.project-header');
+  const slugGroups = sidebarContent.querySelectorAll('.slug-group');
+  const allCollapsed = [...headers].every(h => h.classList.contains('collapsed')) &&
+                       [...slugGroups].every(g => g.classList.contains('collapsed'));
+  if (allCollapsed) {
+    headers.forEach(h => h.classList.remove('collapsed'));
+    slugGroups.forEach(g => g.classList.remove('collapsed'));
+    collapseToggle.title = 'Collapse all';
+    collapseToggle.querySelector('svg').innerHTML = '<path d="M4 4.5l3 2.5-3 2.5"/><line x1="8" y1="2" x2="14" y2="2"/><line x1="8" y1="7" x2="14" y2="7"/><line x1="8" y1="12" x2="14" y2="12"/>';
+  } else {
+    headers.forEach(h => h.classList.add('collapsed'));
+    slugGroups.forEach(g => g.classList.add('collapsed'));
+    collapseToggle.title = 'Expand all';
+    collapseToggle.querySelector('svg').innerHTML = '<path d="M6 4.5l-3 2.5 3 2.5"/><line x1="8" y1="2" x2="14" y2="2"/><line x1="8" y1="7" x2="14" y2="7"/><line x1="8" y1="12" x2="14" y2="12"/>';
+  }
+  saveExpandedSlugs();
 });
 
 // --- Search (debounced, per-tab FTS) ---
@@ -808,6 +829,244 @@ function buildSlugGroup(slug, sessions) {
   return group;
 }
 
+// --- Project folder groups ---
+async function loadProjectGroups() {
+  const global = await window.api.getSetting('global');
+  if (global && global.projectGroups) {
+    projectGroups = global.projectGroups;
+  }
+}
+
+async function saveProjectGroups() {
+  const global = (await window.api.getSetting('global')) || {};
+  global.projectGroups = projectGroups;
+  await window.api.setSetting('global', global);
+}
+
+function getGroupForProject(projectPath) {
+  return projectGroups.groups.find(g => g.projectPaths.includes(projectPath));
+}
+
+function createGroup(name) {
+  const id = 'g_' + Date.now();
+  const group = { id, name, collapsed: false, projectPaths: [] };
+  projectGroups.groups.push(group);
+  projectGroups.groupOrder.push(id);
+  saveProjectGroups();
+  return group;
+}
+
+function deleteGroup(id) {
+  projectGroups.groups = projectGroups.groups.filter(g => g.id !== id);
+  projectGroups.groupOrder = projectGroups.groupOrder.filter(gid => gid !== id);
+  saveProjectGroups();
+}
+
+function addProjectToGroup(groupId, projectPath) {
+  for (const g of projectGroups.groups) {
+    g.projectPaths = g.projectPaths.filter(p => p !== projectPath);
+  }
+  const group = projectGroups.groups.find(g => g.id === groupId);
+  if (group && !group.projectPaths.includes(projectPath)) {
+    group.projectPaths.push(projectPath);
+  }
+  saveProjectGroups();
+}
+
+function removeProjectFromGroup(projectPath) {
+  for (const g of projectGroups.groups) {
+    g.projectPaths = g.projectPaths.filter(p => p !== projectPath);
+  }
+  saveProjectGroups();
+}
+
+function buildFolderGroupHeader(fg) {
+  const header = document.createElement('div');
+  header.className = 'folder-group-header';
+  header.id = 'fgh-' + fg.id;
+  header.innerHTML = `<span class="folder-group-chevron">${fg.collapsed ? '&#9654;' : '&#9660;'}</span><span class="folder-group-name">${escapeHtml(fg.name)}</span>`;
+  const deleteBtn = document.createElement('button');
+  deleteBtn.className = 'folder-group-delete-btn';
+  deleteBtn.title = 'Delete group';
+  deleteBtn.innerHTML = '&times;';
+  header.appendChild(deleteBtn);
+  return header;
+}
+
+function buildProjectElement(project, resort) {
+  // === Filter ===
+  let filtered = project.sessions;
+  if (showStarredOnly) {
+    filtered = filtered.filter(s => s.starred);
+  }
+  if (showRunningOnly) {
+    filtered = filtered.filter(s => activePtyIds.has(s.sessionId));
+  }
+  if (showTodayOnly) {
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    filtered = filtered.filter(s => {
+      if (!s.modified) return false;
+      const d = new Date(s.modified);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` === todayStr;
+    });
+  }
+  if (filtered.length === 0 && project.sessions.length > 0) return null;
+  const fId = folderId(project.projectPath);
+
+  // === Sort ===
+  filtered = [...filtered].sort((a, b) => {
+    const aRunning = activePtyIds.has(a.sessionId) || pendingSessions.has(a.sessionId);
+    const bRunning = activePtyIds.has(b.sessionId) || pendingSessions.has(b.sessionId);
+    const aPri = (a.starred && aRunning ? 3 : aRunning ? 2 : a.starred ? 1 : 0);
+    const bPri = (b.starred && bRunning ? 3 : bRunning ? 2 : b.starred ? 1 : 0);
+    if (aPri !== bPri) return bPri - aPri;
+    return new Date(b.modified) - new Date(a.modified);
+  });
+
+  // === Slug grouping ===
+  const slugMap = new Map();
+  const ungrouped = [];
+  for (const session of filtered) {
+    if (session.slug) {
+      if (!slugMap.has(session.slug)) slugMap.set(session.slug, []);
+      slugMap.get(session.slug).push(session);
+    } else {
+      ungrouped.push(session);
+    }
+  }
+
+  const allItems = [];
+  for (const session of ungrouped) {
+    const isRunning = activePtyIds.has(session.sessionId) || pendingSessions.has(session.sessionId);
+    allItems.push({
+      sortTime: new Date(session.modified).getTime(),
+      pinned: !!session.starred, running: isRunning,
+      element: buildSessionItem(session),
+    });
+  }
+  for (const [slug, sessions] of slugMap) {
+    const mostRecentTime = Math.max(...sessions.map(s => new Date(s.modified).getTime()));
+    const hasRunning = sessions.some(s => activePtyIds.has(s.sessionId) || pendingSessions.has(s.sessionId));
+    const hasPinned = sessions.some(s => s.starred);
+    const element = sessions.length === 1 ? buildSessionItem(sessions[0]) : buildSlugGroup(slug, sessions);
+    allItems.push({
+      sortTime: mostRecentTime,
+      pinned: hasPinned, running: hasRunning,
+      element,
+    });
+  }
+
+  // === Sort render items ===
+  const prevEntry = sortedOrder.find(e => e.projectPath === project.projectPath);
+  if (resort || !prevEntry) {
+    allItems.sort((a, b) => {
+      const aPri = (a.pinned && a.running ? 3 : a.running ? 2 : a.pinned ? 1 : 0);
+      const bPri = (b.pinned && b.running ? 3 : b.running ? 2 : b.pinned ? 1 : 0);
+      if (aPri !== bPri) return bPri - aPri;
+      return b.sortTime - a.sortTime;
+    });
+  } else {
+    const orderIndex = new Map(prevEntry.itemIds.map((id, i) => [id, i]));
+    allItems.sort((a, b) => {
+      const aPos = orderIndex.get(a.element.id);
+      const bPos = orderIndex.get(b.element.id);
+      if (aPos !== undefined && bPos !== undefined) return aPos - bPos;
+      if (aPos === undefined && bPos !== undefined) return -1;
+      if (aPos !== undefined && bPos === undefined) return 1;
+      return b.sortTime - a.sortTime;
+    });
+  }
+
+  const orderEntry = { projectPath: project.projectPath, itemIds: allItems.map(item => item.element.id) };
+
+  // === Truncate ===
+  let visible = [];
+  let older = [];
+  if (searchMatchIds !== null || showStarredOnly || showRunningOnly || showTodayOnly) {
+    visible = allItems;
+  } else {
+    let count = 0;
+    const ageCutoff = Date.now() - sessionMaxAgeDays * 86400000;
+    for (const item of allItems) {
+      if (item.running || item.pinned || (count < visibleSessionCount && item.sortTime >= ageCutoff)) {
+        visible.push(item);
+        count++;
+      } else {
+        older.push(item);
+      }
+    }
+    if (visible.length === 0 && older.length > 0) {
+      visible = older;
+      older = [];
+    }
+  }
+
+  // === Build DOM ===
+  const group = document.createElement('div');
+  group.className = 'project-group';
+  group.id = fId;
+
+  const header = document.createElement('div');
+  header.className = 'project-header';
+  header.id = 'ph-' + fId;
+  const shortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
+  header.innerHTML = `<span class="arrow">&#9660;</span> <span class="project-name">${shortName}</span>`;
+
+  const settingsBtn = document.createElement('button');
+  settingsBtn.className = 'project-settings-btn';
+  settingsBtn.title = 'Project settings';
+  settingsBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6.6 1h2.8l.4 2.1a5.5 5.5 0 0 1 1.3.8l2-.8 1.4 2.4-1.6 1.4a5.6 5.6 0 0 1 0 1.5l1.6 1.4-1.4 2.4-2-.8a5.5 5.5 0 0 1-1.3.8L9.4 15H6.6l-.4-2.1a5.5 5.5 0 0 1-1.3-.8l-2 .8-1.4-2.4 1.6-1.4a5.6 5.6 0 0 1 0-1.5L1.5 6.2l1.4-2.4 2 .8a5.5 5.5 0 0 1 1.3-.8L6.6 1z"/><circle cx="8" cy="8" r="2.5"/></svg>';
+  header.appendChild(settingsBtn);
+
+  const archiveGroupBtn = document.createElement('button');
+  archiveGroupBtn.className = 'project-archive-btn';
+  archiveGroupBtn.title = 'Archive all sessions';
+  archiveGroupBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1,1 L11,1 L11,4 L1,4 Z"/><path d="M1,4 L1,11 L11,11 L11,4"/><line x1="5" y1="6.5" x2="7" y2="6.5"/></svg>';
+  header.appendChild(archiveGroupBtn);
+
+  const newBtn = document.createElement('button');
+  newBtn.className = 'project-new-btn';
+  newBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="6" y1="2" x2="6" y2="10"/><line x1="2" y1="6" x2="10" y2="6"/></svg>';
+  newBtn.title = 'New session';
+  header.appendChild(newBtn);
+
+  const sessionsList = document.createElement('div');
+  sessionsList.className = 'project-sessions';
+  sessionsList.id = 'sessions-' + fId;
+
+  for (const item of visible) {
+    sessionsList.appendChild(item.element);
+  }
+
+  if (older.length > 0) {
+    const moreBtn = document.createElement('div');
+    moreBtn.className = 'sessions-more-toggle';
+    moreBtn.id = 'older-' + fId;
+    moreBtn.textContent = `+ ${older.length} older`;
+    const olderList = document.createElement('div');
+    olderList.className = 'sessions-older';
+    olderList.id = 'older-list-' + fId;
+    olderList.style.display = 'none';
+    for (const item of older) {
+      olderList.appendChild(item.element);
+    }
+    sessionsList.appendChild(moreBtn);
+    sessionsList.appendChild(olderList);
+  }
+
+  if (searchMatchIds === null && !showStarredOnly && !showRunningOnly) {
+    const mostRecent = filtered[0]?.modified;
+    if (mostRecent && (Date.now() - new Date(mostRecent)) > sessionMaxAgeDays * 86400000) {
+      header.classList.add('collapsed');
+    }
+  }
+
+  group.appendChild(header);
+  group.appendChild(sessionsList);
+  return { element: group, orderEntry };
+}
+
 function renderProjects(projects, resort) {
   const newSidebar = document.createElement('div');
 
@@ -826,186 +1085,62 @@ function renderProjects(projects, resort) {
   // projects are now in the correct order (data order for resort, preserved order otherwise)
 
   const newSortedOrder = [];
+  const isSearching = searchMatchIds !== null;
+
+  // Partition projects into folder groups vs ungrouped
+  const groupedProjectMap = new Map();
+  const ungroupedProjectsList = [];
 
   for (const project of projects) {
-    // === STEP 1: Filter ===
-    let filtered = project.sessions;
-    if (showStarredOnly) {
-      filtered = filtered.filter(s => s.starred);
-    }
-    if (showRunningOnly) {
-      filtered = filtered.filter(s => activePtyIds.has(s.sessionId));
-    }
-    if (showTodayOnly) {
-      const now = new Date();
-      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-      filtered = filtered.filter(s => {
-        if (!s.modified) return false;
-        const d = new Date(s.modified);
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` === todayStr;
-      });
-    }
-    if (filtered.length === 0 && project.sessions.length > 0) continue;
-    const fId = folderId(project.projectPath);
-
-    // === STEP 2: Sort ===
-    // Priority: pinned+running > running > pinned > rest (by modified desc)
-    filtered = [...filtered].sort((a, b) => {
-      const aRunning = activePtyIds.has(a.sessionId) || pendingSessions.has(a.sessionId);
-      const bRunning = activePtyIds.has(b.sessionId) || pendingSessions.has(b.sessionId);
-      const aPri = (a.starred && aRunning ? 3 : aRunning ? 2 : a.starred ? 1 : 0);
-      const bPri = (b.starred && bRunning ? 3 : bRunning ? 2 : b.starred ? 1 : 0);
-      if (aPri !== bPri) return bPri - aPri;
-      return new Date(b.modified) - new Date(a.modified);
-    });
-
-    // === STEP 3: Slug grouping ===
-    const slugMap = new Map(); // slug → sessions[]
-    const ungrouped = [];
-    for (const session of filtered) {
-      if (session.slug) {
-        if (!slugMap.has(session.slug)) slugMap.set(session.slug, []);
-        slugMap.get(session.slug).push(session);
-      } else {
-        ungrouped.push(session);
-      }
-    }
-
-    // Build render items (slug group = 1 item)
-    const allItems = [];
-    for (const session of ungrouped) {
-      const isRunning = activePtyIds.has(session.sessionId) || pendingSessions.has(session.sessionId);
-      allItems.push({
-        sortTime: new Date(session.modified).getTime(),
-        pinned: !!session.starred, running: isRunning,
-        element: buildSessionItem(session),
-      });
-    }
-    for (const [slug, sessions] of slugMap) {
-      const mostRecentTime = Math.max(...sessions.map(s => new Date(s.modified).getTime()));
-      const hasRunning = sessions.some(s => activePtyIds.has(s.sessionId) || pendingSessions.has(s.sessionId));
-      const hasPinned = sessions.some(s => s.starred);
-      const element = sessions.length === 1 ? buildSessionItem(sessions[0]) : buildSlugGroup(slug, sessions);
-      allItems.push({
-        sortTime: mostRecentTime,
-        pinned: hasPinned, running: hasRunning,
-        element,
-      });
-    }
-
-    // === STEP 4: Sort render items ===
-    const prevEntry = sortedOrder.find(e => e.projectPath === project.projectPath);
-    if (resort || !prevEntry) {
-      // Full sort by priority + modified time
-      allItems.sort((a, b) => {
-        const aPri = (a.pinned && a.running ? 3 : a.running ? 2 : a.pinned ? 1 : 0);
-        const bPri = (b.pinned && b.running ? 3 : b.running ? 2 : b.pinned ? 1 : 0);
-        if (aPri !== bPri) return bPri - aPri;
-        return b.sortTime - a.sortTime;
-      });
+    const fg = !isSearching ? getGroupForProject(project.projectPath) : null;
+    if (fg) {
+      if (!groupedProjectMap.has(fg.id)) groupedProjectMap.set(fg.id, []);
+      groupedProjectMap.get(fg.id).push(project);
     } else {
-      // Preserve last-sorted order; new items go to top
-      const orderIndex = new Map(prevEntry.itemIds.map((id, i) => [id, i]));
-      allItems.sort((a, b) => {
-        const aPos = orderIndex.get(a.element.id);
-        const bPos = orderIndex.get(b.element.id);
-        if (aPos !== undefined && bPos !== undefined) return aPos - bPos;
-        if (aPos === undefined && bPos !== undefined) return -1;
-        if (aPos !== undefined && bPos === undefined) return 1;
-        return b.sortTime - a.sortTime;
-      });
+      ungroupedProjectsList.push(project);
     }
-    // Save current order for this project
-    newSortedOrder.push({ projectPath: project.projectPath, itemIds: allItems.map(item => item.element.id) });
+  }
 
-    // === STEP 5: Truncate — split into visible vs older ===
-    let visible = [];
-    let older = [];
-    if (searchMatchIds !== null || showStarredOnly || showRunningOnly || showTodayOnly) {
-      visible = allItems;
-    } else {
-      let count = 0;
-      const ageCutoff = Date.now() - sessionMaxAgeDays * 86400000;
-      for (const item of allItems) {
-        // Running and pinned always show; others must be within count AND age limit
-        if (item.running || item.pinned || (count < visibleSessionCount && item.sortTime >= ageCutoff)) {
-          visible.push(item);
-          count++;
-        } else {
-          older.push(item);
+  // Render folder groups in order
+  for (const groupId of projectGroups.groupOrder) {
+    const fg = projectGroups.groups.find(g => g.id === groupId);
+    if (!fg) continue;
+    if (isSearching && !groupedProjectMap.has(groupId)) continue;
+
+    const folderGroup = document.createElement('div');
+    folderGroup.className = 'folder-group';
+    folderGroup.id = 'fg-' + groupId;
+
+    const folderHeader = buildFolderGroupHeader(fg);
+
+    const folderBody = document.createElement('div');
+    folderBody.className = 'folder-group-body';
+    folderBody.id = 'fgb-' + groupId;
+    if (fg.collapsed) folderBody.style.display = 'none';
+
+    if (groupedProjectMap.has(groupId)) {
+      for (const project of groupedProjectMap.get(groupId)) {
+        const result = buildProjectElement(project, resort);
+        if (result) {
+          folderBody.appendChild(result.element);
+          newSortedOrder.push(result.orderEntry);
         }
       }
-      // If visible is empty but older has items, show them directly
-      if (visible.length === 0 && older.length > 0) {
-        visible = older;
-        older = [];
-      }
     }
 
-    // === STEP 6: Build DOM ===
-    const group = document.createElement('div');
-    group.className = 'project-group';
-    group.id = fId;
+    folderGroup.appendChild(folderHeader);
+    folderGroup.appendChild(folderBody);
+    if (!isSearching) newSidebar.appendChild(folderGroup);
+  }
 
-    const header = document.createElement('div');
-    header.className = 'project-header';
-    header.id = 'ph-' + fId;
-    const shortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
-    header.innerHTML = `<span class="arrow">&#9660;</span> <span class="project-name">${shortName}</span>`;
-
-    const settingsBtn = document.createElement('button');
-    settingsBtn.className = 'project-settings-btn';
-    settingsBtn.title = 'Project settings';
-    settingsBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6.6 1h2.8l.4 2.1a5.5 5.5 0 0 1 1.3.8l2-.8 1.4 2.4-1.6 1.4a5.6 5.6 0 0 1 0 1.5l1.6 1.4-1.4 2.4-2-.8a5.5 5.5 0 0 1-1.3.8L9.4 15H6.6l-.4-2.1a5.5 5.5 0 0 1-1.3-.8l-2 .8-1.4-2.4 1.6-1.4a5.6 5.6 0 0 1 0-1.5L1.5 6.2l1.4-2.4 2 .8a5.5 5.5 0 0 1 1.3-.8L6.6 1z"/><circle cx="8" cy="8" r="2.5"/></svg>';
-    header.appendChild(settingsBtn);
-
-    const archiveGroupBtn = document.createElement('button');
-    archiveGroupBtn.className = 'project-archive-btn';
-    archiveGroupBtn.title = 'Archive all sessions';
-    archiveGroupBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1,1 L11,1 L11,4 L1,4 Z"/><path d="M1,4 L1,11 L11,11 L11,4"/><line x1="5" y1="6.5" x2="7" y2="6.5"/></svg>';
-    header.appendChild(archiveGroupBtn);
-
-    const newBtn = document.createElement('button');
-    newBtn.className = 'project-new-btn';
-    newBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="6" y1="2" x2="6" y2="10"/><line x1="2" y1="6" x2="10" y2="6"/></svg>';
-    newBtn.title = 'New session';
-    header.appendChild(newBtn);
-
-    const sessionsList = document.createElement('div');
-    sessionsList.className = 'project-sessions';
-    sessionsList.id = 'sessions-' + fId;
-
-    for (const item of visible) {
-      sessionsList.appendChild(item.element);
+  // Render ungrouped projects (and all projects when searching)
+  const rootProjects = isSearching ? projects : ungroupedProjectsList;
+  for (const project of rootProjects) {
+    const result = buildProjectElement(project, resort);
+    if (result) {
+      newSidebar.appendChild(result.element);
+      newSortedOrder.push(result.orderEntry);
     }
-
-    if (older.length > 0) {
-      const moreBtn = document.createElement('div');
-      moreBtn.className = 'sessions-more-toggle';
-      moreBtn.id = 'older-' + fId;
-      moreBtn.textContent = `+ ${older.length} older`;
-      const olderList = document.createElement('div');
-      olderList.className = 'sessions-older';
-      olderList.id = 'older-list-' + fId;
-      olderList.style.display = 'none';
-      for (const item of older) {
-        olderList.appendChild(item.element);
-      }
-      sessionsList.appendChild(moreBtn);
-      sessionsList.appendChild(olderList);
-    }
-
-    // Auto-collapse if most recent session is older than 5 days
-    if (searchMatchIds === null && !showStarredOnly && !showRunningOnly) {
-      const mostRecent = filtered[0]?.modified;
-      if (mostRecent && (Date.now() - new Date(mostRecent)) > sessionMaxAgeDays * 86400000) {
-        header.classList.add('collapsed');
-      }
-    }
-
-    group.appendChild(header);
-    group.appendChild(sessionsList);
-    newSidebar.appendChild(group);
   }
 
   // Re-apply active state
@@ -1044,6 +1179,15 @@ function renderProjects(projects, resort) {
       if (fromEl.classList.contains('slug-group-more') && fromEl.classList.contains('expanded')) {
         toEl.classList.add('expanded');
       }
+      // Folder group: preserve collapsed state and body visibility
+      if (fromEl.classList.contains('folder-group-header')) {
+        const fromChevron = fromEl.querySelector('.folder-group-chevron');
+        const toChevron = toEl.querySelector('.folder-group-chevron');
+        if (fromChevron && toChevron) toChevron.innerHTML = fromChevron.innerHTML;
+      }
+      if (fromEl.classList.contains('folder-group-body')) {
+        toEl.style.display = fromEl.style.display;
+      }
       return true;
     },
     getNodeKey(node) {
@@ -1063,6 +1207,99 @@ function renderProjects(projects, resort) {
 }
 
 function rebindSidebarEvents(projects) {
+  // --- Folder group headers ---
+  sidebarContent.querySelectorAll('.folder-group-header').forEach(header => {
+    const groupId = header.id.replace('fgh-', '');
+    const deleteBtn = header.querySelector('.folder-group-delete-btn');
+    if (deleteBtn) {
+      deleteBtn.onclick = (e) => {
+        e.stopPropagation();
+        deleteGroup(groupId);
+        refreshSidebar();
+      };
+    }
+    const nameEl = header.querySelector('.folder-group-name');
+    if (nameEl) {
+      nameEl.ondblclick = (e) => {
+        e.stopPropagation();
+        nameEl.contentEditable = true;
+        nameEl.focus();
+        const range = document.createRange();
+        range.selectNodeContents(nameEl);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        const finish = () => {
+          nameEl.contentEditable = false;
+          const fg = projectGroups.groups.find(g => g.id === groupId);
+          if (fg) {
+            fg.name = nameEl.textContent.trim() || fg.name;
+            saveProjectGroups();
+          }
+        };
+        nameEl.onblur = finish;
+        nameEl.onkeydown = (ev) => {
+          if (ev.key === 'Enter') { ev.preventDefault(); nameEl.blur(); }
+          if (ev.key === 'Escape') { nameEl.contentEditable = false; refreshSidebar(); }
+        };
+      };
+    }
+    header.onclick = (e) => {
+      if (e.target.closest('.folder-group-delete-btn') || e.target.closest('.folder-group-name')) return;
+      const fg = projectGroups.groups.find(g => g.id === groupId);
+      if (fg) {
+        fg.collapsed = !fg.collapsed;
+        const body = document.getElementById('fgb-' + groupId);
+        if (body) body.style.display = fg.collapsed ? 'none' : '';
+        const chevron = header.querySelector('.folder-group-chevron');
+        if (chevron) chevron.innerHTML = fg.collapsed ? '&#9654;' : '&#9660;';
+        saveProjectGroups();
+      }
+    };
+    // Drop target for folder group
+    header.ondragover = (e) => { e.preventDefault(); header.classList.add('drag-over'); };
+    header.ondragleave = () => { header.classList.remove('drag-over'); };
+    header.ondrop = (e) => {
+      e.preventDefault();
+      header.classList.remove('drag-over');
+      const projectPath = e.dataTransfer.getData('text/x-project-path');
+      if (projectPath) {
+        addProjectToGroup(groupId, projectPath);
+        refreshSidebar();
+      }
+    };
+  });
+
+  // --- Make project headers draggable ---
+  for (const project of projects) {
+    const fId = folderId(project.projectPath);
+    const projGroup = document.getElementById(fId);
+    const header = document.getElementById('ph-' + fId);
+    if (!projGroup || !header) continue;
+    header.draggable = true;
+    header.ondragstart = (e) => {
+      e.dataTransfer.setData('text/x-project-path', project.projectPath);
+      e.dataTransfer.effectAllowed = 'move';
+      projGroup.classList.add('dragging');
+    };
+    header.ondragend = () => { projGroup.classList.remove('dragging'); };
+  }
+
+  // Drop on sidebar root to ungroup
+  sidebarContent.ondragover = (e) => {
+    if (!e.target.closest('.folder-group-header')) e.preventDefault();
+  };
+  sidebarContent.ondrop = (e) => {
+    if (!e.target.closest('.folder-group-header')) {
+      e.preventDefault();
+      const projectPath = e.dataTransfer.getData('text/x-project-path');
+      if (projectPath) {
+        removeProjectFromGroup(projectPath);
+        refreshSidebar();
+      }
+    }
+  };
+
   for (const project of projects) {
     const fId = folderId(project.projectPath);
     const header = document.getElementById('ph-' + fId);
@@ -1623,12 +1860,14 @@ function escapeHtml(str) {
 }
 
 // --- Tab switching ---
-document.querySelectorAll('.sidebar-tab').forEach(tab => {
+document.querySelectorAll('.sidebar-tab[data-tab]').forEach(tab => {
   tab.addEventListener('click', () => {
     const tabName = tab.dataset.tab;
-    if (tabName === activeTab) return;
+    const settingsWasActive = globalSettingsBtn.classList.contains('active');
+    if (tabName === activeTab && !settingsWasActive) return;
     activeTab = tabName;
     document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabName));
+    settingsViewer.style.display = 'none';
 
     // Clear search on tab switch
     searchInput.value = '';
@@ -3194,6 +3433,18 @@ async function openSettingsViewer(scope, projectPath) {
 
 // Global settings gear button
 globalSettingsBtn.addEventListener('click', () => {
+  // Deactivate other tabs, activate settings
+  document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
+  globalSettingsBtn.classList.add('active');
+  // Hide all sidebar content
+  sidebarContent.style.display = 'none';
+  plansContent.style.display = 'none';
+  statsContent.style.display = 'none';
+  memoryContent.style.display = 'none';
+  skillsContent.style.display = 'none';
+  agentsContent.style.display = 'none';
+  sessionFilters.style.display = 'none';
+  searchBar.style.display = 'none';
   openSettingsViewer('global');
 });
 
@@ -3201,6 +3452,49 @@ globalSettingsBtn.addEventListener('click', () => {
 addProjectBtn.addEventListener('click', () => {
   showAddProjectDialog();
 });
+
+const addGroupBtn = document.getElementById('add-group-btn');
+if (addGroupBtn) {
+  addGroupBtn.addEventListener('click', () => {
+    const overlay = document.createElement('div');
+    overlay.className = 'add-project-overlay';
+    const dialog = document.createElement('div');
+    dialog.className = 'add-project-dialog';
+    dialog.innerHTML = `
+      <h3>Add Group</h3>
+      <div class="add-project-hint">Create a named folder to organize projects in the sidebar.</div>
+      <div class="folder-input-row">
+        <input type="text" id="add-group-name" placeholder="Group name" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="add-project-error" id="add-group-error"></div>
+      <div class="add-project-actions">
+        <button class="add-project-cancel-btn">Cancel</button>
+        <button class="add-project-add-btn">Create</button>
+      </div>
+    `;
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    const nameInput = dialog.querySelector('#add-group-name');
+    const errorEl = dialog.querySelector('#add-group-error');
+    nameInput.focus();
+    function close() { overlay.remove(); document.removeEventListener('keydown', onKey); }
+    function submit() {
+      const name = nameInput.value.trim();
+      if (!name) { errorEl.textContent = 'Please enter a name.'; errorEl.style.display = 'block'; return; }
+      createGroup(name);
+      close();
+      refreshSidebar();
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') close();
+      if (e.key === 'Enter') submit();
+    }
+    document.addEventListener('keydown', onKey);
+    dialog.querySelector('.add-project-cancel-btn').onclick = close;
+    dialog.querySelector('.add-project-add-btn').onclick = submit;
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  });
+}
 
 function showAddProjectDialog() {
   const overlay = document.createElement('div');
@@ -3346,6 +3640,9 @@ setTimeout(() => {
     if (global.terminalTheme && TERMINAL_THEMES[global.terminalTheme]) {
       currentThemeName = global.terminalTheme;
       TERMINAL_THEME = getTerminalTheme();
+    }
+    if (global.projectGroups) {
+      projectGroups = global.projectGroups;
     }
   }
 })();
