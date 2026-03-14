@@ -12,10 +12,12 @@
   <div id="sidebar">
     <div id="sidebar-header">
       <div id="sidebar-tabs">
-        <button class="sidebar-tab active" data-tab="sessions">Sessions</button>
-        <button class="sidebar-tab" data-tab="plans">Plans</button>
-        <button class="sidebar-tab" data-tab="stats">Stats</button>
-        <button class="sidebar-tab" data-tab="memory">Memory</button>
+        <button class="sidebar-tab active" data-tab="sessions" title="Sessions"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="4,8 7,8 7,12"/><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/></svg></button>
+        <button class="sidebar-tab" data-tab="plans" title="Plans"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="1.5" width="10" height="13" rx="1.5"/><line x1="5.5" y1="5" x2="10.5" y2="5"/><line x1="5.5" y1="8" x2="10.5" y2="8"/><line x1="5.5" y1="11" x2="8.5" y2="11"/></svg></button>
+        <button class="sidebar-tab" data-tab="stats" title="Stats"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="9" width="3" height="5" rx="0.5"/><rect x="6.5" y="5" width="3" height="9" rx="0.5"/><rect x="11" y="2" width="3" height="12" rx="0.5"/></svg></button>
+        <button class="sidebar-tab" data-tab="memory" title="Memory"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2C5.5 2 3.5 4 3.5 6.5c0 1.5.7 2.8 1.8 3.7.5.4.7.9.7 1.5V13h4v-1.3c0-.6.2-1.1.7-1.5 1.1-.9 1.8-2.2 1.8-3.7C12.5 4 10.5 2 8 2z"/><line x1="6" y1="13" x2="10" y2="13"/><line x1="6.5" y1="14.5" x2="9.5" y2="14.5"/><line x1="8" y1="6" x2="8" y2="9"/><line x1="6" y1="7.5" x2="8" y2="9"/><line x1="10" y1="7.5" x2="8" y2="9"/></svg></button>
+        <button class="sidebar-tab" data-tab="skills" title="Skills"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9.5 1.5L5 8h3.5L6.5 14.5 11 8H7.5z"/></svg></button>
+        <button class="sidebar-tab" data-tab="agents" title="Agents"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="10" height="8" rx="2"/><circle cx="6" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="10" cy="8" r="1" fill="currentColor" stroke="none"/><line x1="5.5" y1="2" x2="5.5" y2="4"/><line x1="10.5" y1="2" x2="10.5" y2="4"/></svg></button>
       </div>
       <div id="session-filters">
         <button id="running-toggle" title="Show running only"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="4"/></svg></button>
@@ -38,6 +40,8 @@
       <div class="plans-empty">Click the Stats tab to view activity heatmap.</div>
     </div>
     <div id="memory-content" style="display:none;"></div>
+    <div id="skills-content" style="display:none;"></div>
+    <div id="agents-content" style="display:none;"></div>
   </div>
   <div id="sidebar-resize-handle"></div>
   <div id="main">
@@ -52,10 +56,45 @@
     </div>
     <div id="memory-viewer" style="display:none;">
       <div id="memory-viewer-header">
-        <span id="memory-viewer-title"></span>
-        <span id="memory-viewer-filename"></span>
+        <div id="memory-viewer-header-info">
+          <span id="memory-viewer-title"></span>
+          <span id="memory-viewer-filepath"></span>
+          <button id="memory-copy-path-btn" title="Copy file path"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M5.5 10.5h-1a1.5 1.5 0 0 1-1.5-1.5v-5a1.5 1.5 0 0 1 1.5-1.5h5a1.5 1.5 0 0 1 1.5 1.5v1"/></svg></button>
+        </div>
+        <div id="memory-viewer-header-controls">
+          <button id="memory-copy-content-btn" title="Copy raw content">Copy</button>
+          <button id="memory-save-btn" title="Save changes">Save</button>
+        </div>
       </div>
-      <div id="memory-viewer-body"></div>
+      <div id="memory-viewer-editor"></div>
+    </div>
+    <div id="skills-viewer" style="display:none;">
+      <div id="skills-viewer-header">
+        <div id="skills-viewer-header-info">
+          <span id="skills-viewer-title"></span>
+          <span id="skills-viewer-filepath"></span>
+          <button id="skills-copy-path-btn" title="Copy file path"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M5.5 10.5h-1a1.5 1.5 0 0 1-1.5-1.5v-5a1.5 1.5 0 0 1 1.5-1.5h5a1.5 1.5 0 0 1 1.5 1.5v1"/></svg></button>
+        </div>
+        <div id="skills-viewer-header-controls">
+          <button id="skills-copy-content-btn" title="Copy raw content">Copy</button>
+          <button id="skills-save-btn" title="Save changes">Save</button>
+        </div>
+      </div>
+      <div id="skills-viewer-editor"></div>
+    </div>
+    <div id="agents-viewer" style="display:none;">
+      <div id="agents-viewer-header">
+        <div id="agents-viewer-header-info">
+          <span id="agents-viewer-title"></span>
+          <span id="agents-viewer-filepath"></span>
+          <button id="agents-copy-path-btn" title="Copy file path"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M5.5 10.5h-1a1.5 1.5 0 0 1-1.5-1.5v-5a1.5 1.5 0 0 1 1.5-1.5h5a1.5 1.5 0 0 1 1.5 1.5v1"/></svg></button>
+        </div>
+        <div id="agents-viewer-header-controls">
+          <button id="agents-copy-content-btn" title="Copy raw content">Copy</button>
+          <button id="agents-save-btn" title="Save changes">Save</button>
+        </div>
+      </div>
+      <div id="agents-viewer-editor"></div>
     </div>
     <div id="plan-viewer" style="display:none;">
       <div id="plan-viewer-header">

@@ -36,8 +36,34 @@ const statsViewer = document.getElementById('stats-viewer');
 const statsViewerBody = document.getElementById('stats-viewer-body');
 const memoryViewer = document.getElementById('memory-viewer');
 const memoryViewerTitle = document.getElementById('memory-viewer-title');
-const memoryViewerFilename = document.getElementById('memory-viewer-filename');
-const memoryViewerBody = document.getElementById('memory-viewer-body');
+const memoryViewerFilepath = document.getElementById('memory-viewer-filepath');
+const memoryViewerEditorEl = document.getElementById('memory-viewer-editor');
+const memoryCopyPathBtn = document.getElementById('memory-copy-path-btn');
+const memoryCopyContentBtn = document.getElementById('memory-copy-content-btn');
+const memorySaveBtn = document.getElementById('memory-save-btn');
+const skillsContent = document.getElementById('skills-content');
+const agentsContent = document.getElementById('agents-content');
+const skillsViewer = document.getElementById('skills-viewer');
+const skillsViewerTitle = document.getElementById('skills-viewer-title');
+const skillsViewerFilepath = document.getElementById('skills-viewer-filepath');
+const skillsViewerEditorEl = document.getElementById('skills-viewer-editor');
+const skillsCopyPathBtn = document.getElementById('skills-copy-path-btn');
+const skillsCopyContentBtn = document.getElementById('skills-copy-content-btn');
+const skillsSaveBtn = document.getElementById('skills-save-btn');
+const agentsViewer = document.getElementById('agents-viewer');
+const agentsViewerTitle = document.getElementById('agents-viewer-title');
+const agentsViewerFilepath = document.getElementById('agents-viewer-filepath');
+const agentsViewerEditorEl = document.getElementById('agents-viewer-editor');
+const agentsCopyPathBtn = document.getElementById('agents-copy-path-btn');
+const agentsCopyContentBtn = document.getElementById('agents-copy-content-btn');
+const agentsSaveBtn = document.getElementById('agents-save-btn');
+
+let memoryEditorView = null;
+let currentMemoryFilePath = '';
+let skillsEditorView = null;
+let currentSkillFilePath = '';
+let agentsEditorView = null;
+let currentAgentFilePath = '';
 const terminalArea = document.getElementById('terminal-area');
 const settingsViewer = document.getElementById('settings-viewer');
 const settingsViewerTitle = document.getElementById('settings-viewer-title');
@@ -77,6 +103,8 @@ let activePtyIds = new Set();
 let sortedOrder = []; // [{ projectPath, itemIds: [itemId, ...] }, ...] — single source of truth for sidebar order
 let activeTab = 'sessions';
 let cachedPlans = [];
+let cachedSkills = [];
+let cachedAgents = [];
 let visibleSessionCount = 10;
 let sessionMaxAgeDays = 3;
 const pendingSessions = new Map(); // sessionId → { session, projectPath, folder }
@@ -440,6 +468,10 @@ function clearSearch() {
     renderPlans(cachedPlans);
   } else if (activeTab === 'memory') {
     renderMemories(cachedMemories);
+  } else if (activeTab === 'skills') {
+    renderSkills(cachedSkills);
+  } else if (activeTab === 'agents') {
+    renderAgents(cachedAgents);
   }
 }
 
@@ -475,6 +507,14 @@ searchInput.addEventListener('input', () => {
         const results = await window.api.search('memory', query);
         const matchIds = new Set(results.map(r => r.id));
         renderMemories(cachedMemories.filter(m => matchIds.has(m.filePath)));
+      } else if (activeTab === 'skills') {
+        const results = await window.api.search('skill', query);
+        const matchIds = new Set(results.map(r => r.id));
+        renderSkills(cachedSkills.filter(s => matchIds.has(s.filePath)));
+      } else if (activeTab === 'agents') {
+        const results = await window.api.search('agent', query);
+        const matchIds = new Set(results.map(r => r.id));
+        renderAgents(cachedAgents.filter(a => matchIds.has(a.filePath)));
       }
     } catch {
       if (activeTab === 'sessions') {
@@ -1600,6 +1640,8 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
     plansContent.style.display = 'none';
     statsContent.style.display = 'none';
     memoryContent.style.display = 'none';
+    skillsContent.style.display = 'none';
+    agentsContent.style.display = 'none';
     sessionFilters.style.display = 'none';
     searchBar.style.display = 'none';
 
@@ -1628,6 +1670,8 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
       terminalArea.style.display = 'none';
       planViewer.style.display = 'none';
       memoryViewer.style.display = 'none';
+      skillsViewer.style.display = 'none';
+      agentsViewer.style.display = 'none';
       settingsViewer.style.display = 'none';
       statsViewer.style.display = 'flex';
       loadStats();
@@ -1635,6 +1679,14 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
       searchBar.style.display = '';
       memoryContent.style.display = '';
       loadMemories();
+    } else if (tabName === 'skills') {
+      searchBar.style.display = '';
+      skillsContent.style.display = '';
+      loadSkills();
+    } else if (tabName === 'agents') {
+      searchBar.style.display = '';
+      agentsContent.style.display = '';
+      loadAgents();
     }
   });
 });
@@ -1712,6 +1764,8 @@ async function openPlan(plan) {
   terminalArea.style.display = 'none';
   statsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';
+  skillsViewer.style.display = 'none';
+  agentsViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
   planViewer.style.display = 'flex';
 
@@ -1753,10 +1807,63 @@ planSaveBtn.addEventListener('click', async () => {
   flashButtonText(planSaveBtn, 'Saved!');
 });
 
+// --- Memory editor buttons ---
+memoryCopyPathBtn.addEventListener('click', () => {
+  navigator.clipboard.writeText(currentMemoryFilePath);
+  flashButtonText(memoryCopyPathBtn, 'Copied!');
+});
+memoryCopyContentBtn.addEventListener('click', () => {
+  const content = memoryEditorView ? memoryEditorView.state.doc.toString() : '';
+  navigator.clipboard.writeText(content);
+  flashButtonText(memoryCopyContentBtn, 'Copied!');
+});
+memorySaveBtn.addEventListener('click', async () => {
+  if (!memoryEditorView) return;
+  const content = memoryEditorView.state.doc.toString();
+  await window.api.saveMemory(currentMemoryFilePath, content);
+  flashButtonText(memorySaveBtn, 'Saved!');
+});
+
+// --- Skills editor buttons ---
+skillsCopyPathBtn.addEventListener('click', () => {
+  navigator.clipboard.writeText(currentSkillFilePath);
+  flashButtonText(skillsCopyPathBtn, 'Copied!');
+});
+skillsCopyContentBtn.addEventListener('click', () => {
+  const content = skillsEditorView ? skillsEditorView.state.doc.toString() : '';
+  navigator.clipboard.writeText(content);
+  flashButtonText(skillsCopyContentBtn, 'Copied!');
+});
+skillsSaveBtn.addEventListener('click', async () => {
+  if (!skillsEditorView) return;
+  const content = skillsEditorView.state.doc.toString();
+  await window.api.saveSkill(currentSkillFilePath, content);
+  flashButtonText(skillsSaveBtn, 'Saved!');
+});
+
+// --- Agents editor buttons ---
+agentsCopyPathBtn.addEventListener('click', () => {
+  navigator.clipboard.writeText(currentAgentFilePath);
+  flashButtonText(agentsCopyPathBtn, 'Copied!');
+});
+agentsCopyContentBtn.addEventListener('click', () => {
+  const content = agentsEditorView ? agentsEditorView.state.doc.toString() : '';
+  navigator.clipboard.writeText(content);
+  flashButtonText(agentsCopyContentBtn, 'Copied!');
+});
+agentsSaveBtn.addEventListener('click', async () => {
+  if (!agentsEditorView) return;
+  const content = agentsEditorView.state.doc.toString();
+  await window.api.saveAgent(currentAgentFilePath, content);
+  flashButtonText(agentsSaveBtn, 'Saved!');
+});
+
 function hideAllViewers() {
   planViewer.style.display = 'none';
   statsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';
+  skillsViewer.style.display = 'none';
+  agentsViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
   jsonlViewer.style.display = 'none';
   terminalArea.style.display = '';
@@ -2335,6 +2442,7 @@ async function openMemory(mem) {
   });
 
   const content = await window.api.readMemory(mem.filePath);
+  currentMemoryFilePath = mem.filePath;
 
   // Show memory viewer in main area
   placeholder.style.display = 'none';
@@ -2342,11 +2450,201 @@ async function openMemory(mem) {
   planViewer.style.display = 'none';
   statsViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
+  skillsViewer.style.display = 'none';
+  agentsViewer.style.display = 'none';
   memoryViewer.style.display = 'flex';
 
   memoryViewerTitle.textContent = `${mem.label} — ${mem.filename}`;
-  memoryViewerFilename.textContent = mem.filePath;
-  memoryViewerBody.textContent = content;
+  memoryViewerFilepath.textContent = mem.filePath;
+
+  if (!memoryEditorView) {
+    memoryEditorView = window.createPlanEditor(memoryViewerEditorEl);
+  }
+  memoryEditorView.dispatch({
+    changes: { from: 0, to: memoryEditorView.state.doc.length, insert: content },
+  });
+}
+
+// --- Skills ---
+async function loadSkills() {
+  cachedSkills = await window.api.getSkills();
+  renderSkills();
+}
+
+function renderSkills(skills) {
+  skills = skills || cachedSkills;
+  skillsContent.innerHTML = '';
+  if (skills.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'plans-empty';
+    empty.textContent = 'No skills or commands found.';
+    skillsContent.appendChild(empty);
+    return;
+  }
+  for (const skill of skills) {
+    skillsContent.appendChild(buildSkillItem(skill));
+  }
+}
+
+function buildSkillItem(skill) {
+  const item = document.createElement('div');
+  item.className = 'session-item skill-item';
+
+  const row = document.createElement('div');
+  row.className = 'session-row';
+
+  const info = document.createElement('div');
+  info.className = 'session-info';
+
+  const titleEl = document.createElement('div');
+  titleEl.className = 'session-summary';
+
+  const badge = document.createElement('span');
+  badge.className = `skill-type-badge type-${skill.type}`;
+  badge.textContent = skill.type;
+  titleEl.appendChild(badge);
+  titleEl.appendChild(document.createTextNode(skill.title));
+
+  const filenameEl = document.createElement('div');
+  filenameEl.className = 'session-id';
+  filenameEl.textContent = skill.scope === 'global' ? skill.filename : `${skill.scope} / ${skill.filename}`;
+
+  const metaEl = document.createElement('div');
+  metaEl.className = 'session-meta';
+  metaEl.textContent = formatDate(new Date(skill.modified));
+
+  info.appendChild(titleEl);
+  info.appendChild(filenameEl);
+  info.appendChild(metaEl);
+  row.appendChild(info);
+  item.appendChild(row);
+
+  item.addEventListener('click', () => openSkill(skill));
+  return item;
+}
+
+async function openSkill(skill) {
+  skillsContent.querySelectorAll('.skill-item.active').forEach(el => el.classList.remove('active'));
+  const items = skillsContent.querySelectorAll('.skill-item');
+  items.forEach(el => {
+    if (el.querySelector('.session-id')?.textContent.includes(skill.filename)) {
+      el.classList.add('active');
+    }
+  });
+
+  const result = await window.api.readSkill(skill.filePath);
+  currentSkillFilePath = result.filePath;
+
+  placeholder.style.display = 'none';
+  terminalArea.style.display = 'none';
+  planViewer.style.display = 'none';
+  statsViewer.style.display = 'none';
+  memoryViewer.style.display = 'none';
+  settingsViewer.style.display = 'none';
+  agentsViewer.style.display = 'none';
+  skillsViewer.style.display = 'flex';
+
+  skillsViewerTitle.textContent = skill.title;
+  skillsViewerFilepath.textContent = result.filePath;
+
+  if (!skillsEditorView) {
+    skillsEditorView = window.createPlanEditor(skillsViewerEditorEl);
+  }
+  skillsEditorView.dispatch({
+    changes: { from: 0, to: skillsEditorView.state.doc.length, insert: result.content },
+  });
+}
+
+// --- Agents ---
+async function loadAgents() {
+  cachedAgents = await window.api.getAgents();
+  renderAgents();
+}
+
+function renderAgents(agents) {
+  agents = agents || cachedAgents;
+  agentsContent.innerHTML = '';
+  if (agents.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'plans-empty';
+    empty.textContent = 'No agents found.';
+    agentsContent.appendChild(empty);
+    return;
+  }
+  for (const agent of agents) {
+    agentsContent.appendChild(buildAgentItem(agent));
+  }
+}
+
+function buildAgentItem(agent) {
+  const item = document.createElement('div');
+  item.className = 'session-item agent-item';
+
+  const row = document.createElement('div');
+  row.className = 'session-row';
+
+  const info = document.createElement('div');
+  info.className = 'session-info';
+
+  const titleEl = document.createElement('div');
+  titleEl.className = 'session-summary';
+
+  if (agent.model) {
+    const badge = document.createElement('span');
+    badge.className = 'agent-type-badge';
+    badge.textContent = agent.model;
+    titleEl.appendChild(badge);
+  }
+  titleEl.appendChild(document.createTextNode(agent.title));
+
+  const filenameEl = document.createElement('div');
+  filenameEl.className = 'session-id';
+  filenameEl.textContent = `${agent.scope} / ${agent.filename}`;
+
+  const metaEl = document.createElement('div');
+  metaEl.className = 'session-meta';
+  metaEl.textContent = formatDate(new Date(agent.modified));
+
+  info.appendChild(titleEl);
+  info.appendChild(filenameEl);
+  info.appendChild(metaEl);
+  row.appendChild(info);
+  item.appendChild(row);
+
+  item.addEventListener('click', () => openAgent(agent));
+  return item;
+}
+
+async function openAgent(agent) {
+  agentsContent.querySelectorAll('.agent-item.active').forEach(el => el.classList.remove('active'));
+  const items = agentsContent.querySelectorAll('.agent-item');
+  items.forEach(el => {
+    if (el.querySelector('.session-id')?.textContent.includes(agent.filename)) {
+      el.classList.add('active');
+    }
+  });
+
+  const content = await window.api.readAgent(agent.filePath);
+  currentAgentFilePath = agent.filePath;
+
+  placeholder.style.display = 'none';
+  terminalArea.style.display = 'none';
+  planViewer.style.display = 'none';
+  statsViewer.style.display = 'none';
+  memoryViewer.style.display = 'none';
+  settingsViewer.style.display = 'none';
+  skillsViewer.style.display = 'none';
+  agentsViewer.style.display = 'flex';
+
+  agentsViewerTitle.textContent = agent.title;
+  agentsViewerFilepath.textContent = agent.filePath;
+
+  if (!agentsEditorView) {
+    agentsEditorView = window.createPlanEditor(agentsViewerEditorEl);
+  }
+  agentsEditorView.dispatch({
+    changes: { from: 0, to: agentsEditorView.state.doc.length, insert: content },
+  });
 }
 
 // --- New session dialog ---
@@ -2654,6 +2952,8 @@ async function openSettingsViewer(scope, projectPath) {
   planViewer.style.display = 'none';
   statsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';
+  skillsViewer.style.display = 'none';
+  agentsViewer.style.display = 'none';
   settingsViewer.style.display = 'flex';
 
   function useGlobalCheckbox(fieldName, label) {
