@@ -1,6 +1,7 @@
 const { parentPort, workerData } = require('worker_threads');
 const fs = require('fs');
 const path = require('path');
+const { getFolderIndexMtimeMs } = require('../folder-index-state');
 
 const PROJECTS_DIR = workerData.projectsDir;
 
@@ -49,8 +50,7 @@ function readFolderFromFilesystem(folder) {
   const projectPath = deriveProjectPath(folderPath, folder);
   if (!projectPath) return null;
   const sessions = [];
-  let mtimeMs = 0;
-  try { mtimeMs = fs.statSync(folderPath).mtimeMs; } catch {}
+  const indexMtimeMs = getFolderIndexMtimeMs(folderPath);
 
   try {
     const jsonlFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
@@ -99,7 +99,7 @@ function readFolderFromFilesystem(folder) {
     }
   } catch {}
 
-  return { folder, projectPath, sessions, mtimeMs };
+  return { folder, projectPath, sessions, indexMtimeMs };
 }
 
 // Scan all folders

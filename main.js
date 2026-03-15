@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const pty = require('node-pty');
 const log = require('electron-log');
+const { getFolderIndexMtimeMs } = require('./folder-index-state');
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
 log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 
@@ -347,10 +348,7 @@ function refreshFolder(folder) {
 
   const projectPath = deriveProjectPath(folderPath, folder);
   if (!projectPath) {
-    // Still record mtime so backgroundRefresh doesn't keep retrying
-    let mtimeMs = 0;
-    try { mtimeMs = fs.statSync(folderPath).mtimeMs; } catch {}
-    setFolderMeta(folder, null, mtimeMs);
+    setFolderMeta(folder, null, getFolderIndexMtimeMs(folderPath));
     return;
   }
 
@@ -407,9 +405,7 @@ function refreshFolder(folder) {
   }
 
   // Update folder mtime
-  let mtimeMs = 0;
-  try { mtimeMs = fs.statSync(folderPath).mtimeMs; } catch {}
-  setFolderMeta(folder, projectPath, mtimeMs);
+  setFolderMeta(folder, projectPath, getFolderIndexMtimeMs(folderPath));
 }
 
 /** Populate entire cache from filesystem (cold start) */
@@ -505,8 +501,7 @@ function backgroundRefresh() {
     // Check for new/changed folders
     for (const folder of folders) {
       const folderPath = path.join(PROJECTS_DIR, folder);
-      let currentMtime = 0;
-      try { currentMtime = fs.statSync(folderPath).mtimeMs; } catch {}
+      const currentMtime = getFolderIndexMtimeMs(folderPath);
 
       const cached = metaMap.get(folder);
       if (!cached || cached.indexMtimeMs !== currentMtime) {
@@ -576,7 +571,7 @@ function populateCacheViaWorker() {
 
     // Write results to DB on main thread (fast)
     let sessionCount = 0;
-    for (const { folder, projectPath, sessions, mtimeMs } of msg.results) {
+    for (const { folder, projectPath, sessions, indexMtimeMs } of msg.results) {
       deleteCachedFolder(folder);
       deleteSearchFolder(folder);
       if (sessions.length > 0) {
@@ -590,7 +585,7 @@ function populateCacheViaWorker() {
           if (s.customTitle) setName(s.sessionId, s.customTitle);
         }
       }
-      setFolderMeta(folder, projectPath, mtimeMs);
+      setFolderMeta(folder, projectPath, indexMtimeMs);
     }
 
     populatingCache = false;

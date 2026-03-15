@@ -7,6 +7,7 @@
   "main": "main.js",
   "scripts": {
     "start": "npm run bundle:codemirror && electron .",
+    "test": "node --test",
     "electron": "electron .",
     "bundle:codemirror": "esbuild public/codemirror-setup.js --bundle --outfile=public/codemirror-bundle.js --format=iife --platform=browser --minify",
     "generate-icons": "node scripts/generate-icons.js && node scripts/generate-dmg-background.js",
