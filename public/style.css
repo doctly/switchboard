@@ -2688,3 +2688,14 @@ body { display: flex; flex-direction: column; }
 .mcp-toggle.enabled {
   color: #8088ff;
 }
+
+.mcp-toggle.enabled::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #8088ff;
+  margin-right: 5px;
+  vertical-align: middle;
+}

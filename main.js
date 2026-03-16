@@ -58,6 +58,7 @@ const {
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated,
   getSetting, setSetting, deleteSetting,
+  closeDb,
 } = require('./db');
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
@@ -1595,4 +1596,9 @@ app.on('before-quit', () => {
       try { session.pty.kill(); } catch {}
     }
   }
+});
+
+// Close SQLite after all windows are closed to avoid "connection is not open" errors
+app.on('will-quit', () => {
+  closeDb();
 });

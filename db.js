@@ -322,6 +322,10 @@ function deleteSetting(key) {
   stmts.settingsDelete.run(key);
 }
 
+function closeDb() {
+  try { db.close(); } catch {}
+}
+
 module.exports = {
   getMeta, getAllMeta, setName, toggleStar, setArchived,
   isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, upsertCachedSessions,
@@ -330,4 +334,5 @@ module.exports = {
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated,
   getSetting, setSetting, deleteSetting,
+  closeDb,
 };
