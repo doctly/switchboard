@@ -2481,6 +2481,7 @@ body { display: flex; flex-direction: column; }
   display: flex;
   flex-direction: column;
   background: #111118;
+  position: relative;
 }
 
 #file-panel.open {
@@ -2625,10 +2626,24 @@ body { display: flex; flex-direction: column; }
 #file-panel-actions {
   display: flex;
   gap: 8px;
-  padding: 8px 12px;
-  background: #18181f;
-  border-top: 1px solid rgba(255,255,255,0.06);
-  flex-shrink: 0;
+  padding: 6px 12px;
+  background: rgba(24, 24, 31, 0.85);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  z-index: 20;
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+
+#file-panel-body:hover ~ #file-panel-actions,
+#file-panel-actions:hover {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 #file-panel-actions button {
