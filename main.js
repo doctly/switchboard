@@ -63,7 +63,10 @@ const {
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 const PLANS_DIR = path.join(os.homedir(), '.claude', 'plans');
+const COMMANDS_DIR = path.join(os.homedir(), '.claude', 'commands');
+const SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills');
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
+const CLAUDE_DIRNAME = path.basename(CLAUDE_DIR);
 const STATS_CACHE_PATH = path.join(CLAUDE_DIR, 'stats-cache.json');
 const MAX_BUFFER_SIZE = 256 * 1024;
 
@@ -873,6 +876,380 @@ ipcMain.handle('read-memory', (_event, filePath) => {
   } catch (err) {
     console.error('Error reading memory file:', err);
     return '';
+  }
+});
+
+// --- IPC: get-skills ---
+function parseFrontmatter(content) {
+  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) return {};
+  const fm = {};
+  for (const line of match[1].split('\n')) {
+    const idx = line.indexOf(':');
+    if (idx > 0) fm[line.slice(0, idx).trim()] = line.slice(idx + 1).trim().replace(/^["']|["']$/g, '');
+  }
+  return fm;
+}
+
+function readMdFiles(dir, filter) {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir, { withFileTypes: true })
+    .filter(filter || (d => d.isFile() && d.name.endsWith('.md')))
+    .map(d => d.name);
+}
+
+ipcMain.handle('get-skills', () => {
+  const skills = [];
+  try {
+    // Global commands: ~/.claude/commands/*.md
+    for (const file of readMdFiles(COMMANDS_DIR)) {
+      try {
+        const filePath = path.join(COMMANDS_DIR, file);
+        const stat = fs.statSync(filePath);
+        const content = fs.readFileSync(filePath, 'utf8');
+        const fm = parseFrontmatter(content);
+        const firstLine = content.replace(/^---[\s\S]*?---\n?/, '').split('\n').find(l => l.trim());
+        const title = fm.name || fm.description || (firstLine && firstLine.startsWith('# ') ? firstLine.slice(2).trim() : file.replace(/\.md$/, ''));
+        skills.push({ filename: file, title, description: fm.description || '', type: 'command', scope: 'global', filePath, modified: stat.mtime.toISOString() });
+      } catch {}
+    }
+
+    // Global skills: ~/.claude/skills/*/SKILL.md
+    if (fs.existsSync(SKILLS_DIR)) {
+      for (const d of fs.readdirSync(SKILLS_DIR, { withFileTypes: true })) {
+        if (!d.isDirectory()) continue;
+        const filePath = path.join(SKILLS_DIR, d.name, 'SKILL.md');
+        if (!fs.existsSync(filePath)) continue;
+        try {
+          const stat = fs.statSync(filePath);
+          const content = fs.readFileSync(filePath, 'utf8');
+          const fm = parseFrontmatter(content);
+          const title = fm.name || d.name;
+          skills.push({ filename: d.name + '/SKILL.md', title, description: fm.description || '', type: 'skill', scope: 'global', filePath, modified: stat.mtime.toISOString() });
+        } catch {}
+      }
+    }
+
+    // Per-project commands: {actualProjectDir}/.claude/commands/*.md
+    if (fs.existsSync(PROJECTS_DIR)) {
+      const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+        .filter(d => d.isDirectory() && d.name !== '.git')
+        .map(d => d.name);
+      const seen = new Set();
+      for (const folder of folders) {
+        const projectPath = deriveProjectPath(path.join(PROJECTS_DIR, folder), folder);
+        if (!projectPath || seen.has(projectPath)) continue;
+        seen.add(projectPath);
+        const shortPath = folderToShortPath(folder);
+        const cmdDir = path.join(projectPath, '.claude', 'commands');
+        for (const file of readMdFiles(cmdDir)) {
+          try {
+            const filePath = path.join(cmdDir, file);
+            const stat = fs.statSync(filePath);
+            const content = fs.readFileSync(filePath, 'utf8');
+            const fm = parseFrontmatter(content);
+            const firstLine = content.replace(/^---[\s\S]*?---\n?/, '').split('\n').find(l => l.trim());
+            const title = fm.name || fm.description || (firstLine && firstLine.startsWith('# ') ? firstLine.slice(2).trim() : file.replace(/\.md$/, ''));
+            skills.push({ filename: file, title, description: fm.description || '', type: 'command', scope: shortPath, filePath, modified: stat.mtime.toISOString() });
+          } catch {}
+        }
+      }
+    }
+
+    skills.sort((a, b) => new Date(b.modified) - new Date(a.modified));
+
+    // Index for FTS
+    try {
+      deleteSearchType('skill');
+      upsertSearchEntries(skills.map(s => ({
+        id: s.filePath, type: 'skill', folder: null,
+        title: s.title + ' ' + s.type + ' ' + s.scope,
+        body: fs.readFileSync(s.filePath, 'utf8'),
+      })));
+    } catch {}
+
+    return skills;
+  } catch (err) {
+    console.error('Error reading skills:', err);
+    return [];
+  }
+});
+
+// --- IPC: read-skill ---
+ipcMain.handle('read-skill', (_event, filePath) => {
+  try {
+    const resolved = path.resolve(filePath);
+    // Allow paths under ~/.claude/ or inside .claude/ of known projects
+    if (!resolved.includes(path.sep + CLAUDE_DIRNAME + path.sep)) return { content: '', filePath: '' };
+    return { content: fs.readFileSync(resolved, 'utf8'), filePath: resolved };
+  } catch (err) {
+    console.error('Error reading skill:', err);
+    return { content: '', filePath: '' };
+  }
+});
+
+// --- IPC: get-agents ---
+ipcMain.handle('get-agents', () => {
+  const agents = [];
+  try {
+    if (fs.existsSync(PROJECTS_DIR)) {
+      const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+        .filter(d => d.isDirectory() && d.name !== '.git')
+        .map(d => d.name);
+      const seen = new Set();
+      for (const folder of folders) {
+        const projectPath = deriveProjectPath(path.join(PROJECTS_DIR, folder), folder);
+        if (!projectPath || seen.has(projectPath)) continue;
+        seen.add(projectPath);
+        const shortPath = folderToShortPath(folder);
+        const agentDir = path.join(projectPath, '.claude', 'agents');
+        for (const file of readMdFiles(agentDir)) {
+          try {
+            const filePath = path.join(agentDir, file);
+            const stat = fs.statSync(filePath);
+            const content = fs.readFileSync(filePath, 'utf8');
+            const fm = parseFrontmatter(content);
+            const firstLine = content.replace(/^---[\s\S]*?---\n?/, '').split('\n').find(l => l.trim());
+            const title = fm.name || (firstLine && firstLine.startsWith('# ') ? firstLine.slice(2).trim() : file.replace(/\.md$/, ''));
+            agents.push({ filename: file, title, description: fm.description || '', model: fm.model || '', scope: shortPath, filePath, modified: stat.mtime.toISOString() });
+          } catch {}
+        }
+      }
+    }
+
+    agents.sort((a, b) => new Date(b.modified) - new Date(a.modified));
+
+    // Index for FTS
+    try {
+      deleteSearchType('agent');
+      upsertSearchEntries(agents.map(a => ({
+        id: a.filePath, type: 'agent', folder: null,
+        title: a.title + ' ' + a.scope,
+        body: fs.readFileSync(a.filePath, 'utf8'),
+      })));
+    } catch {}
+
+    return agents;
+  } catch (err) {
+    console.error('Error reading agents:', err);
+    return [];
+  }
+});
+
+// --- IPC: read-agent ---
+ipcMain.handle('read-agent', (_event, filePath) => {
+  try {
+    const resolved = path.resolve(filePath);
+    if (!resolved.includes(path.sep + CLAUDE_DIRNAME + path.sep)) return '';
+    return fs.readFileSync(resolved, 'utf8');
+  } catch (err) {
+    console.error('Error reading agent:', err);
+    return '';
+  }
+});
+
+// --- IPC: save-memory ---
+ipcMain.handle('save-memory', (_event, filePath, content) => {
+  try {
+    const resolved = path.resolve(filePath);
+    if (!resolved.startsWith(CLAUDE_DIR)) {
+      return { ok: false, error: 'path outside .claude directory' };
+    }
+    fs.writeFileSync(resolved, content, 'utf8');
+    return { ok: true };
+  } catch (err) {
+    console.error('Error saving memory:', err);
+    return { ok: false, error: err.message };
+  }
+});
+
+// --- IPC: save-skill ---
+ipcMain.handle('save-skill', (_event, filePath, content) => {
+  try {
+    const resolved = path.resolve(filePath);
+    if (!resolved.includes(path.sep + CLAUDE_DIRNAME + path.sep)) {
+      return { ok: false, error: 'path outside .claude directory' };
+    }
+    fs.writeFileSync(resolved, content, 'utf8');
+    return { ok: true };
+  } catch (err) {
+    console.error('Error saving skill:', err);
+    return { ok: false, error: err.message };
+  }
+});
+
+// --- IPC: save-agent ---
+ipcMain.handle('save-agent', (_event, filePath, content) => {
+  try {
+    const resolved = path.resolve(filePath);
+    if (!resolved.includes(path.sep + CLAUDE_DIRNAME + path.sep)) {
+      return { ok: false, error: 'path outside .claude directory' };
+    }
+    fs.writeFileSync(resolved, content, 'utf8');
+    return { ok: true };
+  } catch (err) {
+    console.error('Error saving agent:', err);
+    return { ok: false, error: err.message };
+  }
+});
+
+// --- IPC: get-config (unified config browser) ---
+ipcMain.handle('get-config', (_event, projectPath) => {
+  const items = [];
+  try {
+    if (!projectPath) {
+      // Global scope: ~/.claude/CLAUDE.md, commands/*.md, skills/*/SKILL.md
+      const globalClaude = path.join(CLAUDE_DIR, 'CLAUDE.md');
+      if (fs.existsSync(globalClaude)) {
+        const content = fs.readFileSync(globalClaude, 'utf8').trim();
+        if (content) {
+          const stat = fs.statSync(globalClaude);
+          items.push({ category: 'memory', label: 'Global', filename: 'CLAUDE.md', filePath: globalClaude, scope: 'global', modified: stat.mtime.toISOString(), badge: 'global' });
+        }
+      }
+      // Global commands
+      for (const file of readMdFiles(COMMANDS_DIR)) {
+        try {
+          const filePath = path.join(COMMANDS_DIR, file);
+          const stat = fs.statSync(filePath);
+          const content = fs.readFileSync(filePath, 'utf8');
+          const fm = parseFrontmatter(content);
+          const firstLine = content.replace(/^---[\s\S]*?---\n?/, '').split('\n').find(l => l.trim());
+          const label = fm.name || fm.description || (firstLine && firstLine.startsWith('# ') ? firstLine.slice(2).trim() : file.replace(/\.md$/, ''));
+          items.push({ category: 'command', label, filename: file, filePath, scope: 'global', modified: stat.mtime.toISOString(), badge: 'command' });
+        } catch {}
+      }
+      // Global skills
+      if (fs.existsSync(SKILLS_DIR)) {
+        for (const d of fs.readdirSync(SKILLS_DIR, { withFileTypes: true })) {
+          if (!d.isDirectory()) continue;
+          const filePath = path.join(SKILLS_DIR, d.name, 'SKILL.md');
+          if (!fs.existsSync(filePath)) continue;
+          try {
+            const stat = fs.statSync(filePath);
+            const content = fs.readFileSync(filePath, 'utf8');
+            const fm = parseFrontmatter(content);
+            const label = fm.name || d.name;
+            items.push({ category: 'skill', label, filename: d.name + '/SKILL.md', filePath, scope: 'global', modified: stat.mtime.toISOString(), badge: 'skill' });
+          } catch {}
+        }
+      }
+    } else {
+      // Project scope: project CLAUDE.md, memory/MEMORY.md, commands/*.md, agents/*.md, plus ~/.claude/projects/{folder}/CLAUDE.md
+      const projClaudeDir = path.join(projectPath, '.claude');
+
+      // Project .claude/CLAUDE.md
+      const projClaude = path.join(projClaudeDir, 'CLAUDE.md');
+      if (fs.existsSync(projClaude)) {
+        const content = fs.readFileSync(projClaude, 'utf8').trim();
+        if (content) {
+          const stat = fs.statSync(projClaude);
+          items.push({ category: 'memory', label: 'Project CLAUDE.md', filename: 'CLAUDE.md', filePath: projClaude, scope: 'project', modified: stat.mtime.toISOString(), badge: 'project' });
+        }
+      }
+
+      // ~/.claude/projects/{folder}/CLAUDE.md and memory/MEMORY.md
+      if (fs.existsSync(PROJECTS_DIR)) {
+        const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+          .filter(d => d.isDirectory() && d.name !== '.git')
+          .map(d => d.name);
+        for (const folder of folders) {
+          const folderPath = path.join(PROJECTS_DIR, folder);
+          const derived = deriveProjectPath(folderPath, folder);
+          if (derived !== projectPath) continue;
+
+          const claudeMd = path.join(folderPath, 'CLAUDE.md');
+          if (fs.existsSync(claudeMd)) {
+            const content = fs.readFileSync(claudeMd, 'utf8').trim();
+            if (content) {
+              const stat = fs.statSync(claudeMd);
+              items.push({ category: 'memory', label: 'User CLAUDE.md', filename: 'CLAUDE.md', filePath: claudeMd, scope: 'user', modified: stat.mtime.toISOString(), badge: 'user' });
+            }
+          }
+
+          const memoryMd = path.join(folderPath, 'memory', 'MEMORY.md');
+          if (fs.existsSync(memoryMd)) {
+            const content = fs.readFileSync(memoryMd, 'utf8').trim();
+            if (content) {
+              const stat = fs.statSync(memoryMd);
+              items.push({ category: 'memory', label: 'Auto Memory', filename: 'MEMORY.md', filePath: memoryMd, scope: 'auto', modified: stat.mtime.toISOString(), badge: 'auto' });
+            }
+          }
+          break;
+        }
+      }
+
+      // Project commands
+      const cmdDir = path.join(projClaudeDir, 'commands');
+      for (const file of readMdFiles(cmdDir)) {
+        try {
+          const filePath = path.join(cmdDir, file);
+          const stat = fs.statSync(filePath);
+          const content = fs.readFileSync(filePath, 'utf8');
+          const fm = parseFrontmatter(content);
+          const firstLine = content.replace(/^---[\s\S]*?---\n?/, '').split('\n').find(l => l.trim());
+          const label = fm.name || fm.description || (firstLine && firstLine.startsWith('# ') ? firstLine.slice(2).trim() : file.replace(/\.md$/, ''));
+          items.push({ category: 'command', label, filename: file, filePath, scope: 'project', modified: stat.mtime.toISOString(), badge: 'command' });
+        } catch {}
+      }
+
+      // Project agents
+      const agentDir = path.join(projClaudeDir, 'agents');
+      for (const file of readMdFiles(agentDir)) {
+        try {
+          const filePath = path.join(agentDir, file);
+          const stat = fs.statSync(filePath);
+          const content = fs.readFileSync(filePath, 'utf8');
+          const fm = parseFrontmatter(content);
+          const firstLine = content.replace(/^---[\s\S]*?---\n?/, '').split('\n').find(l => l.trim());
+          const label = fm.name || (firstLine && firstLine.startsWith('# ') ? firstLine.slice(2).trim() : file.replace(/\.md$/, ''));
+          items.push({ category: 'agent', label, filename: file, filePath, scope: 'project', modified: stat.mtime.toISOString(), badge: 'agent' });
+        } catch {}
+      }
+    }
+  } catch (err) {
+    console.error('Error scanning config:', err);
+  }
+
+  // Index for FTS
+  try {
+    deleteSearchType('config');
+    upsertSearchEntries(items.map(item => ({
+      id: item.filePath, type: 'config', folder: null,
+      title: item.label + ' ' + item.category + ' ' + item.filename,
+      body: fs.readFileSync(item.filePath, 'utf8'),
+    })));
+  } catch {}
+
+  return items;
+});
+
+// --- IPC: read-config ---
+ipcMain.handle('read-config', (_event, filePath) => {
+  try {
+    const resolved = path.resolve(filePath);
+    if (!resolved.startsWith(CLAUDE_DIR) && !resolved.includes(path.sep + CLAUDE_DIRNAME + path.sep)) {
+      return '';
+    }
+    return fs.readFileSync(resolved, 'utf8');
+  } catch (err) {
+    console.error('Error reading config file:', err);
+    return '';
+  }
+});
+
+// --- IPC: save-config ---
+ipcMain.handle('save-config', (_event, filePath, content) => {
+  try {
+    const resolved = path.resolve(filePath);
+    if (!resolved.startsWith(CLAUDE_DIR) && !resolved.includes(path.sep + CLAUDE_DIRNAME + path.sep)) {
+      return { ok: false, error: 'path outside .claude directory' };
+    }
+    fs.writeFileSync(resolved, content, 'utf8');
+    return { ok: true };
+  } catch (err) {
+    console.error('Error saving config file:', err);
+    return { ok: false, error: err.message };
   }
 });
 
