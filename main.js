@@ -1197,33 +1197,54 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   ptyProcess.onData(data => {
     const currentId = session.realSessionId || sessionId;
 
-    // Log all OSC sequences (title changes, bells, etc.)
+    // Parse OSC sequences (title changes, progress, notifications, etc.)
     if (data.includes('\x1b]')) {
       const oscMatches = data.matchAll(/\x1b\](\d+);([^\x07\x1b]*)(?:\x07|\x1b\\)/g);
       for (const m of oscMatches) {
         const code = m[1];
         const payload = m[2].slice(0, 120);
-        // Skip notification (9) — already logged below
-        if (code !== '9') log.debug(`[OSC ${code}] session=${currentId} payload="${payload}"`);
-      }
-      // Parse iTerm2 OSC 9 notification (terminated by BEL \x07 or ST \x1b\\)
-      const notifMatch = data.match(/\x1b\]9;([^\x07\x1b]*)(?:\x07|\x1b\\)/);
-      if (notifMatch && !notifMatch[1].startsWith('4;')) {
-        const message = notifMatch[1];
-        log.debug(`[OSC 9] session=${currentId} message="${message}"`);
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('terminal-notification', currentId, message);
+        // Detect Claude CLI busy state from OSC 0 title (spinner chars = busy, ✳ = idle)
+        if (code === '0' && payload.includes('Claude Code')) {
+          const firstChar = payload.charAt(0);
+          const isBusy = firstChar.charCodeAt(0) >= 0x2800 && firstChar.charCodeAt(0) <= 0x28FF;
+          const isIdle = firstChar === '\u2733'; // ✳
+          if (isBusy && !session._cliBusy) {
+            session._cliBusy = true;
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('cli-busy-state', currentId, true);
+            }
+          } else if (isIdle && session._cliBusy) {
+            session._cliBusy = false;
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('cli-busy-state', currentId, false);
+            }
+          }
         }
       }
-
-      // Parse iTerm2 OSC 9;4 progress sequences
-      const progressMatch = data.match(/\x1b\]9;4;(\d)(?:;(\d+))?(?:\x07|\x1b\\)/);
-      if (progressMatch) {
-        const state = parseInt(progressMatch[1]);
-        const percent = progressMatch[2] ? parseInt(progressMatch[2]) : -1;
-        log.debug(`[OSC 9;4] session=${currentId} state=${state} percent=${percent}`);
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('progress-state', currentId, state, percent);
+      // Parse iTerm2 OSC 9 sequences (terminated by BEL \x07 or ST \x1b\\)
+      const osc9Matches = data.matchAll(/\x1b\]9;([^\x07\x1b]*)(?:\x07|\x1b\\)/g);
+      for (const osc9 of osc9Matches) {
+        const payload = osc9[1];
+        // OSC 9;4 progress: 4;3; = working, 4;0; = done (fires even for background sessions)
+        if (payload.startsWith('4;')) {
+          const level = payload.split(';')[1];
+          if (level === '3' && !session._cliBusy) {
+            session._cliBusy = true;
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('cli-busy-state', currentId, true);
+            }
+          } else if (level === '0' && session._cliBusy) {
+            session._cliBusy = false;
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('cli-busy-state', currentId, false);
+            }
+          }
+        } else {
+          // Regular notification (attention, permission, etc.)
+          log.debug(`[OSC 9] session=${currentId} message="${payload}"`);
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('terminal-notification', currentId, payload);
+          }
         }
       }
     }
@@ -1338,17 +1359,26 @@ ipcMain.on('close-terminal', (_event, sessionId) => {
 
 // --- Fork / plan-accept detection ---
 
-/** Read first few lines of a new .jsonl to extract signals */
+/** Read first few lines of a new .jsonl to extract signals.
+ *  Skips file-history-snapshot lines which can be very large (tens of KB)
+ *  and reads up to 512KB to find the first user/assistant entry. */
 function readNewSessionSignals(filePath) {
   try {
-    const head = fs.readFileSync(filePath, 'utf8').slice(0, 8000);
+    const fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(524288);
+    const bytesRead = fs.readSync(fd, buf, 0, 524288, 0);
+    fs.closeSync(fd);
+    const head = buf.toString('utf8', 0, bytesRead);
     const lines = head.split('\n').filter(Boolean);
     let forkedFrom = null;
     let planContent = false;
     let slug = null;
     let parentSessionId = null;
+    let hasSnapshots = false;
     for (const line of lines) {
       const entry = JSON.parse(line);
+      // Skip snapshot lines — they carry no fork/session signals
+      if (entry.type === 'file-history-snapshot') { hasSnapshots = true; continue; }
       if (entry.forkedFrom) forkedFrom = entry.forkedFrom.sessionId;
       if (entry.planContent) planContent = true;
       if (entry.slug && !slug) slug = entry.slug;
@@ -1357,9 +1387,9 @@ function readNewSessionSignals(filePath) {
       // Stop after finding a user or assistant message
       if (entry.type === 'user' || entry.type === 'assistant') break;
     }
-    return { forkedFrom, planContent, slug, parentSessionId };
+    return { forkedFrom, planContent, slug, parentSessionId, hasSnapshots };
   } catch {
-    return { forkedFrom: null, planContent: false, slug: null, parentSessionId: null };
+    return { forkedFrom: null, planContent: false, slug: null, parentSessionId: null, hasSnapshots: false };
   }
 }
 
@@ -1406,7 +1436,7 @@ function detectSessionTransitions(folder) {
 
     const newFiles = currentFiles.filter(f => !session.knownJsonlFiles.has(f));
 
-    log.debug(`[detect] session=${sessionId} forkFrom=${session.forkFrom||'none'} folder=${folder} newFiles=${newFiles.length} knownCount=${session.knownJsonlFiles.size} currentCount=${currentFiles.length}`);
+    if (newFiles.length > 0) log.debug(`[detect] session=${sessionId} forkFrom=${session.forkFrom||'none'} folder=${folder} newFiles=${newFiles.length} knownCount=${session.knownJsonlFiles.size} currentCount=${currentFiles.length}`);
 
     if (newFiles.length === 0) continue;
 
@@ -1418,13 +1448,32 @@ function detectSessionTransitions(folder) {
       const signals = readNewSessionSignals(newFilePath);
 
       // File exists but has no parseable content yet — skip and retry next cycle
+      // But if the file's mtime is older than 1 hour, treat it as stale and archive it
       if (!signals.forkedFrom && !signals.parentSessionId && !signals.slug && !signals.planContent) {
-        emptyFiles.add(newFile);
-        log.debug(`[detect] session=${sessionId} skipping empty newFile=${newId}`);
-        continue;
+        // Fork file with only snapshots (no user turn yet) — match immediately
+        if (signals.hasSnapshots && session.forkFrom && !session.realSessionId) {
+          log.info(`[detect] session=${sessionId} matching snapshot-only fork file=${newId}`);
+          // Fall through to matching logic — will match via the fork-snapshot path below
+        } else {
+          let stale = false;
+          try {
+            const mtime = fs.statSync(path.join(folderPath, newFile)).mtimeMs;
+            if (Date.now() - mtime > 3600000) stale = true;
+          } catch {}
+          if (stale) {
+            log.info(`[detect] session=${sessionId} archiving stale empty file=${newId}`);
+          } else {
+            emptyFiles.add(newFile);
+          }
+          continue;
+        }
       }
 
-      log.debug(`[detect] session=${sessionId} checking newFile=${newId} signals=${JSON.stringify({forkedFrom: signals.forkedFrom||null, parentSessionId: signals.parentSessionId||null, slug: signals.slug||null})} forkFrom=${session.forkFrom||'none'}`);
+      if (session.forkFrom) {
+        log.info(`[detect] session=${sessionId} checking newFile=${newId} signals=${JSON.stringify({forkedFrom: signals.forkedFrom||null, parentSessionId: signals.parentSessionId||null, slug: signals.slug||null})} forkFrom=${session.forkFrom}`);
+      } else {
+        log.debug(`[detect] session=${sessionId} checking newFile=${newId} signals=${JSON.stringify({forkedFrom: signals.forkedFrom||null, parentSessionId: signals.parentSessionId||null, slug: signals.slug||null})} forkFrom=none`);
+      }
 
       let matched = false;
 
@@ -1436,6 +1485,14 @@ function detectSessionTransitions(folder) {
       // and the new file's name (newId) differs from both our PTY id and the source
       if (!matched && session.forkFrom && signals.parentSessionId === session.forkFrom && newId !== session.forkFrom) {
         matched = true;
+      }
+      // Fork file with only snapshots — no user turn yet, but this session is waiting for a fork
+      if (!matched && signals.hasSnapshots && session.forkFrom && !session.realSessionId) {
+        matched = true;
+      }
+
+      if (session.forkFrom && !matched) {
+        log.info(`[detect] session=${sessionId} NO MATCH for newFile=${newId} forkFrom=${session.forkFrom} parentSessionId=${signals.parentSessionId||'null'} forkedFrom=${signals.forkedFrom||'null'}`);
       }
 
       // Plan-accept: shared slug + planContent + old session has ExitPlanMode

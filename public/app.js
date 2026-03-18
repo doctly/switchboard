@@ -85,28 +85,96 @@ const pendingSessions = new Map(); // sessionId → { session, projectPath, fold
 let searchMatchIds = null; // null = no search active; Set<string> = matched session IDs
 
 // --- Activity tracking ---
-const unreadSessions = new Set(); // sessions with unseen output
-const attentionSessions = new Set(); // sessions needing user action
+//
+// Activity is determined by two signals:
+//   1. OSC 0 braille spinner (authoritative: Claude CLI sets title to spinner chars)
+//   2. Noise-filtered terminal output (fallback: non-noise, non-TUI-repaint data)
+//
+// Both feed into setActivity(sessionId, active):
+//   active=true  → cli-busy (spinner dot), + has-unread if not focused
+//   active=false → response-ready if has-unread (terminal state until user clicks)
+//
+// The idle timer (5s silence) calls setActivity(id, false) as a fallback
+// in case the OSC 0 idle signal is missed.
+
+const unreadSessions = new Set(); // activity happened while session not focused
+const attentionSessions = new Set(); // sessions needing user action (OSC 9)
+const responseReadySessions = new Set(); // Claude finished, user hasn't looked (terminal state)
+const sessionBusyState = new Map(); // sessionId → boolean (currently active)
+const sessionIdleTimers = new Map(); // sessionId → silence timeout
 const lastActivityTime = new Map(); // sessionId → Date of last terminal output
+const IDLE_TIMEOUT_MS = 5000; // silence threshold for idle fallback
 
-// Noise patterns to ignore for unread tracking
-const unreadNoiseRe = /file-history-snapshot|^\s*$/;
+// Noise patterns — these don't count as activity
+const activityNoiseRe = /file-history-snapshot|^\s*$/;
 
-function markUnread(sessionId, data) {
-  if (sessionId === activeSessionId) return;
-  // Skip noise
-  if (unreadNoiseRe.test(data)) return;
-  if (!unreadSessions.has(sessionId)) {
-    unreadSessions.add(sessionId);
-    const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
-    if (item) item.classList.add('has-unread');
+// Central activity dispatcher
+function setActivity(sessionId, active) {
+  if (responseReadySessions.has(sessionId)) return; // response-ready is terminal
+
+  const wasActive = sessionBusyState.get(sessionId) || false;
+  sessionBusyState.set(sessionId, active);
+
+  if (active) {
+    // Mark has-unread if not focused
+    if (sessionId !== activeSessionId) {
+      unreadSessions.add(sessionId);
+    }
+    clearIdleTimer(sessionId);
   }
+
+  if (wasActive && !active) {
+    // Activity ended → response-ready (gated by has-unread)
+    clearIdleTimer(sessionId);
+    if (unreadSessions.has(sessionId)) {
+      responseReadySessions.add(sessionId);
+      const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
+      if (item) {
+        item.classList.remove('cli-busy');
+        item.classList.add('response-ready');
+      }
+    }
+  }
+
+  // Sync cli-busy class (only if not response-ready)
+  if (!responseReadySessions.has(sessionId)) {
+    const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
+    if (item) item.classList.toggle('cli-busy', active);
+  }
+}
+
+// Terminal output activity — noise-filtered, resets idle timer
+function trackActivity(sessionId, data) {
+  if (sessionId === activeSessionId) return;
+  if (activityNoiseRe.test(data)) return;
+  if (responseReadySessions.has(sessionId)) return;
+  setActivity(sessionId, true);
+  resetIdleTimer(sessionId);
 }
 
 function clearUnread(sessionId) {
   unreadSessions.delete(sessionId);
+  responseReadySessions.delete(sessionId);
+  sessionBusyState.delete(sessionId);
+  clearIdleTimer(sessionId);
   const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
-  if (item) item.classList.remove('has-unread');
+  if (item) {
+    item.classList.remove('response-ready', 'cli-busy');
+  }
+}
+
+function resetIdleTimer(sessionId) {
+  if (responseReadySessions.has(sessionId)) return;
+  clearIdleTimer(sessionId);
+  sessionIdleTimers.set(sessionId, setTimeout(() => {
+    sessionIdleTimers.delete(sessionId);
+    setActivity(sessionId, false);
+  }, IDLE_TIMEOUT_MS));
+}
+
+function clearIdleTimer(sessionId) {
+  const timer = sessionIdleTimers.get(sessionId);
+  if (timer) { clearTimeout(timer); sessionIdleTimers.delete(sessionId); }
 }
 
 // --- Terminal themes ---
@@ -230,8 +298,8 @@ window.api.onTerminalData((sessionId, data) => {
   // Don't mark activity for synchronized output (TUI repaints)
   const isSyncRedraw = data.startsWith(ESC_SYNC_START) && data.endsWith(ESC_SYNC_END);
   if (!isSyncRedraw) {
-    if (!unreadNoiseRe.test(data)) lastActivityTime.set(sessionId, new Date());
-    markUnread(sessionId, data);
+    if (!activityNoiseRe.test(data)) lastActivityTime.set(sessionId, new Date());
+    trackActivity(sessionId, data);
   }
 });
 
@@ -273,8 +341,13 @@ window.api.onSessionForked((oldId, newId) => {
   // Re-key file panel state for the new session ID
   if (typeof rekeyFilePanelState === 'function') rekeyFilePanelState(oldId, newId);
 
-  // Clean up pending session so it doesn't duplicate the real .jsonl entry
+  // Re-key pending session to newId so sidebar item persists until DB has real data
+  const pendingEntry = pendingSessions.get(oldId);
   pendingSessions.delete(oldId);
+  if (pendingEntry) {
+    pendingEntry.sessionId = newId;
+    pendingSessions.set(newId, pendingEntry);
+  }
   sessionMap.delete(oldId);
   sessionMap.set(newId, entry.session);
 
@@ -345,10 +418,20 @@ window.api.onProcessExited((sessionId, exitCode) => {
 // --- Terminal notifications (iTerm2 OSC 9 — "needs attention") ---
 window.api.onTerminalNotification((sessionId, message) => {
   // Only mark as needing attention for "attention" messages, not "waiting for input"
-  if (/attention|approval|permission|needs your/i.test(message) && sessionId !== activeSessionId) {
+  // Matches all four CLI notification types:
+  // 1. "Claude Code needs your attention"         → attention
+  // 2. "Claude Code needs your approval for the plan" → approval, needs your
+  // 3. "Claude needs your permission to use {tool}"   → permission, needs your
+  // 4. "Claude Code wants to enter plan mode"         → wants to enter
+  if (/attention|approval|permission|needs your|wants to enter/i.test(message) && sessionId !== activeSessionId) {
     attentionSessions.add(sessionId);
     const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
     if (item) item.classList.add('needs-attention');
+  } else if (/waiting for your input/i.test(message)) {
+    // "Claude is waiting for your input" — delayed idle notification, mark response-ready
+    markResponseReady(sessionId);
+  } else {
+    console.log(`[notification] session=${sessionId} (no attention match) message="${message}"`);
   }
 
   // Show in header if active
@@ -358,37 +441,10 @@ window.api.onTerminalNotification((sessionId, message) => {
   }
 });
 
-// --- Progress state (iTerm2 OSC 9;4) ---
-// state: 0=clear, 1=progress%, 2=error, 3=indeterminate(busy), 4=warning
-const sessionProgressState = new Map();
-
-window.api.onProgressState((sessionId, state, percent) => {
-  sessionProgressState.set(sessionId, { state, percent });
-  updateProgressIndicators(sessionId);
+// --- CLI busy state (OSC 0 title spinner detection) ---
+window.api.onCliBusyState((sessionId, busy) => {
+  setActivity(sessionId, busy);
 });
-
-function updateProgressIndicators(sessionId) {
-  const info = sessionProgressState.get(sessionId);
-  const state = info?.state ?? 0;
-
-  // Update sidebar item
-  const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
-  if (item) {
-    item.classList.toggle('is-busy', state === 3);
-    item.classList.toggle('has-progress', state === 1);
-    item.classList.toggle('has-error', state === 2);
-  }
-
-  // Update terminal header progress bar if this is the active session
-  if (sessionId === activeSessionId) {
-    const bar = document.getElementById('terminal-progress-bar');
-    if (!bar) return;
-    bar.className = 'progress-state-' + state;
-    if (state === 1) {
-      bar.style.setProperty('--progress', (percent || 0) + '%');
-    }
-  }
-}
 
 // --- Single entry point for all sidebar renders ---
 // resort=true: re-sort items by priority+time (use for user-initiated actions)
@@ -543,10 +599,12 @@ function updateRunningIndicators() {
     const running = activePtyIds.has(id);
     item.classList.toggle('has-running-pty', running);
     if (!running) {
-      item.classList.remove('has-unread', 'needs-attention', 'is-busy', 'has-progress', 'has-error');
+      item.classList.remove('needs-attention', 'response-ready', 'cli-busy');
       unreadSessions.delete(id);
       attentionSessions.delete(id);
-      sessionProgressState.delete(id);
+      responseReadySessions.delete(id);
+      sessionBusyState.delete(id);
+      clearIdleTimer(id);
     }
     const dot = item.querySelector('.session-status-dot');
     if (dot) dot.classList.toggle('running', running);
@@ -1201,6 +1259,16 @@ function rebindSidebarEvents(projects) {
       };
     }
   });
+
+  // Auto-expand slug group if it contains the active session
+  if (activeSessionId) {
+    const activeItem = sidebarContent.querySelector(`[data-session-id="${activeSessionId}"]`);
+    const collapsedGroup = activeItem?.closest('.slug-group.collapsed');
+    if (collapsedGroup) {
+      collapsedGroup.classList.remove('collapsed');
+      saveExpandedSlugs();
+    }
+  }
 }
 
 function buildSessionItem(session) {
@@ -1210,14 +1278,9 @@ function buildSessionItem(session) {
   if (session.type === 'terminal') item.classList.add('is-terminal');
   if (session.archived) item.classList.add('archived-item');
   if (activePtyIds.has(session.sessionId)) item.classList.add('has-running-pty');
-  if (unreadSessions.has(session.sessionId)) item.classList.add('has-unread');
   if (attentionSessions.has(session.sessionId)) item.classList.add('needs-attention');
-  const progressInfo = sessionProgressState.get(session.sessionId);
-  if (progressInfo) {
-    if (progressInfo.state === 3) item.classList.add('is-busy');
-    if (progressInfo.state === 1) item.classList.add('has-progress');
-    if (progressInfo.state === 2) item.classList.add('has-error');
-  }
+  if (responseReadySessions.has(session.sessionId)) item.classList.add('response-ready');
+  if (sessionBusyState.get(session.sessionId)) item.classList.add('cli-busy');
   item.dataset.sessionId = session.sessionId;
 
   const modified = lastActivityTime.get(session.sessionId) || new Date(session.modified);
@@ -1444,7 +1507,7 @@ async function launchNewSession(project, sessionOptions) {
   });
 
   terminal.onBell(() => {
-    markUnread(session.sessionId, '\x07');
+    trackActivity(session.sessionId, '\x07');
   });
 
   // Open terminal in main process with session options
@@ -1474,7 +1537,6 @@ function showTerminalHeader(session) {
   terminalHeaderId.textContent = session.sessionId;
   terminalHeader.style.display = '';
   updateTerminalHeader();
-  updateProgressIndicators(session.sessionId);
 }
 
 async function openSession(session) {
@@ -1578,7 +1640,7 @@ async function openSession(session) {
   });
 
   terminal.onBell(() => {
-    markUnread(entry.session.sessionId, '\x07');
+    trackActivity(entry.session.sessionId, '\x07');
   });
 
   // Open terminal in main process with resolved default settings
@@ -2570,7 +2632,7 @@ async function launchTerminalSession(project) {
   });
 
   terminal.onBell(() => {
-    markUnread(session.sessionId, '\x07');
+    trackActivity(session.sessionId, '\x07');
   });
 
   const result = await window.api.openTerminal(sessionId, projectPath, true, { type: 'terminal' });

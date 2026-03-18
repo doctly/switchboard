@@ -45,11 +45,11 @@ contextBridge.exposeInMainWorld('api', {
   onProcessExited: (callback) => {
     ipcRenderer.on('process-exited', (_event, sessionId, exitCode) => callback(sessionId, exitCode));
   },
-  onProgressState: (callback) => {
-    ipcRenderer.on('progress-state', (_event, sessionId, state, percent) => callback(sessionId, state, percent));
-  },
   onTerminalNotification: (callback) => {
     ipcRenderer.on('terminal-notification', (_event, sessionId, message) => callback(sessionId, message));
+  },
+  onCliBusyState: (callback) => {
+    ipcRenderer.on('cli-busy-state', (_event, sessionId, busy) => callback(sessionId, busy));
   },
   onSessionForked: (callback) => {
     ipcRenderer.on('session-forked', (_event, oldId, newId) => callback(oldId, newId));

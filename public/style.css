@@ -615,6 +615,26 @@ body { display: flex; flex-direction: column; }
   50% { opacity: 0.5; }
 }
 
+/* ---- CLI busy spinner (braille spinner detected) — high specificity to override unread/attention ---- */
+.session-item.cli-busy .session-status-dot,
+.session-item.cli-busy .session-status-dot.running,
+.session-item.cli-busy.needs-attention .session-status-dot {
+  background: transparent !important;
+  border: 1.5px solid #8088ff;
+  border-top-color: transparent;
+  animation: spin-dot 0.8s linear infinite !important;
+  box-shadow: none !important;
+}
+
+.session-item.cli-busy.needs-attention .session-status-dot::before,
+.session-item.cli-busy.needs-attention .session-status-dot::after {
+  display: none;
+}
+
+@keyframes spin-dot {
+  to { transform: rotate(360deg); }
+}
+
 /* ---- Session info ---- */
 .session-info {
   flex: 1;
@@ -744,28 +764,52 @@ body { display: flex; flex-direction: column; }
   opacity: 0.55;
 }
 
-/* ---- Unread output indicator ---- */
-.session-item.has-unread .session-status-dot {
+/* ---- Response ready indicator (Claude finished, unread output) ---- */
+.session-item.response-ready .session-status-dot {
   background: #4fc3f7;
   box-shadow: 0 0 8px rgba(79,195,247,0.7);
-  animation: pulse-dot 2s ease-in-out infinite;
+  animation: none;
 }
 
-.session-item.has-unread .session-name {
-  color: #fff;
+.session-item.response-ready .session-name {
+  color: #4fc3f7;
   font-weight: 600;
 }
 
-.session-item.has-unread .session-summary {
-  color: #ccd6e0;
+.session-item.response-ready .session-summary {
+  color: #4fc3f7;
 }
 
-/* ---- Needs attention indicator ---- */
+.session-item.response-ready .session-time {
+  color: rgba(79,195,247,0.6);
+}
+
+/* ---- Needs attention indicator (ripple) ---- */
 .session-item.needs-attention .session-status-dot,
 .session-item.needs-attention .session-status-dot.running {
   background: #f0a050;
-  box-shadow: 0 0 6px rgba(240,160,80,0.5);
-  animation: pulse-dot 1s ease-in-out infinite;
+  box-shadow: none;
+  animation: none;
+  position: relative;
+}
+
+.session-item.needs-attention .session-status-dot::before,
+.session-item.needs-attention .session-status-dot::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(240,160,80,0.7);
+  animation: ripple-out 2s ease-out infinite;
+}
+
+.session-item.needs-attention .session-status-dot::after {
+  animation-delay: 1s;
+}
+
+@keyframes ripple-out {
+  0%   { transform: scale(1); opacity: 0.7; }
+  100% { transform: scale(3.5); opacity: 0; }
 }
 
 .session-item.needs-attention .session-summary {
@@ -776,96 +820,6 @@ body { display: flex; flex-direction: column; }
   display: none;
 }
 
-/* ---- Busy/progress indicator in sidebar ---- */
-.session-item.is-busy .session-status-dot {
-  background: #3ecf5a;
-  box-shadow: 0 0 6px rgba(62,207,90,0.5);
-  animation: pulse-dot 1s ease-in-out infinite;
-}
-
-.session-item.has-error .session-status-dot {
-  background: #e05070;
-  box-shadow: 0 0 6px rgba(224,80,112,0.5);
-}
-
-/* ========== PROGRESS BAR ========== */
-#terminal-progress-bar {
-  height: 2px;
-  flex-shrink: 0;
-  position: relative;
-  overflow: hidden;
-}
-
-#terminal-progress-bar.progress-state-0 {
-  display: none;
-}
-
-/* Indeterminate / busy — sliding green bar */
-#terminal-progress-bar.progress-state-3 {
-  background: rgba(62,207,90,0.1);
-}
-
-#terminal-progress-bar.progress-state-3::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  height: 100%;
-  width: 40%;
-  background: linear-gradient(90deg, transparent, #3ecf5a, transparent);
-  animation: progress-slide 1.5s ease-in-out infinite;
-}
-
-@keyframes progress-slide {
-  0% { left: -40%; }
-  100% { left: 100%; }
-}
-
-/* Determinate progress */
-#terminal-progress-bar.progress-state-1 {
-  background: rgba(120,130,255,0.1);
-}
-
-#terminal-progress-bar.progress-state-1::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  height: 100%;
-  width: var(--progress, 0%);
-  background: #8088ff;
-  transition: width 0.3s;
-}
-
-/* Error state */
-#terminal-progress-bar.progress-state-2 {
-  background: rgba(224,80,112,0.15);
-}
-
-#terminal-progress-bar.progress-state-2::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  height: 100%;
-  width: var(--progress, 100%);
-  background: #e05070;
-}
-
-/* Warning state */
-#terminal-progress-bar.progress-state-4 {
-  background: rgba(245,190,60,0.1);
-}
-
-#terminal-progress-bar.progress-state-4::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  height: 100%;
-  width: var(--progress, 100%);
-  background: #f5be3c;
-}
 
 /* ========== MAIN AREA ========== */
 #main {
@@ -888,7 +842,7 @@ body { display: flex; flex-direction: column; }
 
 #terminal-area {
   position: absolute;
-  inset: 0 0 22px 0;
+  inset: 0;
   display: flex;
   flex-direction: column;
 }
