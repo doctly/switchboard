@@ -23,6 +23,55 @@ const cleanPtyEnv = Object.fromEntries(
   )
 );
 
+// --- Cross-platform shell resolution ---
+const isWindows = process.platform === 'win32';
+
+function resolveShell() {
+  // 1. Respect explicit SHELL env (set by Git Bash, MSYS2, WSL, etc.)
+  if (process.env.SHELL && fs.existsSync(process.env.SHELL)) {
+    return process.env.SHELL;
+  }
+
+  if (isWindows) {
+    // 2. Look for Git Bash in common locations
+    const candidates = [
+      path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'bin', 'bash.exe'),
+      path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Git', 'bin', 'bash.exe'),
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Git', 'bin', 'bash.exe'),
+      'C:\\msys64\\usr\\bin\\bash.exe',
+    ];
+    for (const c of candidates) {
+      if (c && fs.existsSync(c)) return c;
+    }
+    // 3. Fall back to PowerShell / cmd
+    return process.env.COMSPEC || 'powershell.exe';
+  }
+
+  // Unix fallback chain
+  for (const s of ['/bin/zsh', '/bin/bash', '/bin/sh']) {
+    if (fs.existsSync(s)) return s;
+  }
+  return '/bin/sh';
+}
+
+// Returns spawn args appropriate for the resolved shell
+function shellArgs(shell, cmd) {
+  const base = path.basename(shell).toLowerCase();
+  const isBashLike = base.includes('bash') || base.includes('zsh') || base === 'sh';
+
+  if (cmd) {
+    // Execute a command then exit
+    if (isBashLike) return ['-l', '-i', '-c', cmd];
+    if (base.includes('powershell') || base.includes('pwsh')) return ['-NoLogo', '-Command', cmd];
+    // cmd.exe
+    return ['/C', cmd];
+  }
+  // Interactive shell
+  if (isBashLike) return ['-l', '-i'];
+  if (base.includes('powershell') || base.includes('pwsh')) return ['-NoLogo', '-NoExit'];
+  return [];
+}
+
 // --- Auto-updater (only in packaged builds) ---
 let autoUpdater = null;
 if (app.isPackaged || process.env.FORCE_UPDATER) {
@@ -1048,7 +1097,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     return { ok: false, error: `project directory no longer exists: ${projectPath}` };
   }
 
-  const shell = process.env.SHELL || '/bin/zsh';
+  const shell = resolveShell();
   const isPlainTerminal = sessionOptions?.type === 'terminal';
 
   let knownJsonlFiles = new Set();
@@ -1088,7 +1137,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       // Plain terminal: interactive login shell, no claude command
       // Inject a shell function to override `claude` with a helpful message
       const claudeShim = 'claude() { echo "\\033[33mTo start a Claude session, use the + button in the sidebar.\\033[0m"; return 1; }; export -f claude 2>/dev/null;';
-      ptyProcess = pty.spawn(shell, ['-l', '-i'], {
+      ptyProcess = pty.spawn(shell, shellArgs(shell), {
         name: 'xterm-256color',
         cols: 120,
         rows: 30,
@@ -1168,7 +1217,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         ptyEnv.CLAUDE_CODE_SSE_PORT = String(mcpServer.port);
       }
 
-      ptyProcess = pty.spawn(shell, ['-l', '-i', '-c', claudeCmd], {
+      ptyProcess = pty.spawn(shell, shellArgs(shell, claudeCmd), {
         name: 'xterm-256color',
         cols: 120,
         rows: 30,
@@ -1615,8 +1664,8 @@ ipcMain.handle('updater-install', () => {
 function warmupPty() {
   sendStatus('Warming up terminal\u2026', 'active');
   try {
-    const shell = process.env.SHELL || '/bin/zsh';
-    const p = pty.spawn(shell, ['-l', '-i', '-c', 'claude'], {
+    const shell = resolveShell();
+    const p = pty.spawn(shell, shellArgs(shell, 'claude'), {
       name: 'xterm-256color',
       cols: 80,
       rows: 24,
