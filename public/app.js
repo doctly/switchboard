@@ -37,7 +37,10 @@ const statsViewerBody = document.getElementById('stats-viewer-body');
 const memoryViewer = document.getElementById('memory-viewer');
 const memoryViewerTitle = document.getElementById('memory-viewer-title');
 const memoryViewerFilename = document.getElementById('memory-viewer-filename');
-const memoryViewerBody = document.getElementById('memory-viewer-body');
+const memoryViewerEditorEl = document.getElementById('memory-viewer-editor');
+const memoryCopyPathBtn = document.getElementById('memory-copy-path-btn');
+const memoryCopyContentBtn = document.getElementById('memory-copy-content-btn');
+const memorySaveBtn = document.getElementById('memory-save-btn');
 const terminalArea = document.getElementById('terminal-area');
 const settingsViewer = document.getElementById('settings-viewer');
 const settingsViewerTitle = document.getElementById('settings-viewer-title');
@@ -465,6 +468,7 @@ function refreshSidebar({ resort = false } = {}) {
 }
 
 // --- Archive toggle ---
+archiveToggle.innerHTML = ICONS.archive(18);
 archiveToggle.addEventListener('click', () => {
   showArchived = !showArchived;
   archiveToggle.classList.toggle('active', showArchived);
@@ -513,7 +517,7 @@ function clearSearch() {
   } else if (activeTab === 'plans') {
     renderPlans(cachedPlans);
   } else if (activeTab === 'memory') {
-    renderMemories(cachedMemories);
+    renderMemories();
   }
 }
 
@@ -548,7 +552,7 @@ searchInput.addEventListener('input', () => {
       } else if (activeTab === 'memory') {
         const results = await window.api.search('memory', query);
         const matchIds = new Set(results.map(r => r.id));
-        renderMemories(cachedMemories.filter(m => matchIds.has(m.filePath)));
+        renderMemories(matchIds);
       }
     } catch {
       if (activeTab === 'sessions') {
@@ -790,7 +794,7 @@ function buildSlugGroup(slug, sessions) {
   const archiveSlugBtn = document.createElement('button');
   archiveSlugBtn.className = 'slug-group-archive-btn';
   archiveSlugBtn.title = 'Archive all sessions in group';
-  archiveSlugBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1,1 L11,1 L11,4 L1,4 Z"/><path d="M1,4 L1,11 L11,11 L11,4"/><line x1="5" y1="6.5" x2="7" y2="6.5"/></svg>';
+  archiveSlugBtn.innerHTML = ICONS.archive(14);
 
   info.appendChild(nameEl);
   info.appendChild(meta);
@@ -992,13 +996,13 @@ function renderProjects(projects, resort) {
     const settingsBtn = document.createElement('button');
     settingsBtn.className = 'project-settings-btn';
     settingsBtn.title = 'Project settings';
-    settingsBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6.6 1h2.8l.4 2.1a5.5 5.5 0 0 1 1.3.8l2-.8 1.4 2.4-1.6 1.4a5.6 5.6 0 0 1 0 1.5l1.6 1.4-1.4 2.4-2-.8a5.5 5.5 0 0 1-1.3.8L9.4 15H6.6l-.4-2.1a5.5 5.5 0 0 1-1.3-.8l-2 .8-1.4-2.4 1.6-1.4a5.6 5.6 0 0 1 0-1.5L1.5 6.2l1.4-2.4 2 .8a5.5 5.5 0 0 1 1.3-.8L6.6 1z"/><circle cx="8" cy="8" r="2.5"/></svg>';
+    settingsBtn.innerHTML = ICONS.gear(12);
     header.appendChild(settingsBtn);
 
     const archiveGroupBtn = document.createElement('button');
     archiveGroupBtn.className = 'project-archive-btn';
     archiveGroupBtn.title = 'Archive all sessions';
-    archiveGroupBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1,1 L11,1 L11,4 L1,4 Z"/><path d="M1,4 L1,11 L11,11 L11,4"/><line x1="5" y1="6.5" x2="7" y2="6.5"/></svg>';
+    archiveGroupBtn.innerHTML = ICONS.archive(16);
     header.appendChild(archiveGroupBtn);
 
     const newBtn = document.createElement('button');
@@ -1345,19 +1349,17 @@ function buildSessionItem(session) {
   const archiveBtn = document.createElement('button');
   archiveBtn.className = 'session-archive-btn';
   archiveBtn.title = session.archived ? 'Unarchive' : 'Archive';
-  archiveBtn.innerHTML = session.archived
-    ? '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="4,7 6,5 8,7"/><line x1="6" y1="5" x2="6" y2="10"/><path d="M1,4 L1,11 L11,11 L11,4"/></svg>'
-    : '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1,1 L11,1 L11,4 L1,4 Z"/><path d="M1,4 L1,11 L11,11 L11,4"/><line x1="5" y1="6.5" x2="7" y2="6.5"/></svg>';
+  archiveBtn.innerHTML = ICONS.archive(16);
 
   const forkBtn = document.createElement('button');
   forkBtn.className = 'session-fork-btn';
   forkBtn.title = 'Fork session';
-  forkBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="2.5" r="1.5"/><circle cx="3" cy="9.5" r="1.5"/><circle cx="9" cy="9.5" r="1.5"/><line x1="6" y1="4" x2="6" y2="6"/><line x1="6" y1="6" x2="3" y2="8"/><line x1="6" y1="6" x2="9" y2="8"/></svg>';
+  forkBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M8 3h-5v5"/><path d="M21 3l-7.536 7.536a5 5 0 0 0-1.464 3.534v6.93"/><path d="M3 3l7.536 7.536a5 5 0 0 1 1.464 3.534v.93"/></svg>';
 
   const jsonlBtn = document.createElement('button');
   jsonlBtn.className = 'session-jsonl-btn';
   jsonlBtn.title = 'View messages';
-  jsonlBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h8M2 6h6M2 9h4"/></svg>';
+  jsonlBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>';
 
   actions.appendChild(stopBtn);
   actions.appendChild(forkBtn);
@@ -1582,7 +1584,17 @@ async function openSession(session) {
       // Defer fit — the container just went from display:none to display:block,
       // so the viewport has no dimensions yet.
       requestAnimationFrame(() => {
+        const prevCols = entry.terminal.cols;
+        const prevRows = entry.terminal.rows;
         entry.fitAddon.fit();
+        // fitAddon.fit() skips resize() when dimensions are unchanged, but
+        // xterm's viewport scroll-area can be stale if data was written while
+        // the terminal was display:none.  This causes scrollbar corruption
+        // when the user scrolls.  Force a resize cycle to re-sync the viewport.
+        if (entry.terminal.cols === prevCols && entry.terminal.rows === prevRows && prevRows > 1) {
+          entry.terminal.resize(prevCols, prevRows - 1);
+          entry.terminal.resize(prevCols, prevRows);
+        }
         if (isAtBottom(entry.terminal)) {
           requestAnimationFrame(() => entry.terminal.scrollToBottom());
         }
@@ -2475,77 +2487,137 @@ function buildStatsSummary(stats, dailyMap) {
 }
 
 // --- Memory ---
-let cachedMemories = [];
+let cachedMemoryData = { global: { files: [] }, projects: [] };
+let memoryEditorView = null;
+let currentMemoryFilePath = null;
+let currentMemoryContent = '';
+const memoryCollapsedState = new Map(); // key → boolean (true = collapsed)
 
 async function loadMemories() {
-  cachedMemories = await window.api.getMemories();
+  cachedMemoryData = await window.api.getMemories();
   renderMemories();
 }
 
-function renderMemories(memories) {
-  memories = memories || cachedMemories;
+function renderMemories(filterIds) {
   memoryContent.innerHTML = '';
-  if (memories.length === 0) {
+  const data = cachedMemoryData;
+  const allFiles = [...data.global.files, ...data.projects.flatMap(p => p.files)];
+  if (allFiles.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'plans-empty';
     empty.textContent = 'No memory files found.';
     memoryContent.appendChild(empty);
     return;
   }
-  for (const mem of memories) {
-    memoryContent.appendChild(buildMemoryItem(mem));
+
+  // Global group
+  if (data.global.files.length > 0) {
+    const globalFiles = filterIds ? data.global.files.filter(f => filterIds.has(f.filePath)) : data.global.files;
+    if (globalFiles.length > 0) {
+      memoryContent.appendChild(buildMemoryGroup('__global__', 'Global', globalFiles));
+    }
+  }
+
+  // Per-project groups
+  for (const proj of data.projects) {
+    const projFiles = filterIds ? proj.files.filter(f => filterIds.has(f.filePath)) : proj.files;
+    if (projFiles.length === 0) continue;
+    memoryContent.appendChild(buildMemoryGroup(proj.folder, proj.shortName, projFiles));
   }
 }
 
-function buildMemoryItem(mem) {
+function buildMemoryGroup(key, label, files) {
+  const group = document.createElement('div');
+  group.className = 'project-group';
+  const isCollapsed = memoryCollapsedState.get(key) === true; // default expanded
+  if (isCollapsed) group.classList.add('collapsed');
+
+  // Header
+  const header = document.createElement('div');
+  header.className = 'project-header';
+
+  const arrow = document.createElement('span');
+  arrow.className = 'arrow';
+  arrow.innerHTML = '&#9660;';
+  header.appendChild(arrow);
+
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'project-name';
+  nameSpan.textContent = label;
+  header.appendChild(nameSpan);
+
+  const countBadge = document.createElement('span');
+  countBadge.className = 'memory-file-count';
+  countBadge.textContent = files.length;
+  header.appendChild(countBadge);
+
+  header.addEventListener('click', () => {
+    const nowCollapsed = !group.classList.contains('collapsed');
+    group.classList.toggle('collapsed');
+    memoryCollapsedState.set(key, nowCollapsed);
+  });
+
+  group.appendChild(header);
+
+  // Files list
+  const filesList = document.createElement('div');
+  filesList.className = 'project-sessions';
+  for (const file of files) {
+    filesList.appendChild(buildMemoryItem(file));
+  }
+  group.appendChild(filesList);
+
+  return group;
+}
+
+function buildMemoryItem(file) {
   const item = document.createElement('div');
   item.className = 'session-item memory-item';
+  item.dataset.filepath = file.filePath;
 
   const row = document.createElement('div');
   row.className = 'session-row';
+
+  // Brain icon (same position as session pin)
+  const brain = document.createElement('span');
+  brain.className = 'memory-brain-icon';
+  brain.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M19.938 10.5a4 4 0 0 1 .585.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M19.967 17.484A4 4 0 0 1 18 18"/></svg>';
+  row.appendChild(brain);
 
   const info = document.createElement('div');
   info.className = 'session-info';
 
   const titleEl = document.createElement('div');
   titleEl.className = 'session-summary';
+  titleEl.textContent = file.filename;
 
-  const badge = document.createElement('span');
-  badge.className = `memory-type-badge type-${mem.type}`;
-  badge.textContent = mem.type;
-  titleEl.appendChild(badge);
-  titleEl.appendChild(document.createTextNode(mem.label));
-
-  const filenameEl = document.createElement('div');
-  filenameEl.className = 'session-id';
-  filenameEl.textContent = mem.filename;
+  const pathEl = document.createElement('div');
+  pathEl.className = 'session-id';
+  pathEl.textContent = file.displayPath;
 
   const metaEl = document.createElement('div');
   metaEl.className = 'session-meta';
-  metaEl.textContent = formatDate(new Date(mem.modified));
+  metaEl.textContent = formatDate(new Date(file.modified));
 
   info.appendChild(titleEl);
-  info.appendChild(filenameEl);
+  info.appendChild(pathEl);
   info.appendChild(metaEl);
   row.appendChild(info);
   item.appendChild(row);
 
-  item.addEventListener('click', () => openMemory(mem));
+  item.addEventListener('click', () => openMemory(file));
   return item;
 }
 
-async function openMemory(mem) {
+async function openMemory(file) {
   // Mark active in sidebar
   memoryContent.querySelectorAll('.memory-item.active').forEach(el => el.classList.remove('active'));
-  const items = memoryContent.querySelectorAll('.memory-item');
-  items.forEach(el => {
-    if (el.querySelector('.session-id')?.textContent === mem.filename &&
-        el.querySelector('.session-summary')?.textContent.includes(mem.label)) {
-      el.classList.add('active');
-    }
-  });
+  const target = memoryContent.querySelector(`.memory-item[data-filepath="${CSS.escape(file.filePath)}"]`);
+  if (target) target.classList.add('active');
 
-  const content = await window.api.readMemory(mem.filePath);
+  const content = await window.api.readMemory(file.filePath);
+  currentMemoryFilePath = file.filePath;
+  currentMemoryContent = content;
 
   // Show memory viewer in main area
   placeholder.style.display = 'none';
@@ -2555,10 +2627,37 @@ async function openMemory(mem) {
   settingsViewer.style.display = 'none';
   memoryViewer.style.display = 'flex';
 
-  memoryViewerTitle.textContent = `${mem.label} — ${mem.filename}`;
-  memoryViewerFilename.textContent = mem.filePath;
-  memoryViewerBody.textContent = content;
+  memoryViewerTitle.textContent = file.filename;
+  memoryViewerFilename.textContent = file.filePath;
+
+  // Create or update CodeMirror editor
+  if (!memoryEditorView) {
+    memoryEditorView = window.createPlanEditor(memoryViewerEditorEl);
+  }
+  memoryEditorView.dispatch({
+    changes: { from: 0, to: memoryEditorView.state.doc.length, insert: content },
+  });
 }
+
+// Memory toolbar handlers
+memoryCopyPathBtn.addEventListener('click', () => {
+  navigator.clipboard.writeText(currentMemoryFilePath);
+  flashButtonText(memoryCopyPathBtn, 'Copied!');
+});
+
+memoryCopyContentBtn.addEventListener('click', () => {
+  const content = memoryEditorView ? memoryEditorView.state.doc.toString() : currentMemoryContent;
+  navigator.clipboard.writeText(content);
+  flashButtonText(memoryCopyContentBtn, 'Copied!');
+});
+
+memorySaveBtn.addEventListener('click', async () => {
+  if (memoryEditorView && currentMemoryFilePath) {
+    currentMemoryContent = memoryEditorView.state.doc.toString();
+    await window.api.saveMemory(currentMemoryFilePath, currentMemoryContent);
+    flashButtonText(memorySaveBtn, 'Saved!');
+  }
+});
 
 // --- New session dialog ---
 async function resolveDefaultSessionOptions(project) {
@@ -3177,6 +3276,7 @@ async function openSettingsViewer(scope, projectPath) {
 }
 
 // Global settings gear button
+globalSettingsBtn.innerHTML = ICONS.gear(18);
 globalSettingsBtn.addEventListener('click', () => {
   openSettingsViewer('global');
 });

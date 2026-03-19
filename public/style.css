@@ -147,6 +147,7 @@ body { display: flex; flex-direction: column; }
   display: flex;
   gap: 0;
   border-bottom: 1px solid rgba(255,255,255,0.06);
+  align-items: center;
 }
 
 .sidebar-tab {
@@ -716,8 +717,8 @@ body { display: flex; flex-direction: column; }
   position: absolute;
   right: 8px;
   top: 8px;
-  background: linear-gradient(90deg, transparent, #18181f 30%);
-  padding-left: 16px;
+  background: linear-gradient(90deg, transparent, #18181f 10%);
+  padding-left: 8px;
   padding-right: 4px;
   z-index: 1;
 }
@@ -1512,11 +1513,18 @@ body { display: flex; flex-direction: column; }
 #memory-viewer-header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: space-between;
   padding: 8px 16px;
   background: #18181f;
   border-bottom: 1px solid rgba(255,255,255,0.06);
   flex-shrink: 0;
+}
+
+#memory-viewer-header-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 #memory-viewer-title {
@@ -1529,23 +1537,72 @@ body { display: flex; flex-direction: column; }
   font-size: 10px;
   color: #3a3a50;
   font-family: 'SF Mono', 'Fira Code', Menlo, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-#memory-viewer-body {
+#memory-viewer-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+#memory-copy-path-btn {
+  background: none;
+  border: none;
+  color: #555568;
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+#memory-copy-path-btn:hover {
+  color: #8088ff;
+  background: rgba(120,130,255,0.1);
+}
+
+#memory-copy-content-btn,
+#memory-save-btn {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.08);
+  color: #6e6e88;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+  font-weight: 500;
+}
+
+#memory-copy-content-btn:hover {
+  border-color: rgba(120,130,255,0.3);
+  color: #8088ff;
+  background: rgba(120,130,255,0.06);
+}
+
+#memory-save-btn:hover {
+  border-color: rgba(62,207,90,0.3);
+  color: #3ecf5a;
+  background: rgba(62,207,90,0.06);
+}
+
+/* Memory CodeMirror editor */
+#memory-viewer-editor {
   flex: 1;
-  overflow-y: auto;
-  padding: 20px 24px;
-  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  color: #c0c0d0;
-  white-space: pre-wrap;
-  word-wrap: break-word;
+  overflow: hidden;
 }
 
-#memory-viewer-body::-webkit-scrollbar { width: 5px; }
-#memory-viewer-body::-webkit-scrollbar-track { background: transparent; }
-#memory-viewer-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 3px; }
+#memory-viewer-editor .cm-editor {
+  height: 100%;
+}
 
 /* ========== JSONL VIEWER ========== */
 #jsonl-viewer {
@@ -1839,8 +1896,25 @@ body { display: flex; flex-direction: column; }
   padding: 4px 0 16px;
 }
 
-/* Memory type badge */
-.memory-type-badge {
+/* Memory sidebar styles */
+.memory-brain-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  margin-top: 5px;
+  color: #8888a8;
+}
+
+.memory-file-count {
+  font-size: 10px;
+  color: #555568;
+  background: rgba(255,255,255,0.05);
+  padding: 1px 6px;
+  border-radius: 8px;
+  margin-left: 4px;
+}
+
+.memory-source-badge {
   display: inline-block;
   font-size: 9px;
   font-weight: 600;
@@ -1853,19 +1927,22 @@ body { display: flex; flex-direction: column; }
   margin-right: 6px;
 }
 
-.memory-type-badge.type-global {
+.memory-source-badge.source-claude-home {
   background: rgba(128,136,255,0.15);
   color: #8088ff;
 }
 
-.memory-type-badge.type-project {
+.memory-source-badge.source-project {
   background: rgba(62,207,90,0.12);
   color: #3ecf5a;
 }
 
-.memory-type-badge.type-auto {
-  background: rgba(245,190,60,0.12);
-  color: #f5be3c;
+/* Collapse/expand for memory groups */
+#memory-content .project-group.collapsed .project-sessions {
+  display: none;
+}
+#memory-content .project-group.collapsed .arrow {
+  transform: rotate(-90deg);
 }
 
 /* ========== ADD PROJECT BUTTON ========== */
@@ -2021,19 +2098,15 @@ body { display: flex; flex-direction: column; }
 
 /* ========== GLOBAL SETTINGS BUTTON ========== */
 #global-settings-btn {
+  margin-left: auto;
   background: transparent;
-  border: 1px solid rgba(255,255,255,0.08);
+  border: none;
   color: #555568;
-  font-size: 11px;
-  padding: 0;
+  padding: 8px 12px;
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s;
-  font-family: inherit;
-  font-weight: 500;
   line-height: 1;
-  width: 26px;
-  height: 26px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
