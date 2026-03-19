@@ -13,6 +13,7 @@ import { python } from '@codemirror/lang-python';
 import { json } from '@codemirror/lang-json';
 import { html } from '@codemirror/lang-html';
 import { css } from '@codemirror/lang-css';
+import { marked } from 'marked';
 import { rust } from '@codemirror/lang-rust';
 import { go } from '@codemirror/lang-go';
 import { java } from '@codemirror/lang-java';
@@ -202,3 +203,6 @@ window.createUnifiedMergeViewer = createUnifiedMergeViewer;
 window.CMEditorView = EditorView;
 window.CMEditorState = EditorState;
 window.CMMergeView = MergeView;
+
+marked.setOptions({ breaks: true, gfm: true });
+window.marked = marked;

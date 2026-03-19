@@ -1111,6 +1111,8 @@ body { display: flex; flex-direction: column; }
   background: rgba(120,130,255,0.1);
 }
 
+#plan-preview-btn,
+#memory-preview-btn,
 #plan-copy-content-btn,
 #plan-save-btn {
   background: transparent;
@@ -1125,6 +1127,8 @@ body { display: flex; flex-direction: column; }
   font-weight: 500;
 }
 
+#plan-preview-btn:hover,
+#memory-preview-btn:hover,
 #plan-copy-content-btn:hover {
   border-color: rgba(120,130,255,0.3);
   color: #8088ff;
@@ -1135,6 +1139,13 @@ body { display: flex; flex-direction: column; }
   border-color: rgba(62,207,90,0.3);
   color: #3ecf5a;
   background: rgba(62,207,90,0.06);
+}
+
+#plan-preview-btn.active,
+#memory-preview-btn.active {
+  border-color: rgba(120,130,255,0.4);
+  color: #8088ff;
+  background: rgba(120,130,255,0.12);
 }
 
 /* Plan CodeMirror editor */
@@ -1603,6 +1614,78 @@ body { display: flex; flex-direction: column; }
 #memory-viewer-editor .cm-editor {
   height: 100%;
 }
+
+/* ========== MARKDOWN PREVIEW ========== */
+.markdown-preview {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 32px;
+  color: #f8f8f2;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.7;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.08) transparent;
+}
+
+.markdown-preview h1, .markdown-preview h2, .markdown-preview h3,
+.markdown-preview h4, .markdown-preview h5, .markdown-preview h6 {
+  color: #bd93f9;
+  margin: 1.2em 0 0.5em;
+  font-weight: 600;
+}
+.markdown-preview h1 { font-size: 1.6em; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 0.3em; }
+.markdown-preview h2 { font-size: 1.35em; border-bottom: 1px solid rgba(255,255,255,0.04); padding-bottom: 0.25em; }
+.markdown-preview h3 { font-size: 1.15em; }
+
+.markdown-preview p { margin: 0.6em 0; }
+
+.markdown-preview a { color: #8be9fd; text-decoration: none; }
+.markdown-preview a:hover { text-decoration: underline; }
+
+.markdown-preview code {
+  background: #44475a;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'SF Mono', 'Fira Code', Menlo, monospace;
+  font-size: 0.9em;
+}
+
+.markdown-preview pre {
+  background: #282a36;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 6px;
+  padding: 14px 18px;
+  overflow-x: auto;
+}
+.markdown-preview pre code {
+  background: none;
+  padding: 0;
+}
+
+.markdown-preview blockquote {
+  border-left: 3px solid #6272a4;
+  margin: 0.8em 0;
+  padding: 0.4em 1em;
+  color: #b0b0c4;
+}
+
+.markdown-preview ul, .markdown-preview ol { padding-left: 1.5em; margin: 0.5em 0; }
+.markdown-preview li { margin: 0.25em 0; }
+
+.markdown-preview table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+.markdown-preview th, .markdown-preview td {
+  border: 1px solid rgba(255,255,255,0.08);
+  padding: 6px 12px;
+  text-align: left;
+}
+.markdown-preview th { background: rgba(255,255,255,0.04); color: #bd93f9; }
+
+.markdown-preview hr { border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 1.5em 0; }
+
+.markdown-preview img { max-width: 100%; border-radius: 6px; }
+
+.markdown-preview input[type="checkbox"] { margin-right: 6px; }
 
 /* ========== JSONL VIEWER ========== */
 #jsonl-viewer {

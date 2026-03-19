@@ -58,11 +58,13 @@
           <button id="memory-copy-path-btn" title="Copy file path"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M5.5 10.5h-1a1.5 1.5 0 0 1-1.5-1.5v-5a1.5 1.5 0 0 1 1.5-1.5h5a1.5 1.5 0 0 1 1.5 1.5v1"/></svg></button>
         </div>
         <div id="memory-viewer-header-controls">
+          <button id="memory-preview-btn" title="Toggle markdown preview">Preview</button>
           <button id="memory-copy-content-btn" title="Copy raw content">Copy</button>
           <button id="memory-save-btn" title="Save changes">Save</button>
         </div>
       </div>
       <div id="memory-viewer-editor"></div>
+      <div id="memory-viewer-preview" class="markdown-preview" style="display:none;"></div>
     </div>
     <div id="plan-viewer" style="display:none;">
       <div id="plan-viewer-header">
@@ -72,11 +74,13 @@
           <button id="plan-copy-path-btn" title="Copy file path"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M5.5 10.5h-1a1.5 1.5 0 0 1-1.5-1.5v-5a1.5 1.5 0 0 1 1.5-1.5h5a1.5 1.5 0 0 1 1.5 1.5v1"/></svg></button>
         </div>
         <div id="plan-viewer-header-controls">
+          <button id="plan-preview-btn" title="Toggle markdown preview">Preview</button>
           <button id="plan-copy-content-btn" title="Copy raw content">Copy</button>
           <button id="plan-save-btn" title="Save changes">Save</button>
         </div>
       </div>
       <div id="plan-viewer-editor"></div>
+      <div id="plan-viewer-preview" class="markdown-preview" style="display:none;"></div>
     </div>
     <div id="settings-viewer" style="display:none;">
       <div id="settings-viewer-header">
