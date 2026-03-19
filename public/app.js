@@ -108,14 +108,12 @@ const lastActivityTime = new Map(); // sessionId → Date of last terminal outpu
 const activityNoiseRe = /file-history-snapshot|^\s*$/;
 
 // Central activity dispatcher
-function setActivity(sessionId, active, source = 'unknown') {
+function setActivity(sessionId, active) {
   if (responseReadySessions.has(sessionId)) {
-    console.log(`[activity] session=${sessionId.slice(0,8)} source=${source} active=${active} BLOCKED (response-ready)`);
     return;
   }
 
   const wasActive = sessionBusyState.get(sessionId) || false;
-  console.log(`[activity] session=${sessionId.slice(0,8)} source=${source} active=${active} wasActive=${wasActive}`);
   sessionBusyState.set(sessionId, active);
 
   if (active) {
@@ -128,7 +126,6 @@ function setActivity(sessionId, active, source = 'unknown') {
   if (wasActive && !active) {
     // Activity ended → response-ready (gated by has-unread)
     if (unreadSessions.has(sessionId)) {
-      console.log(`[activity] session=${sessionId.slice(0,8)} → RESPONSE-READY`);
       responseReadySessions.add(sessionId);
       const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
       if (item) {
@@ -405,7 +402,7 @@ window.api.onTerminalNotification((sessionId, message) => {
     if (item) item.classList.add('needs-attention');
   } else if (/waiting for your input/i.test(message)) {
     // "Claude is waiting for your input" — delayed idle notification, mark response-ready
-    setActivity(sessionId, false, 'osc9-waiting');
+    setActivity(sessionId, false);
   } else {
     console.log(`[notification] session=${sessionId} (no attention match) message="${message}"`);
   }
@@ -419,8 +416,7 @@ window.api.onTerminalNotification((sessionId, message) => {
 
 // --- CLI busy state (OSC 0 title spinner detection) ---
 window.api.onCliBusyState((sessionId, busy) => {
-  console.log(`[osc-busy] session=${sessionId.slice(0,8)} busy=${busy}`);
-  setActivity(sessionId, busy, 'osc');
+  setActivity(sessionId, busy);
 });
 
 // --- Single entry point for all sidebar renders ---
