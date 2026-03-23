@@ -1438,8 +1438,10 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     return { ok: false, error: `project directory no longer exists: ${projectPath}` };
   }
 
+  const isPlainTerminal = sessionOptions?.type === 'terminal';
+
   // Resolve shell profile from effective settings
-  const effectiveSettings = (() => {
+  const effectiveProfileId = (() => {
     const global = getSetting('global') || {};
     const project = projectPath ? (getSetting('project:' + projectPath) || {}) : {};
     let profileId = SETTING_DEFAULTS.shellProfile;
@@ -1447,9 +1449,15 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     if (project.shellProfile !== undefined && project.shellProfile !== null) profileId = project.shellProfile;
     return profileId;
   })();
-  const shellProfile = resolveShell(effectiveSettings);
+  // WSL profiles only work for plain terminals — Claude CLI sessions need the
+  // Windows shell because session data lives on the Windows filesystem.
+  const requestedProfile = resolveShell(effectiveProfileId);
+  const useWslProfile = isWslShell(requestedProfile.path) && isPlainTerminal;
+  const shellProfile = (isWslShell(requestedProfile.path) && !isPlainTerminal)
+    ? resolveShell('auto')
+    : requestedProfile;
   const shell = shellProfile.path;
-  const shellExtraArgs = shellProfile.args || [];
+  const shellExtraArgs = [...(shellProfile.args || [])];
   const isWsl = isWslShell(shell);
   // For WSL, convert Windows path to /mnt/ path and pass via --cd;
   // the spawn cwd must remain a valid Windows path for wsl.exe itself.
@@ -1458,7 +1466,6 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     shellExtraArgs.unshift('--cd', wslCwd);
   }
   log.info(`[shell] profile=${shellProfile.id} shell=${shell} args=${JSON.stringify(shellExtraArgs)}`);
-  const isPlainTerminal = sessionOptions?.type === 'terminal';
 
   let knownJsonlFiles = new Set();
   let sessionSlug = null;
