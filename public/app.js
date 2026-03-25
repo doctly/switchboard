@@ -316,10 +316,14 @@ function flushTerminalBuffer(sessionId) {
 
   const data = buf.chunks.join('');
   const wasAtBottom = isAtBottom(entry.terminal);
+  const savedViewportY = entry.terminal.buffer.active.viewportY;
   entry.terminal.write(data, () => {
     if (sessionId !== activeSessionId) return;
     if (wasAtBottom) {
       entry.terminal.scrollToBottom();
+    } else {
+      // Restore scroll position so redraws don't yank the user away
+      entry.terminal.scrollLines(savedViewportY - entry.terminal.buffer.active.viewportY);
     }
   });
 }
