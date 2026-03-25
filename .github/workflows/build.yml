@@ -19,8 +19,18 @@ jobs:
             platform: mac
           - os: windows-latest
             platform: win
+          # Linux is split per-arch to avoid electron-builder bundling native
+          # modules from the wrong architecture. When multiple targets (AppImage
+          # + deb) are built for multiple arches in one invocation, the native
+          # module rebuild only runs between arch switches for the first target
+          # type — the second target type reuses whatever was last compiled,
+          # which can be the wrong arch. See #18.
           - os: ubuntu-latest
             platform: linux
+            arch: x64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
 
     runs-on: ${{ matrix.os }}
 
@@ -47,7 +57,7 @@ jobs:
 
       - name: Build (release)
         if: startsWith(github.ref, 'refs/tags/v')
-        run: npm run release
+        run: npx electron-builder --${{ matrix.platform }} ${{ matrix.arch && format('--arch {0}', matrix.arch) || '' }} --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ matrix.platform == 'mac' && secrets.CSC_LINK || '' }}
@@ -59,7 +69,7 @@ jobs:
 
       - name: Build (artifacts only)
         if: "!startsWith(github.ref, 'refs/tags/v')"
-        run: npx electron-builder --${{ matrix.platform }} --publish never
+        run: npx electron-builder --${{ matrix.platform }} ${{ matrix.arch && format('--arch {0}', matrix.arch) || '' }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
@@ -67,7 +77,7 @@ jobs:
         if: "!startsWith(github.ref, 'refs/tags/v')"
         uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ matrix.platform }}
+          name: dist-${{ matrix.platform }}${{ matrix.arch && format('-{0}', matrix.arch) || '' }}
           path: |
             dist/*.dmg
             dist/*.zip
