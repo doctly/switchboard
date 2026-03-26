@@ -16,6 +16,7 @@ const terminalStopBtn = document.getElementById('terminal-stop-btn');
 const terminalRestartBtn = document.getElementById('terminal-restart-btn');
 const runningToggle = document.getElementById('running-toggle');
 const todayToggle = document.getElementById('today-toggle');
+const latestToggle = document.getElementById('latest-toggle');
 const planViewer = document.getElementById('plan-viewer');
 const planViewerTitle = document.getElementById('plan-viewer-title');
 const planViewerFilepath = document.getElementById('plan-viewer-filepath');
@@ -85,6 +86,7 @@ let showArchived = false;
 let showStarredOnly = false;
 let showRunningOnly = false;
 let showTodayOnly = false;
+let showLatestOnly = false;
 let cachedProjects = [];
 let cachedAllProjects = [];
 let activePtyIds = new Set();
@@ -557,6 +559,13 @@ todayToggle.addEventListener('click', () => {
   refreshSidebar({ resort: true });
 });
 
+// --- Latest filter toggle (one session per project) ---
+latestToggle.addEventListener('click', () => {
+  showLatestOnly = !showLatestOnly;
+  latestToggle.classList.toggle('active', showLatestOnly);
+  refreshSidebar({ resort: true });
+});
+
 // --- Re-sort button ---
 resortBtn.addEventListener('click', () => {
   loadProjects({ resort: true });
@@ -959,7 +968,11 @@ function renderProjects(projects, resort) {
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` === todayStr;
       });
     }
-    const anyFilterActive = showStarredOnly || showRunningOnly || showTodayOnly || searchMatchIds !== null;
+    if (showLatestOnly) {
+      // Sort by modified desc and keep only the single most recent session
+      filtered = [...filtered].sort((a, b) => new Date(b.modified) - new Date(a.modified)).slice(0, 1);
+    }
+    const anyFilterActive = showStarredOnly || showRunningOnly || showTodayOnly || showLatestOnly || searchMatchIds !== null;
     if (filtered.length === 0 && (project.sessions.length > 0 || anyFilterActive)) continue;
     const fId = folderId(project.projectPath);
 
@@ -1036,7 +1049,7 @@ function renderProjects(projects, resort) {
     // === STEP 5: Truncate — split into visible vs older ===
     let visible = [];
     let older = [];
-    if (searchMatchIds !== null || showStarredOnly || showRunningOnly || showTodayOnly) {
+    if (searchMatchIds !== null || showStarredOnly || showRunningOnly || showTodayOnly || showLatestOnly) {
       visible = allItems;
     } else {
       let count = 0;
@@ -1111,7 +1124,7 @@ function renderProjects(projects, resort) {
     }
 
     // Auto-collapse if most recent session is older than 5 days
-    if (searchMatchIds === null && !showStarredOnly && !showRunningOnly) {
+    if (searchMatchIds === null && !showStarredOnly && !showRunningOnly && !showLatestOnly) {
       const mostRecent = filtered[0]?.modified;
       if (mostRecent && (Date.now() - new Date(mostRecent)) > sessionMaxAgeDays * 86400000) {
         header.classList.add('collapsed');
