@@ -1405,6 +1405,25 @@ ipcMain.handle('archive-session', (_event, sessionId, archived) => {
   return { archived: val };
 });
 
+// --- IPC: restore-backup-session ---
+ipcMain.handle('restore-backup-session', async (_event, folder) => {
+  try {
+    const backupDir = getSetting('global')?.backupDir || path.join(os.homedir(), 'claude-session-backups');
+    const src = path.join(backupDir, folder, 'latest.jsonl');
+    const destDir = path.join(PROJECTS_DIR, folder);
+    const dest = path.join(destDir, 'latest.jsonl');
+    if (!fs.existsSync(src)) return { ok: false, error: 'Backup file not found' };
+    fs.mkdirSync(destDir, { recursive: true });
+    fs.copyFileSync(src, dest);
+    // Trigger a re-scan so Switchboard picks up the restored session as live
+    populatingCache = false;
+    populateCache();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 // --- IPC: open-terminal ---
 ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, sessionOptions) => {
   if (!mainWindow) return { ok: false, error: 'no window' };

@@ -1451,7 +1451,28 @@ function buildSessionItem(session) {
   jsonlBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>';
 
   actions.appendChild(stopBtn);
-  if (session.type !== 'terminal') {
+  if (session.isBackup) {
+    const restoreBtn = document.createElement('button');
+    restoreBtn.className = 'session-restore-btn';
+    restoreBtn.title = 'Restore to ~/.claude/projects so Claude Code can resume it';
+    restoreBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.95"/></svg>';
+    restoreBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      restoreBtn.disabled = true;
+      restoreBtn.title = 'Restoring…';
+      const result = await window.api.restoreBackupSession(session.folder);
+      if (result.ok) {
+        restoreBtn.title = 'Restored — rescan in progress';
+        loadProjects({ resort: true });
+      } else {
+        restoreBtn.disabled = false;
+        restoreBtn.title = 'Restore failed: ' + result.error;
+        console.error('Restore failed:', result.error);
+      }
+    });
+    actions.appendChild(restoreBtn);
+    actions.appendChild(jsonlBtn);
+  } else if (session.type !== 'terminal') {
     actions.appendChild(forkBtn);
     actions.appendChild(jsonlBtn);
     actions.appendChild(archiveBtn);

@@ -2902,6 +2902,18 @@ body { display: flex; flex-direction: column; }
   color: #888;
   font-size: 0.85em;
 }
+.session-restore-btn {
+  opacity: 0.6;
+  color: #7ab8f5;
+}
+.session-restore-btn:hover {
+  opacity: 1;
+  color: #7ab8f5;
+}
+.session-restore-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
 
 /* Terminal sessions: green status dot */
 .session-item.is-terminal .session-status-dot.running {
