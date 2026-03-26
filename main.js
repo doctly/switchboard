@@ -1417,7 +1417,7 @@ ipcMain.handle('restore-backup-session', async (_event, folder) => {
     fs.copyFileSync(src, dest);
     // Trigger a re-scan so Switchboard picks up the restored session as live
     populatingCache = false;
-    populateCache();
+    populateCacheViaWorker();
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
