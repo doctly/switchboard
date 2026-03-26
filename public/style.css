@@ -2884,6 +2884,25 @@ body { display: flex; flex-direction: column; }
   top: -1px;
 }
 
+.backup-badge {
+  display: inline-flex;
+  align-items: center;
+  color: #888;
+  margin-right: 5px;
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
+  opacity: 0.7;
+}
+.session-item.is-backup {
+  opacity: 0.8;
+}
+.session-item.is-backup .session-id::after {
+  content: ' · backup';
+  color: #888;
+  font-size: 0.85em;
+}
+
 /* Terminal sessions: green status dot */
 .session-item.is-terminal .session-status-dot.running {
   background: #3ecf5a;

@@ -4,6 +4,7 @@ const path = require('path');
 const { getFolderIndexMtimeMs } = require('../folder-index-state');
 
 const PROJECTS_DIR = workerData.projectsDir;
+const BACKUP_DIR = workerData.backupDir || null;
 
 function deriveProjectPath(folderPath, folder) {
   try {
@@ -43,6 +44,60 @@ function deriveProjectPath(folderPath, folder) {
   } catch {}
   // No cwd found — return null so callers can skip this folder
   return null;
+}
+
+function readBackupFolder(folder, liveSessionIds) {
+  if (!BACKUP_DIR) return null;
+  const folderPath = path.join(BACKUP_DIR, folder);
+  if (!fs.existsSync(folderPath)) return null;
+  const projectPath = deriveProjectPath(folderPath, folder);
+  if (!projectPath) return null;
+  const sessions = [];
+  try {
+    const jsonlFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
+    for (const file of jsonlFiles) {
+      const sessionId = path.basename(file, '.jsonl');
+      if (liveSessionIds && liveSessionIds.has(sessionId)) continue; // skip if live version exists
+      const filePath = path.join(folderPath, file);
+      const stat = fs.statSync(filePath);
+      let summary = '';
+      let messageCount = 0;
+      let textContent = '';
+      let slug = null;
+      let customTitle = null;
+      try {
+        const content = fs.readFileSync(filePath, 'utf8');
+        const lines = content.split('\n').filter(Boolean);
+        for (const line of lines) {
+          const entry = JSON.parse(line);
+          if (entry.slug && !slug) slug = entry.slug;
+          if (entry.type === 'custom-title' && entry.customTitle) customTitle = entry.customTitle;
+          if (entry.type === 'user' || entry.type === 'assistant' ||
+              (entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'))) {
+            messageCount++;
+          }
+          const msg = entry.message;
+          const text = typeof msg === 'string' ? msg :
+            (typeof msg?.content === 'string' ? msg.content : (msg?.content?.[0]?.text || ''));
+          if (!summary && (entry.type === 'user' || (entry.type === 'message' && entry.role === 'user'))) {
+            if (text) summary = text.slice(0, 120);
+          }
+          if (text && textContent.length < 8000) textContent += text.slice(0, 500) + '\n';
+        }
+      } catch {}
+      if (!summary || messageCount < 1) continue;
+      sessions.push({
+        sessionId, folder, projectPath,
+        summary, firstPrompt: summary,
+        created: stat.birthtime.toISOString(),
+        modified: stat.mtime.toISOString(),
+        messageCount, textContent, slug, customTitle,
+        isBackup: true,
+      });
+    }
+  } catch {}
+  if (sessions.length === 0) return null;
+  return { folder, projectPath, sessions, indexMtimeMs: 0, isBackup: true };
 }
 
 function readFolderFromFilesystem(folder) {
@@ -116,6 +171,24 @@ try {
     const result = readFolderFromFilesystem(folders[i]);
     if (result) results.push(result);
   }
+
+  // Merge backup sessions — append to existing projects, add new ones not in live
+  if (BACKUP_DIR && fs.existsSync(BACKUP_DIR)) {
+    const backupFolders = fs.readdirSync(BACKUP_DIR, { withFileTypes: true })
+      .filter(d => d.isDirectory()).map(d => d.name);
+    for (const folder of backupFolders) {
+      const existing = results.find(r => r.folder === folder);
+      const liveIds = existing ? new Set(existing.sessions.map(s => s.sessionId)) : null;
+      const backupResult = readBackupFolder(folder, liveIds);
+      if (!backupResult) continue;
+      if (existing) {
+        existing.sessions.push(...backupResult.sessions);
+      } else {
+        results.push(backupResult);
+      }
+    }
+  }
+
   parentPort.postMessage({ ok: true, results });
 } catch (err) {
   parentPort.postMessage({ ok: false, error: err.message });

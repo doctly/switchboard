@@ -725,8 +725,9 @@ function populateCacheViaWorker() {
   populatingCache = true;
   sendStatus('Scanning projects\u2026', 'active');
 
+  const backupDir = getSetting('global')?.backupDir || path.join(os.homedir(), 'claude-session-backups');
   const worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
-    workerData: { projectsDir: PROJECTS_DIR },
+    workerData: { projectsDir: PROJECTS_DIR, backupDir },
   });
 
   worker.on('message', (msg) => {
