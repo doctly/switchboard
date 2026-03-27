@@ -6,6 +6,7 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const log = require('electron-log');
 
 function getConfigDir() {
   return (process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
