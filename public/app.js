@@ -16,6 +16,7 @@ const terminalStopBtn = document.getElementById('terminal-stop-btn');
 const terminalRestartBtn = document.getElementById('terminal-restart-btn');
 const runningToggle = document.getElementById('running-toggle');
 const todayToggle = document.getElementById('today-toggle');
+const latestToggle = document.getElementById('latest-toggle');
 const planViewer = document.getElementById('plan-viewer');
 const planViewerTitle = document.getElementById('plan-viewer-title');
 const planViewerFilepath = document.getElementById('plan-viewer-filepath');
@@ -85,6 +86,7 @@ let showArchived = false;
 let showStarredOnly = false;
 let showRunningOnly = false;
 let showTodayOnly = false;
+let showLatestOnly = false;
 let cachedProjects = [];
 let cachedAllProjects = [];
 let activePtyIds = new Set();
@@ -567,6 +569,13 @@ todayToggle.addEventListener('click', () => {
   refreshSidebar({ resort: true });
 });
 
+// --- Latest filter toggle (one session per project) ---
+latestToggle.addEventListener('click', () => {
+  showLatestOnly = !showLatestOnly;
+  latestToggle.classList.toggle('active', showLatestOnly);
+  refreshSidebar({ resort: true });
+});
+
 // --- Re-sort button ---
 resortBtn.addEventListener('click', () => {
   loadProjects({ resort: true });
@@ -960,7 +969,11 @@ function renderProjects(projects, resort) {
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` === todayStr;
       });
     }
-    const anyFilterActive = showStarredOnly || showRunningOnly || showTodayOnly || searchMatchIds !== null;
+    if (showLatestOnly) {
+      // Sort by modified desc and keep only the single most recent session
+      filtered = [...filtered].sort((a, b) => new Date(b.modified) - new Date(a.modified)).slice(0, 1);
+    }
+    const anyFilterActive = showStarredOnly || showRunningOnly || showTodayOnly || showLatestOnly || searchMatchIds !== null;
     if (filtered.length === 0 && (project.sessions.length > 0 || anyFilterActive)) continue;
     const fId = folderId(project.projectPath);
 
@@ -1037,7 +1050,7 @@ function renderProjects(projects, resort) {
     // === STEP 5: Truncate — split into visible vs older ===
     let visible = [];
     let older = [];
-    if (searchMatchIds !== null || showStarredOnly || showRunningOnly || showTodayOnly) {
+    if (searchMatchIds !== null || showStarredOnly || showRunningOnly || showTodayOnly || showLatestOnly) {
       visible = allItems;
     } else {
       let count = 0;
@@ -1112,7 +1125,7 @@ function renderProjects(projects, resort) {
     }
 
     // Auto-collapse if most recent session is older than 5 days
-    if (searchMatchIds === null && !showStarredOnly && !showRunningOnly) {
+    if (searchMatchIds === null && !showStarredOnly && !showRunningOnly && !showLatestOnly) {
       const mostRecent = filtered[0]?.modified;
       if (mostRecent && (Date.now() - new Date(mostRecent)) > sessionMaxAgeDays * 86400000) {
         header.classList.add('collapsed');
@@ -1402,6 +1415,14 @@ function buildSessionItem(session) {
     badge.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>';
     summaryEl.prepend(badge);
   }
+  if (session.isBackup) {
+    item.classList.add('is-backup');
+    const badge = document.createElement('span');
+    badge.className = 'backup-badge';
+    badge.title = 'Backup copy — original session may have been purged';
+    badge.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+    summaryEl.prepend(badge);
+  }
   info.appendChild(summaryEl);
   info.appendChild(idEl);
   info.appendChild(metaEl);
@@ -1431,7 +1452,28 @@ function buildSessionItem(session) {
   jsonlBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>';
 
   actions.appendChild(stopBtn);
-  if (session.type !== 'terminal') {
+  if (session.isBackup) {
+    const restoreBtn = document.createElement('button');
+    restoreBtn.className = 'session-restore-btn';
+    restoreBtn.title = 'Restore to ~/.claude/projects so Claude Code can resume it';
+    restoreBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.95"/></svg>';
+    restoreBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      restoreBtn.disabled = true;
+      restoreBtn.title = 'Restoring…';
+      const result = await window.api.restoreBackupSession(session.folder);
+      if (result.ok) {
+        restoreBtn.title = 'Restored — rescan in progress';
+        loadProjects({ resort: true });
+      } else {
+        restoreBtn.disabled = false;
+        restoreBtn.title = 'Restore failed: ' + result.error;
+        console.error('Restore failed:', result.error);
+      }
+    });
+    actions.appendChild(restoreBtn);
+    actions.appendChild(jsonlBtn);
+  } else if (session.type !== 'terminal') {
     actions.appendChild(forkBtn);
     actions.appendChild(jsonlBtn);
     actions.appendChild(archiveBtn);

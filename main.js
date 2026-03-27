@@ -746,8 +746,9 @@ function populateCacheViaWorker() {
   populatingCache = true;
   sendStatus('Scanning projects\u2026', 'active');
 
+  const backupDir = getSetting('global')?.backupDir || path.join(os.homedir(), 'claude-session-backups');
   const worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
-    workerData: { projectsDir: PROJECTS_DIR },
+    workerData: { projectsDir: PROJECTS_DIR, backupDir },
   });
 
   worker.on('message', (msg) => {
@@ -1407,6 +1408,25 @@ ipcMain.handle('archive-session', (_event, sessionId, archived) => {
   const val = archived ? 1 : 0;
   setArchived(sessionId, val);
   return { archived: val };
+});
+
+// --- IPC: restore-backup-session ---
+ipcMain.handle('restore-backup-session', async (_event, folder) => {
+  try {
+    const backupDir = getSetting('global')?.backupDir || path.join(os.homedir(), 'claude-session-backups');
+    const src = path.join(backupDir, folder, 'latest.jsonl');
+    const destDir = path.join(PROJECTS_DIR, folder);
+    const dest = path.join(destDir, 'latest.jsonl');
+    if (!fs.existsSync(src)) return { ok: false, error: 'Backup file not found' };
+    fs.mkdirSync(destDir, { recursive: true });
+    fs.copyFileSync(src, dest);
+    // Trigger a re-scan so Switchboard picks up the restored session as live
+    populatingCache = false;
+    populateCacheViaWorker();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 });
 
 // --- IPC: open-terminal ---

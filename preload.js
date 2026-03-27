@@ -101,4 +101,5 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.send('mcp-diff-response', sessionId, diffId, action, editedContent);
   },
   readFileForPanel: (filePath) => ipcRenderer.invoke('read-file-for-panel', filePath),
+  restoreBackupSession: (folder) => ipcRenderer.invoke('restore-backup-session', folder),
 });
