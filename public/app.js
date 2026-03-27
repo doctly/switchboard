@@ -2284,11 +2284,25 @@ function showGridView() {
   });
 }
 
+function updateGridColumns() {
+  if (!gridViewActive) return;
+  const width = terminalsEl.clientWidth;
+  const minCardWidth = 560;
+  const gap = 14;
+  const fitCols = Math.max(1, Math.floor((width + gap) / (minCardWidth + gap)));
+  const cardCount = terminalsEl.querySelectorAll('.grid-card').length;
+  const cols = Math.max(1, Math.min(fitCols, cardCount || 1));
+  terminalsEl.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+}
+new ResizeObserver(updateGridColumns).observe(terminalsEl);
+new MutationObserver(updateGridColumns).observe(terminalsEl, { childList: true });
+
 function hideGridView() {
   gridViewActive = false;
   localStorage.setItem('gridViewActive', '0');
   unwrapGridCards();
   terminalsEl.classList.remove('grid-layout');
+  terminalsEl.style.gridTemplateColumns = '';
   gridViewer.style.display = 'none';
   const btn = document.getElementById('grid-toggle-btn');
   if (btn) btn.classList.remove('active');

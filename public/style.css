@@ -1159,17 +1159,17 @@ body { display: flex; flex-direction: column; }
 /* #terminals switches to CSS grid in grid mode */
 #terminals.grid-layout {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(560px, 1fr));
+  /* grid-template-columns set dynamically by ResizeObserver in app.js */
   gap: 14px;
-  padding: 14px;
-  overflow-y: auto;
+  padding: 14px 20px 14px 14px;
+  overflow-y: scroll;
   align-content: start;
 }
 
-#terminals.grid-layout::-webkit-scrollbar { width: 6px; }
-#terminals.grid-layout::-webkit-scrollbar-track { background: transparent; }
-#terminals.grid-layout::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 3px; }
-#terminals.grid-layout::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.1); }
+#terminals.grid-layout::-webkit-scrollbar { width: 8px; }
+#terminals.grid-layout::-webkit-scrollbar-track { background: rgba(255,255,255,0.03); }
+#terminals.grid-layout::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 4px; }
+#terminals.grid-layout::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); }
 
 /* Grid project group heading */
 .grid-project-heading {
