@@ -1738,7 +1738,11 @@ window.addEventListener('resize', () => {
 function cleanDisplayName(name) {
   if (!name) return name;
   const prefix = 'Implement the following plan:';
-  if (name.startsWith(prefix)) return name.slice(prefix.length).trim();
+  if (name.startsWith(prefix)) name = name.slice(prefix.length).trim();
+  // Strip XML/HTML-like tags (e.g. <command>, </message>, <system-reminder>)
+  name = name.replace(/<\/?[a-zA-Z][a-zA-Z0-9_-]*(?:\s[^>]*)?\/?>/g, ' ');
+  // Collapse multiple spaces and trim
+  name = name.replace(/\s+/g, ' ').trim();
   return name;
 }
 
