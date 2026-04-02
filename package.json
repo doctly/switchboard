@@ -1,6 +1,6 @@
 {
   "name": "switchboard",
-  "version": "0.0.22",
+  "version": "0.0.23",
   "private": true,
   "description": "A desktop app for browsing, searching, and managing CLI coding sessions",
   "author": "Doctly <support@doctly.ai>",
