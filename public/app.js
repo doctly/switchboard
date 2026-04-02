@@ -221,8 +221,8 @@ function setupTerminalKeyBindings(terminal, container, getSessionId, { onFind } 
       return false;
     }
 
-    // Cmd/Ctrl+G → toggle grid view
-    if (e.key === 'g' && (isMac ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey) {
+    // Cmd/Ctrl+Shift+G → toggle grid view
+    if (e.key === 'g' && (isMac ? e.metaKey : e.ctrlKey) && e.shiftKey && !e.altKey) {
       if (e.type === 'keydown') { e._handled = true; toggleGridView(); }
       return false;
     }
@@ -3929,9 +3929,9 @@ function showAddProjectDialog() {
   // e._handled to prevent the document listener from double-firing the same action.
   document.addEventListener('keydown', (e) => {
     if (e._handled) return;
-    // Cmd/Ctrl+G → toggle grid view
+    // Cmd/Ctrl+Shift+G → toggle grid view
     const mod = isMac ? e.metaKey : e.ctrlKey;
-    if (e.key === 'g' && mod && !e.shiftKey && !e.altKey) {
+    if (e.key === 'g' && mod && e.shiftKey && !e.altKey) {
       e.preventDefault();
       toggleGridView();
       return;

@@ -241,6 +241,9 @@ class ViewerPanel {
       this.editorView.destroy();
       this.editorView = null;
     }
+    // Clear stale search/goto-line bar references so they get recreated with the new editor
+    delete this.editorEl._cmSearchBar;
+    delete this.editorEl._cmGotoLine;
     this.editorEl.innerHTML = '';
     this.previewEl.innerHTML = '';
     this.previewEl.style.display = 'none';

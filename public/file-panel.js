@@ -302,6 +302,11 @@ function destroyCurrentTab(state) {
   if (tab.type === 'diff' && tab.editorView) {
     tab.editorView.destroy();
     tab.editorView = null;
+    // Clear stale search/goto-line bar references
+    if (diffBodyEl) {
+      delete diffBodyEl._cmSearchBar;
+      delete diffBodyEl._cmGotoLine;
+    }
   }
   if (tab.type === 'file') {
     fpViewerPanel.destroy();
