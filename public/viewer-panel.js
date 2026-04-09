@@ -280,7 +280,7 @@ class ViewerPanel {
     }
 
     if (this.previewMode) {
-      this.previewEl.innerHTML = window.marked.parse(newContent);
+      this.previewEl.innerHTML = DOMPurify.sanitize(window.marked.parse(newContent));
     }
   }
 
