@@ -268,6 +268,21 @@ function setupTerminalKeyBindings(terminal, container, getSessionId, { onFind } 
       }
     }
 
+    // Space → send directly on keydown (including key-repeat) to ensure reliable
+    // delivery to the PTY. xterm.js's evaluateKeyboardEvent does not handle plain
+    // Space in keydown (keyCode 32 < 48 threshold) and instead relies on the
+    // deprecated 'keypress' event, which Electron/Chromium may not fire reliably
+    // for key-repeat events. This fixes Claude Code's "Hold Space to record"
+    // push-to-talk voice feature, which depends on rapid key-repeat characters
+    // arriving at stdin to detect a held key.
+    if (e.key === ' ' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+      if (e.type === 'keydown') {
+        e.preventDefault();
+        window.api.sendInput(getSessionId(), ' ');
+      }
+      return false;
+    }
+
     return true;
   });
 
