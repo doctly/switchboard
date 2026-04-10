@@ -252,11 +252,32 @@ const STATS_CACHE_PATH = path.join(CLAUDE_DIR, 'stats-cache.json');
 const MAX_BUFFER_SIZE = 256 * 1024;
 
 // --- Path validation for IPC file operations ---
-function isAllowedFilePath(filePath) {
+// Sensitive paths that should never be read/written via the file panel IPC.
+// The file panel intentionally opens arbitrary files (OSC8 hyperlinks from
+// terminal output), so we block known-sensitive locations rather than
+// allowlisting. The primary XSS→file-access chain is mitigated by CSP +
+// DOMPurify; this is defense-in-depth.
+const SENSITIVE_PATH_PATTERNS = [
+  /[/\\]\.ssh[/\\]/i,
+  /[/\\]\.gnupg[/\\]/i,
+  /[/\\]\.aws[/\\]credentials/i,
+  /[/\\]\.env$/i,
+  /[/\\]\.env\.local$/i,
+  /[/\\]\.netrc$/i,
+  /[/\\]\.docker[/\\]config\.json$/i,
+  /[/\\]\.kube[/\\]config$/i,
+];
+
+function isSensitivePath(filePath) {
   const resolved = path.resolve(filePath);
-  // Allow paths under ~/.claude/
+  return SENSITIVE_PATH_PATTERNS.some(pattern => pattern.test(resolved));
+}
+
+// Stricter allowlist for memory/plan files that should only be under ~/.claude/
+// or active project directories.
+function isAllowedMemoryPath(filePath) {
+  const resolved = path.resolve(filePath);
   if (resolved.startsWith(CLAUDE_DIR + path.sep) || resolved === CLAUDE_DIR) return true;
-  // Allow paths under active session project directories
   for (const [, session] of activeSessions) {
     if (session.projectPath && resolved.startsWith(session.projectPath + path.sep)) return true;
   }
@@ -879,7 +900,7 @@ ipcMain.on('mcp-diff-response', (_event, sessionId, diffId, action, editedConten
 ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
   try {
     const resolved = path.resolve(filePath);
-    if (!isAllowedFilePath(resolved)) return { ok: false, error: 'path not allowed' };
+    if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
     const content = fs.readFileSync(resolved, 'utf8');
     return { ok: true, content };
   } catch (err) {
@@ -890,7 +911,7 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
 ipcMain.handle('save-file-for-panel', async (_event, filePath, content) => {
   try {
     const resolved = path.resolve(filePath);
-    if (!isAllowedFilePath(resolved)) return { ok: false, error: 'path not allowed' };
+    if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
     if (!fs.existsSync(resolved)) return { ok: false, error: 'File does not exist' };
     fs.writeFileSync(resolved, content, 'utf8');
     return { ok: true };
@@ -904,7 +925,7 @@ const fileWatchers = new Map(); // filePath → FSWatcher
 
 ipcMain.handle('watch-file', (_event, filePath) => {
   const resolved = path.resolve(filePath);
-  if (!isAllowedFilePath(resolved)) return { ok: false, error: 'path not allowed' };
+  if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
   if (fileWatchers.has(resolved)) return { ok: true };
   try {
     let debounce = null;
@@ -1291,7 +1312,7 @@ ipcMain.handle('read-memory', (_event, filePath) => {
   try {
     const resolved = path.resolve(filePath);
     if (!resolved.endsWith('.md')) return '';
-    if (!isAllowedFilePath(resolved)) return '';
+    if (!isAllowedMemoryPath(resolved)) return '';
     return fs.readFileSync(resolved, 'utf8');
   } catch (err) {
     console.error('Error reading memory file:', err);
@@ -1304,7 +1325,7 @@ ipcMain.handle('save-memory', (_event, filePath, content) => {
   try {
     const resolved = path.resolve(filePath);
     if (!resolved.endsWith('.md')) return { ok: false, error: 'not a .md file' };
-    if (!isAllowedFilePath(resolved)) return { ok: false, error: 'path not allowed' };
+    if (!isAllowedMemoryPath(resolved)) return { ok: false, error: 'path not allowed' };
     if (!fs.existsSync(resolved)) return { ok: false, error: 'file does not exist' };
     fs.writeFileSync(resolved, content, 'utf8');
     return { ok: true };
