@@ -18,7 +18,7 @@ const todayToggle = document.getElementById('today-toggle');
 const planViewer = document.getElementById('plan-viewer');
 const planPanel = new ViewerPanel(planViewer, {
   copyPath: true, copyContent: true,
-  language: 'markdown', storageKey: 'planPreviewMode',
+  language: 'markdown', storageKey: 'markdownPreviewMode',
   onSave: (filePath, content) => window.api.savePlan(filePath, content),
 });
 
@@ -33,7 +33,7 @@ const statsViewerBody = document.getElementById('stats-viewer-body');
 const memoryViewer = document.getElementById('memory-viewer');
 const memoryPanel = new ViewerPanel(memoryViewer, {
   copyPath: true, copyContent: true,
-  language: 'markdown', storageKey: 'memoryPreviewMode',
+  language: 'markdown', storageKey: 'markdownPreviewMode',
   onSave: (filePath, content) => window.api.saveMemory(filePath, content),
 });
 const terminalArea = document.getElementById('terminal-area');

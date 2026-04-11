@@ -141,9 +141,15 @@ class ViewerPanel {
       this.toolbar.previewBtn.style.display = isMd ? '' : 'none';
     }
 
-    // Reset to edit mode before updating content
+    // Save preview preference before resetting
+    const wantPreview = isMd && this.opts.storageKey && localStorage.getItem(this.opts.storageKey) === 'true';
+
+    // Reset to edit mode before updating content (without touching localStorage)
     if (this.previewMode) {
-      this._setPreview(false);
+      this.previewEl.style.display = 'none';
+      this.editorEl.style.display = '';
+      if (this.toolbar.previewBtn) this.toolbar.previewBtn.classList.remove('active');
+      this.previewMode = false;
     }
 
     // Create or update editor
@@ -167,7 +173,7 @@ class ViewerPanel {
     }
 
     // Re-apply preview preference
-    if (this.opts.storageKey && localStorage.getItem(this.opts.storageKey) === 'true') {
+    if (wantPreview) {
       this._setPreview(true);
     }
 
