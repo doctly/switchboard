@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, screen, session, shell } = require('electron');
 const { Worker } = require('worker_threads');
 const path = require('path');
 const fs = require('fs');
@@ -74,6 +74,48 @@ const PLANS_DIR = path.join(os.homedir(), '.claude', 'plans');
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const STATS_CACHE_PATH = path.join(CLAUDE_DIR, 'stats-cache.json');
 const MAX_BUFFER_SIZE = 256 * 1024;
+
+// --- Path validation for IPC file operations ---
+// Sensitive paths that should never be read/written via the file panel IPC.
+// The file panel intentionally opens arbitrary files (OSC8 hyperlinks from
+// terminal output), so we block known-sensitive locations rather than
+// allowlisting. The primary XSS→file-access chain is mitigated by CSP +
+// DOMPurify; this is defense-in-depth.
+const SENSITIVE_PATH_PATTERNS = [
+  /[/\\]\.ssh[/\\]/i,
+  /[/\\]\.gnupg[/\\]/i,
+  /[/\\]\.aws[/\\]credentials/i,
+  /[/\\]\.env$/i,
+  /[/\\]\.env\.local$/i,
+  /[/\\]\.netrc$/i,
+  /[/\\]\.docker[/\\]config\.json$/i,
+  /[/\\]\.kube[/\\]config$/i,
+];
+
+function isSensitivePath(filePath) {
+  const resolved = path.resolve(filePath);
+  return SENSITIVE_PATH_PATTERNS.some(pattern => pattern.test(resolved));
+}
+
+// Stricter allowlist for memory/plan files that should only be under ~/.claude/
+// or active project directories.
+function isAllowedMemoryPath(filePath) {
+  const resolved = path.resolve(filePath);
+  if (resolved.startsWith(CLAUDE_DIR + path.sep) || resolved === CLAUDE_DIR) return true;
+  for (const [, session] of activeSessions) {
+    if (session.projectPath && resolved.startsWith(session.projectPath + path.sep)) return true;
+  }
+  return false;
+}
+
+// --- Input sanitization for shell command arguments ---
+const SHELL_META_CHARS = /[;&|`$(){}!#\n\r]/;
+function validateShellArg(value, fieldName) {
+  if (!value) return;
+  if (SHELL_META_CHARS.test(value)) {
+    throw new Error(`${fieldName} contains invalid characters`);
+  }
+}
 
 // Active PTY sessions
 const activeSessions = new Map();
@@ -354,7 +396,9 @@ ipcMain.on('mcp-diff-response', (_event, sessionId, diffId, action, editedConten
 
 ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
   try {
-    const content = fs.readFileSync(filePath, 'utf8');
+    const resolved = path.resolve(filePath);
+    if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
+    const content = fs.readFileSync(resolved, 'utf8');
     return { ok: true, content };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -364,6 +408,7 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
 ipcMain.handle('save-file-for-panel', async (_event, filePath, content) => {
   try {
     const resolved = path.resolve(filePath);
+    if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
     if (!fs.existsSync(resolved)) return { ok: false, error: 'File does not exist' };
     fs.writeFileSync(resolved, content, 'utf8');
     return { ok: true };
@@ -377,6 +422,7 @@ const fileWatchers = new Map(); // filePath → FSWatcher
 
 ipcMain.handle('watch-file', (_event, filePath) => {
   const resolved = path.resolve(filePath);
+  if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
   if (fileWatchers.has(resolved)) return { ok: true };
   try {
     let debounce = null;
@@ -762,9 +808,8 @@ ipcMain.handle('get-memories', () => {
 ipcMain.handle('read-memory', (_event, filePath) => {
   try {
     const resolved = path.resolve(filePath);
-    // Allow paths under ~/.claude/ or any .md file that exists
     if (!resolved.endsWith('.md')) return '';
-    if (!resolved.startsWith(CLAUDE_DIR) && !fs.existsSync(resolved)) return '';
+    if (!isAllowedMemoryPath(resolved)) return '';
     return fs.readFileSync(resolved, 'utf8');
   } catch (err) {
     console.error('Error reading memory file:', err);
@@ -777,6 +822,7 @@ ipcMain.handle('save-memory', (_event, filePath, content) => {
   try {
     const resolved = path.resolve(filePath);
     if (!resolved.endsWith('.md')) return { ok: false, error: 'not a .md file' };
+    if (!isAllowedMemoryPath(resolved)) return { ok: false, error: 'path not allowed' };
     if (!fs.existsSync(resolved)) return { ok: false, error: 'file does not exist' };
     fs.writeFileSync(resolved, content, 'utf8');
     return { ok: true };
@@ -1049,11 +1095,13 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         if (sessionOptions.dangerouslySkipPermissions) {
           claudeCmd += ' --dangerously-skip-permissions';
         } else if (sessionOptions.permissionMode) {
+          validateShellArg(sessionOptions.permissionMode, 'permissionMode');
           claudeCmd += ` --permission-mode "${sessionOptions.permissionMode}"`;
         }
         if (sessionOptions.worktree) {
           claudeCmd += ' --worktree';
           if (sessionOptions.worktreeName) {
+            validateShellArg(sessionOptions.worktreeName, 'worktreeName');
             claudeCmd += ` "${sessionOptions.worktreeName}"`;
           }
         }
@@ -1063,6 +1111,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         if (sessionOptions.addDirs) {
           const dirs = sessionOptions.addDirs.split(',').map(d => d.trim()).filter(Boolean);
           for (const dir of dirs) {
+            validateShellArg(dir, 'addDirs');
             claudeCmd += ` --add-dir "${dir}"`;
           }
         }
@@ -1378,6 +1427,16 @@ ipcMain.handle('updater-install', () => {
 
 // --- App lifecycle ---
 app.whenReady().then(() => {
+  // Set Content Security Policy
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': ["default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; font-src 'self'"],
+      },
+    });
+  });
+
   buildMenu();
   createWindow();
   startProjectsWatcher();
