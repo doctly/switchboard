@@ -226,13 +226,22 @@ function buildMemoryItem(file) {
     playBtn.className = 'schedule-play-btn';
     playBtn.title = 'Run now';
     playBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 384 512" fill="currentColor" stroke="currentColor" stroke-width="0"><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80L0 432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"></path></svg>';
+    const playIcon = '<svg width="12" height="12" viewBox="0 0 384 512" fill="currentColor" stroke="currentColor" stroke-width="0"><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80L0 432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"></path></svg>';
+    const spinnerIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>';
+    const checkIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
     playBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       playBtn.classList.add('running');
+      playBtn.innerHTML = spinnerIcon;
       playBtn.title = 'Running...';
       const result = await window.api.runScheduleNow(file.filePath);
+      playBtn.classList.remove('running');
+      playBtn.classList.add('done');
+      playBtn.innerHTML = checkIcon;
+      playBtn.title = 'Launched!';
       setTimeout(() => {
-        playBtn.classList.remove('running');
+        playBtn.classList.remove('done');
+        playBtn.innerHTML = playIcon;
         playBtn.title = 'Run now';
       }, 2000);
       if (result && !result.ok) {

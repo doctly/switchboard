@@ -121,7 +121,7 @@ function ensureScheduleCreatorCommand() {
   }
 }
 
-function init(log) {
+function init(log, runCommand) {
   const { parseFrontmatter, createScheduleSession, buildScheduleCommand } = require('./schedule-runner');
 
   ipcMain.handle('get-schedule-creator-command', () => {
@@ -187,7 +187,6 @@ function init(log) {
       const { meta, body } = parseFrontmatter(content);
       if (!body) return { ok: false, error: 'No prompt in schedule file' };
 
-      // Derive project path from the file path: .../projectPath/.claude/commands/schedule-x.md
       const commandsDir = path.dirname(filePath);
       const dotClaudeDir = path.dirname(commandsDir);
       const projectPath = path.dirname(dotClaudeDir);
@@ -195,9 +194,7 @@ function init(log) {
       const folder = projectPath.replace(/[/_]/g, '-').replace(/^-/, '-');
       const schedule = {
         file: path.basename(filePath),
-        filePath,
-        projectPath,
-        folder,
+        filePath, projectPath, folder,
         name: meta.name || path.basename(filePath),
         cron: meta.cron || '* * * * *',
         slug: meta.slug || path.basename(filePath, '.md').replace(/^schedule-/, ''),
@@ -207,22 +204,8 @@ function init(log) {
 
       const { sessionId } = createScheduleSession(schedule);
       const cmd = buildScheduleCommand(sessionId, schedule);
-      const { spawn } = require('child_process');
 
-      const child = spawn('bash', ['-lc', cmd], {
-        cwd: projectPath,
-        stdio: 'ignore',
-        detached: true,
-        env: { ...process.env, FORCE_COLOR: '0' },
-      });
-      child.unref();
-
-      child.on('exit', (code) => {
-        log.info(`[schedule] Manual run ${schedule.name} finished (exit ${code})`);
-      });
-      child.on('error', (err) => {
-        log.error(`[schedule] Manual run ${schedule.name} error:`, err.message);
-      });
+      runCommand(cmd, projectPath, `Manual run ${schedule.name}`, () => {});
 
       log.info(`[schedule] Manual run triggered: ${schedule.name} (session ${sessionId})`);
       return { ok: true, sessionId };

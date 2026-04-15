@@ -808,7 +808,6 @@ ipcMain.handle('delete-setting', (_event, key) => {
 
 // --- Scheduled tasks ---
 const scheduleIpc = require('./schedule-ipc');
-scheduleIpc.init(log);
 
 const SETTING_DEFAULTS = {
   permissionMode: null,
@@ -1383,7 +1382,40 @@ app.whenReady().then(() => {
   createWindow();
   startProjectsWatcher();
   scheduleIpc.ensureScheduleCreatorCommand();
-  startScheduler(log);
+
+  // Shared runCommand for both cron scheduler and manual "run now"
+  const { spawn: cpSpawn } = require('child_process');
+  function runScheduleCommand(cmd, cwd, name, onDone) {
+    const globalSettings = getSetting('global') || {};
+    const profileId = globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile;
+    const profile = resolveShell(profileId);
+    const shell = profile.path;
+    const args = shellArgs(shell, cmd, profile.args || []);
+
+    log.info(`[schedule] Running: ${shell} ${args.join(' ')}`);
+    const child = cpSpawn(shell, args, {
+      cwd,
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: { ...cleanPtyEnv, FORCE_COLOR: '0' },
+    });
+
+    let stderr = '';
+    child.stderr.on('data', (data) => { stderr += data.toString(); });
+
+    child.on('exit', (code) => {
+      if (stderr.trim()) log.error(`[schedule] ${name} stderr:\n${stderr.trim()}`);
+      log.info(`[schedule] ${name} finished (exit ${code})`);
+      if (onDone) onDone();
+    });
+
+    child.on('error', (err) => {
+      log.error(`[schedule] ${name} error:`, err.message);
+      if (onDone) onDone();
+    });
+  }
+
+  scheduleIpc.init(log, runScheduleCommand);
+  startScheduler(log, runScheduleCommand);
 
   // Re-index search if FTS table was recreated (e.g. tokenizer config change)
   if (searchFtsRecreated) populateCacheViaWorker();

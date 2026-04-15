@@ -2556,12 +2556,22 @@ body { display: flex; flex-direction: column; }
   opacity: 1 !important;
   color: #e0a030;
   border-color: rgba(224,160,48,0.3);
-  animation: pulse-schedule 1s infinite;
 }
 
-@keyframes pulse-schedule {
-  0%, 100% { opacity: 0.6; }
-  50% { opacity: 1; }
+.schedule-play-btn.running svg {
+  animation: spin-schedule 1s linear infinite;
+}
+
+.schedule-play-btn.done {
+  opacity: 1 !important;
+  color: #5ec46a;
+  border-color: rgba(100,220,120,0.4);
+  background: rgba(100,220,120,0.1);
+}
+
+@keyframes spin-schedule {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .memory-file-count {
