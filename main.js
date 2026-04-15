@@ -27,6 +27,7 @@ const cleanPtyEnv = Object.fromEntries(
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs } = require('./shell-profiles');
+const { startScheduler } = require('./schedule-runner');
 
 
 
@@ -805,6 +806,10 @@ ipcMain.handle('delete-setting', (_event, key) => {
   return { ok: true };
 });
 
+// --- Scheduled tasks ---
+const scheduleIpc = require('./schedule-ipc');
+scheduleIpc.init(log);
+
 const SETTING_DEFAULTS = {
   permissionMode: null,
   dangerouslySkipPermissions: false,
@@ -1062,6 +1067,13 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
             claudeCmd += ` --add-dir "${dir}"`;
           }
         }
+      }
+
+      if (sessionOptions?.appendSystemPrompt) {
+        // Write to a temp file and use shell substitution to avoid quoting issues
+        const tmpPrompt = path.join(os.tmpdir(), `switchboard-prompt-${sessionId}.md`);
+        fs.writeFileSync(tmpPrompt, sessionOptions.appendSystemPrompt);
+        claudeCmd += ` --append-system-prompt "$(cat '${tmpPrompt}')"`;
       }
 
       if (sessionOptions?.preLaunchCmd) {
@@ -1370,6 +1382,8 @@ app.whenReady().then(() => {
   buildMenu();
   createWindow();
   startProjectsWatcher();
+  scheduleIpc.ensureScheduleCreatorCommand();
+  startScheduler(log);
 
   // Re-index search if FTS table was recreated (e.g. tokenizer config change)
   if (searchFtsRecreated) populateCacheViaWorker();

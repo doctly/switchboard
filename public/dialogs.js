@@ -29,6 +29,53 @@ async function forkSession(session, project) {
   launchNewSession(project, options);
 }
 
+async function launchScheduleCreator(project) {
+  const options = await resolveDefaultSessionOptions(project);
+  // Pre-create a JSONL session with the schedule creation prompt, then resume into it
+  const result = await window.api.createScheduleSession(project.projectPath);
+  if (!result || !result.sessionId) return;
+
+  const session = {
+    sessionId: result.sessionId,
+    summary: 'Create scheduled task',
+    firstPrompt: '',
+    projectPath: project.projectPath,
+    name: null,
+    starred: 0,
+    archived: 0,
+    messageCount: 1,
+    modified: new Date().toISOString(),
+    created: new Date().toISOString(),
+  };
+
+  // Inject into sidebar
+  const folder = project.projectPath.replace(/[/_]/g, '-').replace(/^-/, '-');
+  pendingSessions.set(result.sessionId, { session, projectPath: project.projectPath, folder });
+  sessionMap.set(result.sessionId, session);
+  for (const projList of [cachedProjects, cachedAllProjects]) {
+    let proj = projList.find(p => p.projectPath === project.projectPath);
+    if (!proj) {
+      proj = { folder, projectPath: project.projectPath, sessions: [] };
+      projList.unshift(proj);
+    }
+    proj.sessions.unshift(session);
+  }
+  refreshSidebar();
+
+  const entry = createTerminalEntry(session);
+  // Resume the pre-seeded session
+  options.appendSystemPrompt = result.systemPrompt;
+  const openResult = await window.api.openTerminal(result.sessionId, project.projectPath, false, options);
+  if (!openResult.ok) {
+    entry.terminal.write(`\r\nError: ${openResult.error}\r\n`);
+    entry.closed = true;
+    return;
+  }
+  if (typeof setSessionMcpActive === 'function') setSessionMcpActive(result.sessionId, !!openResult.mcpActive);
+  showSession(result.sessionId);
+  pollActiveSessions();
+}
+
 function showNewSessionPopover(project, anchorEl) {
   // Remove any existing popover
   document.querySelectorAll('.new-session-popover').forEach(el => el.remove());

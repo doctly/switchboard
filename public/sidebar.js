@@ -259,6 +259,12 @@ function renderProjects(projects, resort) {
     const shortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
     header.innerHTML = `<span class="arrow">&#9660;</span> <span class="project-name">${shortName}</span>`;
 
+    const scheduleBtn = document.createElement('button');
+    scheduleBtn.className = 'project-schedule-btn';
+    scheduleBtn.title = 'Create scheduled task';
+    scheduleBtn.innerHTML = ICONS.schedule(16);
+    header.appendChild(scheduleBtn);
+
     const settingsBtn = document.createElement('button');
     settingsBtn.className = 'project-settings-btn';
     settingsBtn.title = 'Project settings';
@@ -386,6 +392,10 @@ function rebindSidebarEvents(projects) {
     if (newBtn) {
       newBtn.onclick = (e) => { e.stopPropagation(); showNewSessionPopover(project, newBtn); };
     }
+    const scheduleBtn = header.querySelector('.project-schedule-btn');
+    if (scheduleBtn) {
+      scheduleBtn.onclick = (e) => { e.stopPropagation(); launchScheduleCreator(project); };
+    }
     const settingsBtn = header.querySelector('.project-settings-btn');
     if (settingsBtn) {
       settingsBtn.onclick = (e) => { e.stopPropagation(); openSettingsViewer('project', project.projectPath); };
@@ -410,7 +420,7 @@ function rebindSidebarEvents(projects) {
       };
     }
     header.onclick = (e) => {
-      if (e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn')) return;
+      if (e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn') || e.target.closest('.project-schedule-btn')) return;
       header.classList.toggle('collapsed');
     };
   }
