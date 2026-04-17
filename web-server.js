@@ -398,7 +398,7 @@ function handleReadMemory(filePath) {
   try {
     const resolved = path.resolve(filePath);
     if (!resolved.endsWith('.md')) return '';
-    if (!resolved.startsWith(CLAUDE_DIR) && !fs.existsSync(resolved)) return '';
+    if (!resolved.startsWith(os.homedir() + path.sep)) return '';
     return fs.readFileSync(resolved, 'utf8');
   } catch { return ''; }
 }
@@ -524,13 +524,17 @@ function handleGetEffectiveSettings(projectPath) {
 }
 
 function handleReadFileForPanel(filePath) {
-  try { return { ok: true, content: fs.readFileSync(filePath, 'utf8') }; }
-  catch (err) { return { ok: false, error: err.message }; }
+  try {
+    const resolved = path.resolve(filePath);
+    if (!resolved.startsWith(os.homedir() + path.sep)) return { ok: false, error: 'Access denied' };
+    return { ok: true, content: fs.readFileSync(resolved, 'utf8') };
+  } catch (err) { return { ok: false, error: err.message }; }
 }
 
 function handleSaveFileForPanel(filePath, content) {
   try {
     const resolved = path.resolve(filePath);
+    if (!resolved.startsWith(os.homedir() + path.sep)) return { ok: false, error: 'Access denied' };
     if (!fs.existsSync(resolved)) return { ok: false, error: 'File does not exist' };
     fs.writeFileSync(resolved, content, 'utf8');
     return { ok: true };
@@ -541,6 +545,7 @@ const fileWatchers = new Map();
 
 function handleWatchFile(filePath) {
   const resolved = path.resolve(filePath);
+  if (!resolved.startsWith(os.homedir() + path.sep)) return { ok: false, error: 'Access denied' };
   if (fileWatchers.has(resolved)) return { ok: true };
   try {
     let debounce = null;
@@ -745,10 +750,12 @@ async function handleRequest(req, res) {
     return serveStatic(res, path.join(PUBLIC_DIR, 'index.html'));
   }
   if (pathname.startsWith('/node_modules/')) {
-    return serveStatic(res, path.join(__dirname, pathname));
+    const nmFile = path.resolve(path.join(__dirname, pathname));
+    if (!nmFile.startsWith(NODE_MODS_DIR + path.sep)) { res.writeHead(403); res.end('Forbidden'); return; }
+    return serveStatic(res, nmFile);
   }
-  const localFile = path.join(PUBLIC_DIR, pathname.replace(/^\//, ''));
-  if (!pathname.startsWith('/api/') && fs.existsSync(localFile) && fs.statSync(localFile).isFile()) {
+  const localFile = path.resolve(path.join(PUBLIC_DIR, pathname.replace(/^\//, '')));
+  if (!pathname.startsWith('/api/') && localFile.startsWith(PUBLIC_DIR + path.sep) && fs.existsSync(localFile) && fs.statSync(localFile).isFile()) {
     return serveStatic(res, localFile);
   }
 

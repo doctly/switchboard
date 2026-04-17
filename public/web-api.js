@@ -154,9 +154,10 @@
     getPathForFile:        () => '',
 
     // Platform
-    platform: navigator.platform.toLowerCase().includes('win') ? 'win32'
-             : navigator.platform.toLowerCase().includes('mac') ? 'darwin'
-             : 'linux',
+    platform: (() => {
+      const p = (navigator.userAgentData?.platform || navigator.platform || '').toLowerCase();
+      return p.includes('win') ? 'win32' : p.includes('mac') ? 'darwin' : 'linux';
+    })(),
 
     // App version
     getAppVersion:         ()       => invoke('get-app-version'),
