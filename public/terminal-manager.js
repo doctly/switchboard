@@ -205,6 +205,15 @@ function createTerminalEntry(session) {
   terminal.open(container);
   container.style.backgroundColor = TERMINAL_THEME.background;
 
+  // GPU-accelerated rendering via WebGL — drops renderer+compositor CPU ~50-70%.
+  // Must be loaded after terminal.open() (needs attached DOM). Fails silently on
+  // machines without WebGL support; xterm falls back to the default DOM renderer.
+  try {
+    const webglAddon = new WebglAddon.WebglAddon();
+    webglAddon.onContextLoss(() => webglAddon.dispose());
+    terminal.loadAddon(webglAddon);
+  } catch {}
+
   // --- Terminal search bar (Cmd/Ctrl+F) ---
   const searchBar = document.createElement('div');
   searchBar.className = 'terminal-search-bar';
