@@ -175,7 +175,7 @@ function buildProjectsFromCache(showArchived) {
   for (const row of cachedRows) {
     if (hiddenProjects.has(row.projectPath)) continue;
     if (!projectMap.has(row.folder)) {
-      projectMap.set(row.folder, { folder: row.folder, projectPath: row.projectPath, sessions: [] });
+      projectMap.set(row.folder, { folder: row.folder, projectPath: row.projectPath, sessions: [], missing: !fs.existsSync(row.projectPath) });
     }
     const meta = metaMap.get(row.sessionId);
     const s = {
@@ -203,7 +203,7 @@ function buildProjectsFromCache(showArchived) {
       if (!projectMap.has(d.name)) {
         const projectPath = deriveProjectPath(path.join(PROJECTS_DIR, d.name), d.name);
         if (projectPath && !hiddenProjects.has(projectPath)) {
-          projectMap.set(d.name, { folder: d.name, projectPath, sessions: [] });
+          projectMap.set(d.name, { folder: d.name, projectPath, sessions: [], missing: !fs.existsSync(projectPath) });
         }
       }
     }
@@ -236,6 +236,9 @@ function buildProjectsFromCache(showArchived) {
   }
 
   projects.sort((a, b) => {
+    // Missing projects go to the bottom
+    if (a.missing && !b.missing) return 1;
+    if (!a.missing && b.missing) return -1;
     // Empty projects go to the bottom
     if (a.sessions.length === 0 && b.sessions.length > 0) return 1;
     if (b.sessions.length === 0 && a.sessions.length > 0) return -1;

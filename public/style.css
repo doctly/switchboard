@@ -470,6 +470,40 @@ body { display: flex; flex-direction: column; }
   display: none;
 }
 
+/* Missing project path */
+.project-group.missing {
+  opacity: 0.55;
+}
+.project-group.missing:hover {
+  opacity: 0.8;
+}
+.project-missing-icon {
+  color: #e8a838;
+  vertical-align: middle;
+  margin-right: 2px;
+  flex-shrink: 0;
+}
+.project-remap-btn {
+  background: none;
+  border: none;
+  color: #e8a838;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  display: none;
+  align-items: center;
+}
+.project-group.missing .project-remap-btn {
+  display: inline-flex;
+}
+.project-remap-btn:hover {
+  background: rgba(232, 168, 56, 0.15);
+}
+.session-item.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* Worktree nested groups */
 .worktree-group {
   margin-left: 12px;

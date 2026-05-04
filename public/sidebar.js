@@ -278,14 +278,15 @@ function renderProjects(projects, resort) {
 
     // Build DOM
     const group = document.createElement('div');
-    group.className = 'project-group';
+    group.className = 'project-group' + (project.missing ? ' missing' : '');
     group.id = fId;
 
     const header = document.createElement('div');
     header.className = 'project-header';
     header.id = 'ph-' + fId;
     const shortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
-    header.innerHTML = `<span class="arrow">&#9660;</span> <span class="project-name">${shortName}</span>`;
+    const missingIcon = project.missing ? '<svg class="project-missing-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> ' : '';
+    header.innerHTML = `<span class="arrow">&#9660;</span> ${missingIcon}<span class="project-name">${escapeHtml(shortName)}</span>`;
 
     const scheduleBtn = document.createElement('button');
     scheduleBtn.className = 'project-schedule-btn';
@@ -305,6 +306,14 @@ function renderProjects(projects, resort) {
     archiveGroupBtn.innerHTML = ICONS.archive(18);
     header.appendChild(archiveGroupBtn);
 
+    if (project.missing) {
+      const remapBtn = document.createElement('button');
+      remapBtn.className = 'project-remap-btn';
+      remapBtn.title = 'Change project path';
+      remapBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
+      header.appendChild(remapBtn);
+    }
+
     const newBtn = document.createElement('button');
     newBtn.className = 'project-new-btn';
     newBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="6" y1="2" x2="6" y2="10"/><line x1="2" y1="6" x2="10" y2="6"/></svg>';
@@ -313,8 +322,10 @@ function renderProjects(projects, resort) {
 
     const sessionsList = buildSessionsList(fId, visible, older);
 
-    // Auto-collapse if most recent session is older than threshold, or project matched with no sessions
-    if (project._projectMatchedOnly) {
+    // Auto-collapse if project path is missing, most recent session is older than threshold, or project matched with no sessions
+    if (project.missing) {
+      header.classList.add('collapsed');
+    } else if (project._projectMatchedOnly) {
       header.classList.add('collapsed');
     } else if (searchMatchIds === null && !showStarredOnly && !showRunningOnly) {
       const mostRecent = filtered[0]?.modified;
@@ -454,6 +465,22 @@ function rebindSidebarEvents(projects) {
     if (settingsBtn) {
       settingsBtn.onclick = (e) => { e.stopPropagation(); openSettingsViewer('project', project.projectPath); };
     }
+    const remapBtn = header.querySelector('.project-remap-btn');
+    if (remapBtn) {
+      remapBtn.onclick = async (e) => {
+        e.stopPropagation();
+        const newPath = await window.api.browseFolder();
+        if (!newPath) return;
+        const shortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
+        if (!confirm(`Remap ${shortName} to:\n${newPath}?`)) return;
+        const result = await window.api.remapProject(project.projectPath, newPath);
+        if (result.error) {
+          alert('Failed to remap: ' + result.error);
+        } else {
+          loadProjects();
+        }
+      };
+    }
     const archiveGroupBtn = header.querySelector('.project-archive-btn');
     if (archiveGroupBtn) {
       archiveGroupBtn.onclick = async (e) => {
@@ -474,7 +501,7 @@ function rebindSidebarEvents(projects) {
       };
     }
     header.onclick = (e) => {
-      if (e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn') || e.target.closest('.project-schedule-btn')) return;
+      if (e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn') || e.target.closest('.project-schedule-btn') || e.target.closest('.project-remap-btn')) return;
       header.classList.toggle('collapsed');
     };
   }
@@ -557,6 +584,14 @@ function rebindSidebarEvents(projects) {
     const sessionId = item.dataset.sessionId;
     const session = sessionMap.get(sessionId);
     if (!session) return;
+
+    // Sessions under missing projects can't be opened — the path no longer exists
+    if (item.closest('.project-group.missing')) {
+      item.classList.add('disabled');
+      item.title = 'Project path no longer exists — use "Change path" to fix';
+      item.onclick = () => {};
+      return;
+    }
 
     item.onclick = () => openSession(session);
 
