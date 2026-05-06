@@ -48,16 +48,30 @@
   };
 
   // ── Hotkey matching ────────────────────────────────────────────────────
+  const ALT_CODES = ['AltLeft', 'AltRight'];
+  const CTRL_CODES = ['ControlLeft', 'ControlRight'];
+  const SHIFT_CODES = ['ShiftLeft', 'ShiftRight'];
+  const META_CODES = ['MetaLeft', 'MetaRight'];
+
   function matches(ev, hk) {
     if (!hk || !hk.key) return false;
     if (ev.code !== hk.key && ev.key !== hk.key) return false;
-    if ((!!hk.ctrl) !== (ev.ctrlKey || ev.metaKey)) return false;
-    if ((!!hk.shift) !== ev.shiftKey) return false;
-    if ((!!hk.alt) !== ev.altKey) return false;
+    // When the hotkey IS a bare modifier (AltRight, etc.), pressing that key
+    // intrinsically sets the corresponding ev.<modifier>Key flag — even
+    // though no *additional* modifier is held. Skip the strict modifier
+    // check for the family the hotkey itself belongs to.
+    const hkIsAlt = ALT_CODES.includes(hk.key);
+    const hkIsCtrl = CTRL_CODES.includes(hk.key);
+    const hkIsShift = SHIFT_CODES.includes(hk.key);
+    const hkIsMeta = META_CODES.includes(hk.key);
+    if (!hkIsCtrl && !hkIsMeta && (!!hk.ctrl) !== (ev.ctrlKey || ev.metaKey)) return false;
+    if (!hkIsShift && (!!hk.shift) !== ev.shiftKey) return false;
+    if (!hkIsAlt && (!!hk.alt) !== ev.altKey) return false;
     return true;
   }
   function isModifierKey(ev) {
-    return ['AltLeft', 'AltRight', 'ControlLeft', 'ControlRight', 'ShiftLeft', 'ShiftRight', 'MetaLeft', 'MetaRight'].includes(ev.code);
+    return ALT_CODES.includes(ev.code) || CTRL_CODES.includes(ev.code) ||
+           SHIFT_CODES.includes(ev.code) || META_CODES.includes(ev.code);
   }
 
   // ── Indicator UI ───────────────────────────────────────────────────────
@@ -381,7 +395,15 @@
 
   // ── Event wiring ───────────────────────────────────────────────────────
   function attach() {
-    refreshSettings();
+    console.info('[voice] module loaded, attaching listeners');
+    refreshSettings().then(() => {
+      console.info('[voice] settings loaded', {
+        enabled: _settings.enabled,
+        ptt: _settings.hotkeyPtt,
+        toggle: _settings.hotkeyToggle,
+        endpoint: `http://${_settings.host}:${_settings.port}`,
+      });
+    });
     window.addEventListener('keydown', (ev) => {
       if (!_settings.enabled) return;
       if (ev.repeat) return;
