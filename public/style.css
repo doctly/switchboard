@@ -3778,6 +3778,50 @@ body { display: flex; flex-direction: column; }
   color: #888;
   font-style: italic;
 }
+.profiles-dialog {
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.profiles-section-header {
+  margin: 18px 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #888;
+  border-top: 1px solid #2d2d44;
+  padding-top: 16px;
+}
+.profile-presets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 16px;
+}
+.profile-preset-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: #1f1f30;
+  border: 1px solid #2d2d44;
+  border-radius: 6px;
+}
+.profile-preset-row .profile-row-sub {
+  white-space: normal;
+  line-height: 1.4;
+}
+.profile-preset-use {
+  flex-shrink: 0;
+}
+body.theme-light .profile-preset-row {
+  background: #f5f5f7;
+  border-color: #d1d1d6;
+}
+body.theme-light .profiles-section-header {
+  color: #6b6b70;
+  border-top-color: #d1d1d6;
+}
 
 .profile-env-section .profile-env-rows {
   display: flex;
