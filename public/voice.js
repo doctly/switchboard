@@ -323,6 +323,17 @@
   }
 
   // ── Transcription ──────────────────────────────────────────────────────
+  // whisper.cpp's `text` response field joins internal VAD segments with
+  // newlines. Those segments are an artefact of how whisper chunks audio
+  // (pause detection / fixed windows), not user-meaningful linebreaks —
+  // and a literal \n landing in the terminal acts as Enter, fragmenting
+  // the prompt into multiple submitted lines. Collapse all whitespace
+  // runs (newlines, tabs, repeated spaces) to single spaces so a single
+  // utterance comes through as one continuous string.
+  function flattenWhitespace(s) {
+    return String(s || '').replace(/\s+/g, ' ').trim();
+  }
+
   async function transcribe(wavBlob) {
     const endpoint = `http://${_settings.host}:${_settings.port}/inference`;
     const fd = new FormData();
@@ -336,7 +347,8 @@
       throw new Error(`HTTP ${res.status} — ${body.slice(0, 160)}`);
     }
     const data = await res.json();
-    return (typeof data.text === 'string') ? data.text : (data.transcription || data.transcript || '');
+    const raw = (typeof data.text === 'string') ? data.text : (data.transcription || data.transcript || '');
+    return flattenWhitespace(raw);
   }
 
   // ── Inject into the active terminal ────────────────────────────────────
