@@ -42,6 +42,14 @@ contextBridge.exposeInMainWorld('api', {
   runScheduleNow: (filePath) => ipcRenderer.invoke('run-schedule-now', filePath),
   getShellProfiles: () => ipcRenderer.invoke('get-shell-profiles'),
 
+  // Claude profiles (env-var bundles applied at session spawn)
+  profiles: {
+    list: () => ipcRenderer.invoke('profiles:list'),
+    save: (profile) => ipcRenderer.invoke('profiles:save', profile),
+    delete: (id) => ipcRenderer.invoke('profiles:delete', id),
+    setDefault: (id) => ipcRenderer.invoke('profiles:set-default', id),
+  },
+
   browseFolder: () => ipcRenderer.invoke('browse-folder'),
   addProject: (projectPath) => ipcRenderer.invoke('add-project', projectPath),
   removeProject: (projectPath) => ipcRenderer.invoke('remove-project', projectPath),

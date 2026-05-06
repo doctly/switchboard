@@ -11,6 +11,7 @@ const { assertPathAllowed, addAllowedRoot } = require('./path-guard');
 const { buildClaudeCmd } = require('./claude-cmd');
 const { isSafeExternalUrl } = require('./url-guard');
 const branding = require('./branding');
+const profilesModule = require('./profiles');
 
 // Sync IPC for the preload to fetch the brand-strings snapshot at load
 // time. ipcMain.on handles sendSync via event.returnValue.
@@ -1120,6 +1121,21 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         ptyEnv.CLAUDE_CODE_SSE_PORT = String(mcpServer.port);
       }
 
+      // Apply Claude profile env (per-session profileId → fall back to global default).
+      // Profile values override base env. Refs like "$DEEPSEEK_API_KEY" resolve against
+      // the host process env; unresolved refs are dropped (not passed through literally).
+      try {
+        const profile = profilesModule.pickProfileForSession(sessionOptions?.profileId);
+        if (profile) {
+          const resolved = profilesModule.resolveEnv(profile.env);
+          Object.assign(ptyEnv, resolved);
+          const dropped = Object.keys(profile.env).filter(k => !(k in resolved));
+          log.info(`[profiles] Applied "${profile.name}" (${profile.id}): ${Object.keys(resolved).length} var(s)${dropped.length ? `, ${dropped.length} unresolved ref(s) dropped: ${dropped.join(',')}` : ''}`);
+        }
+      } catch (err) {
+        log.error(`[profiles] Failed to apply profile: ${err.message}`);
+      }
+
       // Schedule cleanup of the system-prompt temp file once the shell has
       // had time to $(cat ...) it into the command line. Also unlink on
       // session exit and app quit as belt-and-braces.
@@ -1451,6 +1467,7 @@ app.whenReady().then(() => {
   }
 
   scheduleIpc.init(log, runScheduleCommand);
+  profilesModule.init(log);
   startScheduler(log, runScheduleCommand);
 
   // Re-index search if FTS table was recreated (e.g. tokenizer config change)
