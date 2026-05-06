@@ -700,25 +700,49 @@ function buildSessionItem(session) {
     summaryEl.prepend(badge);
   }
 
-  // Profile icon badge: shown when this session is on a non-default
-  // backend. "Default Claude" (no profile, or the global default profile)
-  // counts as one backend; any session on a different profile counts as
-  // another. Even with a single non-default profile configured, the user
-  // is implicitly running two backends — default-Claude sessions plus
-  // sessions on that profile — and the badge is what tells them apart.
-  // Sessions on the default backend stay unbadged so the common case
-  // remains clean.
+  // Profile icon badge — two cases:
+  //   1. Session on a non-default backend → badge with that profile's icon.
+  //   2. Mixed mode (sessions span ≥2 distinct backends, computed in
+  //      app.js refreshProfileCaches) → ALSO badge default-bucket sessions
+  //      with the default profile's icon (or an Anthropic fallback if no
+  //      default profile is set). This makes every session's backend
+  //      unambiguous when the user has multiple profiles in flight, which
+  //      is exactly when the visual distinction earns its keep.
+  //   Single-backend setups (everyone on the same profile, or no profiles
+  //   at all) stay clean — no badges anywhere.
   let profileBadgeEl = null;
   try {
     const profileId = (window._sessionProfileMap || {})[session.sessionId];
-    if (profileId && profileId !== window._defaultProfileId) {
-      const profile = (window._profilesById || {})[profileId];
-      if (profile && profile.icon && typeof window.renderProfileIcon === 'function') {
-        profileBadgeEl = document.createElement('span');
-        profileBadgeEl.className = 'session-profile-badge';
-        profileBadgeEl.title = profile.name;
-        profileBadgeEl.appendChild(window.renderProfileIcon(profile.icon, 32));
+    const defId = window._defaultProfileId || null;
+    const profilesById = window._profilesById || {};
+    const renderFn = window.renderProfileIcon;
+
+    let iconKey = null;
+    let title = null;
+
+    if (profileId && profileId !== defId && profilesById[profileId]) {
+      // Case 1: explicit non-default profile on this session.
+      const p = profilesById[profileId];
+      if (p.icon) { iconKey = p.icon; title = p.name; }
+    } else if (window._showAllBadges) {
+      // Case 2: default-bucket session in mixed mode. Use the default
+      // profile's icon if a default is set, otherwise the Anthropic
+      // monogram as a "stock Claude Code" indicator.
+      const defProfile = defId ? profilesById[defId] : null;
+      if (defProfile && defProfile.icon) {
+        iconKey = defProfile.icon;
+        title = defProfile.name + ' (default)';
+      } else {
+        iconKey = 'anthropic';
+        title = 'Claude (default — no profile)';
       }
+    }
+
+    if (iconKey && typeof renderFn === 'function') {
+      profileBadgeEl = document.createElement('span');
+      profileBadgeEl.className = 'session-profile-badge';
+      profileBadgeEl.title = title || '';
+      profileBadgeEl.appendChild(renderFn(iconKey, 32));
     }
   } catch {}
   info.appendChild(summaryEl);

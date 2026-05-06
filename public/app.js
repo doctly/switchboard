@@ -22,6 +22,29 @@ window.refreshProfileCaches = async function () {
       window._sessionProfileMap = await window.api.sessionProfiles.getAll();
     }
   } catch {}
+  // "Mixed mode" — true when sessions span at least two distinct backends
+  // (default-bucket counted as one). In mixed mode we badge ALL sessions,
+  // including the default-bucket ones, so it's unambiguous which backend
+  // each session is on. Single-backend setups stay clean.
+  try {
+    const map = window._sessionProfileMap || {};
+    const def = window._defaultProfileId || null;
+    const distinctMapped = new Set(Object.values(map).filter(Boolean));
+    let mixed;
+    if (distinctMapped.size === 0) {
+      mixed = false;
+    } else if (distinctMapped.size >= 2) {
+      mixed = true;
+    } else {
+      // Exactly one distinct mapped profile. If it's the default, mapped
+      // and unmapped sessions are all on the same backend (no badging).
+      // If it's NOT default, the unmapped sessions are on default — that's
+      // two backends in flight → mixed mode.
+      const only = [...distinctMapped][0];
+      mixed = only !== def;
+    }
+    window._showAllBadges = mixed;
+  } catch { window._showAllBadges = false; }
 };
 // Kick off initial load (sidebar may render before this resolves; that's
 // fine — badges appear on the next render pass after the cache is populated).
