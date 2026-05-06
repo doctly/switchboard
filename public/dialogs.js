@@ -76,9 +76,13 @@ async function launchScheduleCreator(project) {
   pollActiveSessions();
 }
 
-function showNewSessionPopover(project, anchorEl) {
+async function showNewSessionPopover(project, anchorEl) {
   // Remove any existing popover
   document.querySelectorAll('.new-session-popover').forEach(el => el.remove());
+
+  // Load profiles so we can offer per-profile launch entries.
+  let profilesData = { profiles: [], defaultProfileId: null };
+  try { profilesData = await window.api.profiles.list(); } catch {}
 
   const popover = document.createElement('div');
   popover.className = 'new-session-popover';
@@ -99,6 +103,51 @@ function showNewSessionPopover(project, anchorEl) {
   termBtn.onclick = () => { popover.remove(); launchTerminalSession(project); };
 
   popover.appendChild(claudeBtn);
+
+  // Per-profile launch entries — one button per saved profile.
+  // Default profile shows "(default)" suffix; clicking launches with that profile.
+  // If no profiles exist, this section is empty.
+  if (profilesData.profiles.length > 0) {
+    const sep = document.createElement('div');
+    sep.className = 'popover-separator';
+    sep.textContent = 'Profiles';
+    popover.appendChild(sep);
+    for (const profile of profilesData.profiles) {
+      const isDefault = profile.id === profilesData.defaultProfileId;
+      const profBtn = document.createElement('button');
+      profBtn.className = 'popover-option popover-option-profile';
+      // Static SVG icon assigned via innerHTML; profile.name is appended as text
+      // (createTextNode), which is XSS-safe regardless of name content.
+      profBtn.innerHTML = '<svg class="popover-option-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a4 4 0 014-4h8a4 4 0 014 4v2"/></svg> ';
+      profBtn.appendChild(document.createTextNode(profile.name));
+      if (isDefault) {
+        const tag = document.createElement('span');
+        tag.className = 'popover-default-tag';
+        tag.textContent = 'default';
+        profBtn.appendChild(document.createTextNode(' '));
+        profBtn.appendChild(tag);
+      }
+      profBtn.onclick = async () => {
+        popover.remove();
+        const opts = await resolveDefaultSessionOptions(project);
+        opts.profileId = profile.id;
+        launchNewSession(project, opts);
+      };
+      popover.appendChild(profBtn);
+    }
+  }
+
+  // Manage profiles entry
+  const manageBtn = document.createElement('button');
+  manageBtn.className = 'popover-option popover-option-manage';
+  manageBtn.innerHTML = `<svg class="popover-option-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33h0a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51h0a1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82v0a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg> Manage profiles…`;
+  manageBtn.onclick = () => { popover.remove(); window.showProfilesManager && window.showProfilesManager(); };
+  popover.appendChild(manageBtn);
+
+  const sep2 = document.createElement('div');
+  sep2.className = 'popover-separator';
+  popover.appendChild(sep2);
+
   popover.appendChild(claudeOptsBtn);
   popover.appendChild(termBtn);
 
@@ -171,6 +220,8 @@ async function launchTerminalSession(project) {
 
 async function showNewSessionDialog(project) {
   const effective = await window.api.getEffectiveSettings(project.projectPath);
+  let profilesData = { profiles: [], defaultProfileId: null };
+  try { profilesData = await window.api.profiles.list(); } catch {}
 
   const overlay = document.createElement('div');
   overlay.className = 'new-session-overlay';
@@ -180,6 +231,8 @@ async function showNewSessionDialog(project) {
 
   let selectedMode = effective.permissionMode || null;
   let dangerousSkip = effective.dangerouslySkipPermissions || false;
+  // Default profile selection: '' = "use global default" (whatever is set), 'none' = no profile.
+  let selectedProfileId = '';
 
   const modes = [
     { value: null, label: 'Default', desc: 'Prompt for all actions' },
@@ -202,6 +255,21 @@ async function showNewSessionDialog(project) {
     <div class="settings-field">
       <div class="settings-label">Permission Mode</div>
       <div class="permission-grid" id="nsd-mode-grid">${renderModeGrid()}</div>
+    </div>
+    <div class="settings-field">
+      <div class="settings-field-info">
+        <span class="settings-label">Profile</span>
+        <div class="settings-description">Override env vars (e.g. ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN) at spawn</div>
+      </div>
+      <div class="settings-field-control">
+        <select class="settings-input" id="nsd-profile" style="width:200px">
+          <option value="">${profilesData.defaultProfileId
+            ? 'Default (' + escapeHtml((profilesData.profiles.find(p => p.id === profilesData.defaultProfileId) || {}).name || '') + ')'
+            : 'Default (none)'}</option>
+          <option value="none">No profile (pass-through)</option>
+          ${profilesData.profiles.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('')}
+        </select>
+      </div>
     </div>
     <div class="settings-field">
       <div class="settings-field-info">
@@ -287,6 +355,8 @@ async function showNewSessionDialog(project) {
     if (preLaunch) options.preLaunchCmd = preLaunch;
     options.addDirs = dialog.querySelector('#nsd-add-dirs').value.trim();
     if (effective.mcpEmulation === false) options.mcpEmulation = false;
+    const profileSel = dialog.querySelector('#nsd-profile').value;
+    if (profileSel) options.profileId = profileSel;  // '' means use default; otherwise either 'none' or a profile id
     close();
     launchNewSession(project, options);
   }

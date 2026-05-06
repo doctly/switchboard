@@ -192,6 +192,16 @@
 
         <div class="settings-field">
           <div class="settings-field-info">
+            <span class="settings-label">Light UI Mode</span>
+            <div class="settings-description">Brighter sidebar / chrome / dialogs (terminal theme is set above)</div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" id="sv-light-ui" ${(typeof localStorage !== 'undefined' && localStorage.getItem('lightUiMode') === '1') ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
             <span class="settings-label">Shell Profile</span>
             <div class="settings-description">Shell used for terminal and Claude sessions. Changes take effect for new sessions only.</div>
           </div>
@@ -302,6 +312,18 @@
         settings.terminalTheme = settingsViewerBody.querySelector('#sv-terminal-theme').value || 'switchboard';
         settings.mcpEmulation = settingsViewerBody.querySelector('#sv-mcp-emulation').checked;
         settings.shellProfile = settingsViewerBody.querySelector('#sv-shell-profile').value || 'auto';
+
+        // Light UI mode is a local preference — apply immediately and persist in localStorage.
+        const lightUi = settingsViewerBody.querySelector('#sv-light-ui');
+        if (lightUi) {
+          if (lightUi.checked) {
+            try { localStorage.setItem('lightUiMode', '1'); } catch {}
+            document.body.classList.add('theme-light');
+          } else {
+            try { localStorage.removeItem('lightUiMode'); } catch {}
+            document.body.classList.remove('theme-light');
+          }
+        }
       }
 
       // Merge form values into existing settings to preserve keys not managed by the form

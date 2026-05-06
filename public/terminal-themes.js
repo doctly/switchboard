@@ -42,6 +42,18 @@ const TERMINAL_THEMES = {
     black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900', blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
     brightBlack: '#002b36', brightRed: '#cb4b16', brightGreen: '#586e75', brightYellow: '#657b83', brightBlue: '#839496', brightMagenta: '#6c71c4', brightCyan: '#93a1a1', brightWhite: '#fdf6e3',
   },
+  light: {
+    label: 'Light',
+    background: '#fafafa', foreground: '#1d1d1f', cursor: '#1d1d1f', selectionBackground: '#cdd6e3',
+    black: '#1d1d1f', red: '#c0392b', green: '#27867a', yellow: '#9c6a00', blue: '#1f6feb', magenta: '#a347b9', cyan: '#0e7c86', white: '#1d1d1f',
+    brightBlack: '#6b6b70', brightRed: '#d63b32', brightGreen: '#2ea88a', brightYellow: '#b87900', brightBlue: '#3a7eed', brightMagenta: '#bb56cf', brightCyan: '#1a8e96', brightWhite: '#1d1d1f',
+  },
+  solarizedLight: {
+    label: 'Solarized Light',
+    background: '#fdf6e3', foreground: '#586e75', cursor: '#586e75', selectionBackground: '#eee8d5',
+    black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900', blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
+    brightBlack: '#002b36', brightRed: '#cb4b16', brightGreen: '#586e75', brightYellow: '#657b83', brightBlue: '#839496', brightMagenta: '#6c71c4', brightCyan: '#93a1a1', brightWhite: '#fdf6e3',
+  },
 };
 
 let currentThemeName = 'switchboard';

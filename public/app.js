@@ -1,3 +1,10 @@
+// Apply persisted light UI mode (toggled in Global Settings → "Light UI mode")
+try {
+  if (localStorage.getItem('lightUiMode') === '1') {
+    document.body.classList.add('theme-light');
+  }
+} catch {}
+
 const statusBarInfo = document.getElementById('status-bar-info');
 const statusBarActivity = document.getElementById('status-bar-activity');
 const terminalsEl = document.getElementById('terminals');
