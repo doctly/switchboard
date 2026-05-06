@@ -134,6 +134,34 @@ function createWindow() {
     }
   }
 
+  // Clamp window bounds to the active display's work area so we never open
+  // larger than the screen. Without this, a windowBounds saved on a larger
+  // monitor (or from an older corrupted value) makes the window open edge-
+  // to-edge or off-screen on the current display.
+  try {
+    const targetDisplay = restorePosition
+      ? screen.getDisplayNearestPoint(restorePosition)
+      : screen.getPrimaryDisplay();
+    const work = targetDisplay.workAreaSize;  // excludes taskbar/dock
+    const maxW = Math.max(800, Math.floor(work.width * 0.95));
+    const maxH = Math.max(500, Math.floor(work.height * 0.95));
+    if (bounds.width > maxW) bounds.width = maxW;
+    if (bounds.height > maxH) bounds.height = maxH;
+    // Also clamp the restore position so the window doesn't spawn pinned
+    // to the bottom-right of an off-screen origin.
+    if (restorePosition) {
+      const origin = targetDisplay.workArea;
+      if (restorePosition.x + bounds.width > origin.x + origin.width) {
+        restorePosition.x = origin.x + Math.max(0, origin.width - bounds.width);
+      }
+      if (restorePosition.y + bounds.height > origin.y + origin.height) {
+        restorePosition.y = origin.y + Math.max(0, origin.height - bounds.height);
+      }
+      if (restorePosition.x < origin.x) restorePosition.x = origin.x;
+      if (restorePosition.y < origin.y) restorePosition.y = origin.y;
+    }
+  } catch {}
+
   mainWindow = new BrowserWindow({
     ...bounds,
     minWidth: 800,
