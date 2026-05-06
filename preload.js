@@ -56,6 +56,19 @@ contextBridge.exposeInMainWorld('api', {
     getAll: () => ipcRenderer.invoke('session-profiles:get-all'),
   },
 
+  // Pre-aggregated per-backend analytics computed by a worker thread from
+  // the JSONL session history. getCache returns instantly (cached read);
+  // refresh kicks the worker; analytics-updated fires when fresh data is ready.
+  analytics: {
+    getCache: () => ipcRenderer.invoke('analytics:get-cache'),
+    refresh: (opts) => ipcRenderer.invoke('analytics:refresh', opts || {}),
+    onUpdated: (cb) => {
+      const handler = () => cb();
+      ipcRenderer.on('analytics-updated', handler);
+      return () => ipcRenderer.removeListener('analytics-updated', handler);
+    },
+  },
+
   browseFolder: () => ipcRenderer.invoke('browse-folder'),
   addProject: (projectPath) => ipcRenderer.invoke('add-project', projectPath),
   removeProject: (projectPath) => ipcRenderer.invoke('remove-project', projectPath),
