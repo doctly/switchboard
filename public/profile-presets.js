@@ -25,6 +25,9 @@
         // token is read from the user's standard env var name.
         ANTHROPIC_BASE_URL: '',
         ANTHROPIC_AUTH_TOKEN: '$ANTHROPIC_API_KEY',
+        // Stability flags — see comment block on the deepseek preset.
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+        CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1',
       },
       tokenEnvHint: 'ANTHROPIC_API_KEY',
       icon: 'anthropic',
@@ -43,6 +46,17 @@
         ANTHROPIC_DEFAULT_HAIKU_MODEL: 'deepseek-v4-flash',
         CLAUDE_CODE_SUBAGENT_MODEL: 'deepseek-v4-flash',
         CLAUDE_CODE_EFFORT_LEVEL: 'max',
+        // Stability flags for third-party Anthropic-compatible endpoints:
+        //   NONESSENTIAL_TRAFFIC=1 — bundles DISABLE_AUTOUPDATER /
+        //     DISABLE_BUG_COMMAND / DISABLE_ERROR_REPORTING / DISABLE_TELEMETRY
+        //     so Claude Code doesn't try to phone home to anthropic.com while
+        //     pointed at a different host.
+        //   EXPERIMENTAL_BETAS=1 — suppresses Anthropic-specific beta
+        //     headers (structured-outputs, etc.) that proxies don't
+        //     understand and that have caused 4xx errors in the wild.
+        // Both are safe-but-conservative on first-party Anthropic too.
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+        CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1',
       },
       tokenEnvHint: 'DEEPSEEK_API_KEY',
     },
@@ -61,6 +75,9 @@
         ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-4.7',
         ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-4.7',
         ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-4.5-air',
+        // Stability flags — see comment block on the deepseek preset.
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+        CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1',
       },
       tokenEnvHint: 'ZAI_API_KEY',
     },
@@ -79,6 +96,9 @@
         ANTHROPIC_DEFAULT_SONNET_MODEL: 'anthropic/claude-sonnet-4.6',
         ANTHROPIC_DEFAULT_HAIKU_MODEL: 'anthropic/claude-haiku-4.5',
         CLAUDE_CODE_SUBAGENT_MODEL: 'anthropic/claude-opus-4.7',
+        // Stability flags — see comment block on the deepseek preset.
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+        CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1',
       },
       tokenEnvHint: 'OPENROUTER_API_KEY',
     },
