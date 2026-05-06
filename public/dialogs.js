@@ -373,6 +373,126 @@ async function showNewSessionDialog(project) {
   document.addEventListener('keydown', onKey);
 }
 
+// Quick-resume popover: anchored to the launch-config (rocket) button on
+// each session row. Lists "Resume" (default — uses last-recorded profile
+// if any, otherwise global default), then one entry per saved profile,
+// then "More options…" which opens the full resume dialog. The current
+// recorded profile gets a check/highlight so you can see at a glance
+// which backend you're already on.
+async function showResumeProfilePopover(session, anchorEl) {
+  document.querySelectorAll('.new-session-popover').forEach(el => el.remove());
+
+  let profilesData = { profiles: [], defaultProfileId: null };
+  let lastProfileId = null;
+  try { profilesData = await window.api.profiles.list(); } catch {}
+  try {
+    const map = await window.api.sessionProfiles.getAll();
+    lastProfileId = map[session.sessionId] || null;
+  } catch {}
+
+  const popover = document.createElement('div');
+  popover.className = 'new-session-popover';
+
+  // Top entry: plain resume — keeps last-used profile (the fix in PR #8).
+  const plainBtn = document.createElement('button');
+  plainBtn.className = 'popover-option';
+  plainBtn.innerHTML = '<svg class="popover-option-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
+  plainBtn.appendChild(document.createTextNode(' Resume'));
+  if (lastProfileId) {
+    const profile = profilesData.profiles.find(p => p.id === lastProfileId);
+    if (profile) {
+      const tag = document.createElement('span');
+      tag.className = 'popover-default-tag';
+      tag.textContent = 'on ' + profile.name;
+      plainBtn.appendChild(document.createTextNode(' '));
+      plainBtn.appendChild(tag);
+    }
+  }
+  plainBtn.onclick = () => { popover.remove(); openSession(session); };
+  popover.appendChild(plainBtn);
+
+  // Per-profile resume entries.
+  if (profilesData.profiles.length > 0) {
+    const sep = document.createElement('div');
+    sep.className = 'popover-separator';
+    sep.textContent = 'Resume on…';
+    popover.appendChild(sep);
+
+    for (const profile of profilesData.profiles) {
+      const isCurrent = profile.id === lastProfileId;
+      const profBtn = document.createElement('button');
+      profBtn.className = 'popover-option popover-option-profile' + (isCurrent ? ' is-current' : '');
+      // Use the profile's icon if set; fall back to a generic person glyph.
+      if (profile.icon && typeof window.renderProfileIcon === 'function') {
+        const icoWrap = document.createElement('span');
+        icoWrap.className = 'popover-option-icon';
+        icoWrap.style.display = 'inline-flex';
+        icoWrap.appendChild(window.renderProfileIcon(profile.icon, 16));
+        profBtn.appendChild(icoWrap);
+      } else {
+        profBtn.innerHTML = '<svg class="popover-option-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a4 4 0 014-4h8a4 4 0 014 4v2"/></svg>';
+      }
+      profBtn.appendChild(document.createTextNode(' ' + profile.name));
+      if (isCurrent) {
+        const tag = document.createElement('span');
+        tag.className = 'popover-default-tag';
+        tag.textContent = 'current';
+        profBtn.appendChild(document.createTextNode(' '));
+        profBtn.appendChild(tag);
+      }
+      profBtn.onclick = () => {
+        popover.remove();
+        openSession(session, { profileId: profile.id });
+      };
+      popover.appendChild(profBtn);
+    }
+
+    // Pass-through entry — explicitly clears any recorded profile.
+    const noneBtn = document.createElement('button');
+    noneBtn.className = 'popover-option popover-option-profile';
+    noneBtn.innerHTML = '<svg class="popover-option-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="5" y1="5" x2="19" y2="19"/></svg>';
+    noneBtn.appendChild(document.createTextNode(' No profile (pass-through)'));
+    noneBtn.onclick = () => {
+      popover.remove();
+      openSession(session, { profileId: 'none' });
+    };
+    popover.appendChild(noneBtn);
+  }
+
+  // Bottom entry: full dialog for permission-mode, addDirs etc.
+  const sep2 = document.createElement('div');
+  sep2.className = 'popover-separator';
+  popover.appendChild(sep2);
+  const moreBtn = document.createElement('button');
+  moreBtn.className = 'popover-option popover-option-manage';
+  moreBtn.innerHTML = '<svg class="popover-option-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg> More options…';
+  moreBtn.onclick = () => { popover.remove(); showResumeSessionDialog(session); };
+  popover.appendChild(moreBtn);
+
+  document.body.appendChild(popover);
+  const rect = anchorEl.getBoundingClientRect();
+  const popoverHeight = popover.offsetHeight;
+  if (rect.bottom + 4 + popoverHeight > window.innerHeight) {
+    popover.style.top = (rect.top - popoverHeight - 4) + 'px';
+  } else {
+    popover.style.top = (rect.bottom + 4) + 'px';
+  }
+  // Anchor right-edge so it doesn't run off the screen (action buttons sit
+  // on the right side of session rows).
+  const popoverWidth = popover.offsetWidth;
+  let left = rect.right - popoverWidth;
+  if (left < 8) left = 8;
+  popover.style.left = left + 'px';
+
+  function onClickOutside(e) {
+    if (!popover.contains(e.target) && e.target !== anchorEl) {
+      popover.remove();
+      document.removeEventListener('mousedown', onClickOutside);
+    }
+  }
+  setTimeout(() => document.addEventListener('mousedown', onClickOutside), 0);
+}
+
 async function showResumeSessionDialog(session) {
   const effective = await window.api.getEffectiveSettings(session.projectPath);
   let profilesData = { profiles: [], defaultProfileId: null };

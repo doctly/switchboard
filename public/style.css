@@ -3719,6 +3719,9 @@ body { display: flex; flex-direction: column; }
 .popover-option-manage .popover-option-icon {
   color: #c0c0d0;
 }
+.popover-option.is-current {
+  background: rgba(128, 136, 255, 0.10);
+}
 
 .profiles-dialog .profiles-help {
   margin: -4px 0 16px;
