@@ -215,17 +215,35 @@
 
     try {
       const opusBlob = new Blob(chunks, { type: chunks[0]?.type || 'audio/webm' });
+      console.info('[voice] recorded', { ms: elapsed, bytes: opusBlob.size, mime: opusBlob.type });
       const wavBlob = await opusToWav(opusBlob, TARGET_SAMPLE_RATE);
+      console.info('[voice] wav-encoded', { bytes: wavBlob.size });
       const text = await transcribe(wavBlob);
       const trimmed = (text || '').trim();
+      console.info('[voice] transcript', { len: trimmed.length, preview: trimmed.slice(0, 80) });
       if (!trimmed) {
-        showIndicator('No speech detected', '', 'error');
-        setTimeout(hideIndicator, 1500);
+        showIndicator('No speech detected', 'Try again, or speak louder', 'error');
+        setTimeout(hideIndicator, 2500);
       } else {
-        await injectText(trimmed, _settings.autoSubmit);
-        hideIndicator();
+        // Visible confirmation that we got a transcript and where it went.
+        const sid = window.activeSessionId || sessionStorage.getItem('activeSessionId');
+        if (!sid) {
+          showIndicator('No active session', 'Open a Claude session first, then try again', 'error');
+          setTimeout(hideIndicator, 4000);
+        } else {
+          const result = await injectText(trimmed, _settings.autoSubmit);
+          if (result && result.ok) {
+            // Brief preview so the user sees what was injected.
+            showIndicator('Inserted', trimmed.length > 60 ? trimmed.slice(0, 57) + '…' : trimmed);
+            setTimeout(hideIndicator, 1800);
+          } else {
+            showIndicator('Insert failed', (result && result.error) || 'sendInput unavailable', 'error');
+            setTimeout(hideIndicator, 4000);
+          }
+        }
       }
     } catch (err) {
+      console.error('[voice] transcription failed', err);
       showIndicator('Transcription failed', err.message || String(err), 'error');
       setTimeout(hideIndicator, 3500);
     } finally {
@@ -302,10 +320,22 @@
   // ── Inject into the active terminal ────────────────────────────────────
   async function injectText(text, autoSubmit) {
     const sid = window.activeSessionId || sessionStorage.getItem('activeSessionId');
-    if (!sid) return;
-    if (window.api && window.api.sendInput) {
+    if (!sid) {
+      console.warn('[voice] inject skipped — no active session id in window/sessionStorage');
+      return { ok: false, error: 'no active session' };
+    }
+    if (!(window.api && window.api.sendInput)) {
+      console.error('[voice] inject failed — window.api.sendInput is unavailable');
+      return { ok: false, error: 'sendInput unavailable' };
+    }
+    try {
       window.api.sendInput(sid, text);
       if (autoSubmit) window.api.sendInput(sid, '\r');
+      console.info('[voice] inject ok', { sid, autoSubmit });
+      return { ok: true };
+    } catch (err) {
+      console.error('[voice] inject threw', err);
+      return { ok: false, error: err.message || String(err) };
     }
   }
 
