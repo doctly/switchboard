@@ -700,25 +700,24 @@ function buildSessionItem(session) {
     summaryEl.prepend(badge);
   }
 
-  // Profile icon badge: only shown when the session was launched with a
-  // non-default profile AND the user has at least two profiles configured.
-  // With 0 or 1 profile defined, there's nothing to differentiate visually
-  // — every session is on the same backend — so the badge would be noise.
-  // Once you have ≥2 profiles you're in "multi-backend" mode and the
-  // badge starts pulling its weight.
+  // Profile icon badge: shown when this session is on a non-default
+  // backend. "Default Claude" (no profile, or the global default profile)
+  // counts as one backend; any session on a different profile counts as
+  // another. Even with a single non-default profile configured, the user
+  // is implicitly running two backends — default-Claude sessions plus
+  // sessions on that profile — and the badge is what tells them apart.
+  // Sessions on the default backend stay unbadged so the common case
+  // remains clean.
   let profileBadgeEl = null;
   try {
-    const totalProfiles = Object.keys(window._profilesById || {}).length;
-    if (totalProfiles >= 2) {
-      const profileId = (window._sessionProfileMap || {})[session.sessionId];
-      if (profileId && profileId !== window._defaultProfileId) {
-        const profile = (window._profilesById || {})[profileId];
-        if (profile && profile.icon && typeof window.renderProfileIcon === 'function') {
-          profileBadgeEl = document.createElement('span');
-          profileBadgeEl.className = 'session-profile-badge';
-          profileBadgeEl.title = profile.name;
-          profileBadgeEl.appendChild(window.renderProfileIcon(profile.icon, 32));
-        }
+    const profileId = (window._sessionProfileMap || {})[session.sessionId];
+    if (profileId && profileId !== window._defaultProfileId) {
+      const profile = (window._profilesById || {})[profileId];
+      if (profile && profile.icon && typeof window.renderProfileIcon === 'function') {
+        profileBadgeEl = document.createElement('span');
+        profileBadgeEl.className = 'session-profile-badge';
+        profileBadgeEl.title = profile.name;
+        profileBadgeEl.appendChild(window.renderProfileIcon(profile.icon, 32));
       }
     }
   } catch {}
