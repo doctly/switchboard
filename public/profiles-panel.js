@@ -20,17 +20,36 @@
   }
 
   // --- Editor for a single profile ---------------------------------------
-  function renderEditor(profile, onSave, onCancel, onDelete) {
+  // When `profile` is null and `preset` is provided, the form pre-fills from
+  // the preset (name + env vars). The user still has to click Create to save.
+  function renderEditor(profile, onSave, onCancel, onDelete, preset) {
     const overlay = el('div', 'new-session-overlay');
     const dialog = el('div', 'new-session-dialog profiles-dialog');
 
     const isNew = !profile;
-    const state = profile
-      ? { id: profile.id, name: profile.name, env: { ...profile.env } }
-      : { id: uid(), name: '', env: {} };
+    let state;
+    if (profile) {
+      state = { id: profile.id, name: profile.name, env: { ...profile.env } };
+    } else if (preset) {
+      state = { id: uid(), name: preset.name, env: { ...preset.env } };
+    } else {
+      state = { id: uid(), name: '', env: {} };
+    }
 
-    const title = el('h3', null, isNew ? 'New Profile' : `Edit Profile — ${state.name || state.id}`);
+    const titleText = isNew
+      ? (preset ? `New Profile — from ${preset.name} template` : 'New Profile')
+      : `Edit Profile — ${state.name || state.id}`;
+    const title = el('h3', null, titleText);
     dialog.appendChild(title);
+
+    if (isNew && preset) {
+      const presetNote = el('div', 'profile-hint');
+      presetNote.innerHTML =
+        `<strong>Template:</strong> ${preset.summary || ''} ` +
+        `Make sure <code>${preset.tokenEnvHint || ''}</code> is set in your system environment ` +
+        `(setx on Windows, ~/.zshrc on mac/linux), or change the <code>ANTHROPIC_AUTH_TOKEN</code> reference below.`;
+      dialog.appendChild(presetNote);
+    }
 
     // Name field
     const nameField = el('div', 'settings-field settings-field-wide');
@@ -180,7 +199,7 @@
 
     const list = el('div', 'profiles-list');
     if (data.profiles.length === 0) {
-      const empty = el('div', 'profiles-empty', 'No profiles yet. Click + New to create one.');
+      const empty = el('div', 'profiles-empty', 'No profiles yet. Pick a template below or click + New to create one from scratch.');
       list.appendChild(empty);
     }
     for (const p of data.profiles) {
@@ -217,7 +236,39 @@
     }
     dialog.appendChild(list);
 
-    const newBtn = el('button', 'new-session-start-btn profile-new-btn', '+ New profile');
+    // --- Templates section: built-in presets for common backends ---------
+    const presets = (window.PROFILE_PRESETS || []);
+    if (presets.length > 0) {
+      const tplHeader = el('div', 'profiles-section-header', 'Add from template');
+      dialog.appendChild(tplHeader);
+      const tplDesc = el('div', 'settings-description profiles-help');
+      tplDesc.innerHTML =
+        'Pre-configured for common backends. Set the named API-key env var on your system (e.g. ' +
+        '<code>setx DEEPSEEK_API_KEY ...</code> on Windows), then pick a template — it opens the editor pre-filled.';
+      dialog.appendChild(tplDesc);
+
+      const tplList = el('div', 'profile-presets-list');
+      for (const preset of presets) {
+        const row = el('div', 'profile-preset-row');
+        const meta = el('div', 'profile-row-meta');
+        const nm = el('div', 'profile-row-name', preset.name);
+        const sub = el('div', 'profile-row-sub', preset.summary || '');
+        meta.appendChild(nm);
+        meta.appendChild(sub);
+        row.appendChild(meta);
+
+        const useBtn = el('button', 'profile-row-btn profile-preset-use', 'Use template');
+        useBtn.onclick = () => {
+          overlay.remove();
+          renderEditor(null, () => showProfilesManager(), () => showProfilesManager(), null, preset);
+        };
+        row.appendChild(useBtn);
+        tplList.appendChild(row);
+      }
+      dialog.appendChild(tplList);
+    }
+
+    const newBtn = el('button', 'new-session-start-btn profile-new-btn', '+ New (blank)');
     newBtn.onclick = () => {
       overlay.remove();
       renderEditor(null, () => showProfilesManager(), () => showProfilesManager());
