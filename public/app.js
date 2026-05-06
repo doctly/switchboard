@@ -5,6 +5,28 @@ try {
   }
 } catch {}
 
+// Profile-icon caches consumed by the sidebar to render badges. Populated
+// at startup and refreshed after profile changes / new session launches.
+window._profilesById = {};
+window._defaultProfileId = null;
+window._sessionProfileMap = {};
+window.refreshProfileCaches = async function () {
+  try {
+    if (window.api && window.api.profiles) {
+      const data = await window.api.profiles.list();
+      window._profilesById = {};
+      for (const p of (data.profiles || [])) window._profilesById[p.id] = p;
+      window._defaultProfileId = data.defaultProfileId || null;
+    }
+    if (window.api && window.api.sessionProfiles) {
+      window._sessionProfileMap = await window.api.sessionProfiles.getAll();
+    }
+  } catch {}
+};
+// Kick off initial load (sidebar may render before this resolves; that's
+// fine — badges appear on the next render pass after the cache is populated).
+if (typeof window.refreshProfileCaches === 'function') window.refreshProfileCaches();
+
 const statusBarInfo = document.getElementById('status-bar-info');
 const statusBarActivity = document.getElementById('status-bar-activity');
 const terminalsEl = document.getElementById('terminals');
@@ -750,6 +772,12 @@ async function launchNewSession(project, sessionOptions) {
   }
   if (typeof setSessionMcpActive === 'function') setSessionMcpActive(sessionId, !!result.mcpActive);
 
+  // Refresh the profile-icon cache so the sidebar badge reflects the profile
+  // that was applied at spawn (main records it during openTerminal).
+  if (typeof window.refreshProfileCaches === 'function') {
+    window.refreshProfileCaches().then(() => refreshSidebar()).catch(() => {});
+  }
+
   showSession(sessionId);
   pollActiveSessions();
 }
@@ -815,6 +843,12 @@ async function openSession(session, customOptions) {
     return;
   }
   if (typeof setSessionMcpActive === 'function') setSessionMcpActive(sessionId, !!result.mcpActive);
+
+  // Refresh the icon-cache so the sidebar badge reflects the (possibly
+  // changed) profile for this resumed session.
+  if (typeof window.refreshProfileCaches === 'function') {
+    window.refreshProfileCaches().then(() => refreshSidebar()).catch(() => {});
+  }
 
   showSession(sessionId);
   pollActiveSessions();

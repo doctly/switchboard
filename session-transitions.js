@@ -179,6 +179,8 @@ function detectSessionTransitions(folder) {
         activeSessions.set(newId, session);
         // Re-key MCP server to match new session ID
         rekeyMcpServer(sessionId, newId);
+        // Re-key any profile-icon mapping recorded against the temp id.
+        try { require('./session-profiles').rekeySession(sessionId, newId); } catch {}
         const mainWindow = getMainWindow();
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('session-forked', sessionId, newId);

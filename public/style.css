@@ -3820,6 +3820,58 @@ body.theme-light .profile-preset-row {
   background: #f5f5f7;
   border-color: #d1d1d6;
 }
+
+/* --- Profile icon picker (in editor) ----------------------------------- */
+.profile-icon-field .profile-icon-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 6px;
+  margin-top: 6px;
+}
+.profile-icon-cell {
+  background: #1f1f30;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  padding: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 120ms, background 120ms;
+}
+.profile-icon-cell:hover { background: #2a2a3e; }
+.profile-icon-cell.selected {
+  border-color: #8088ff;
+  background: rgba(128, 136, 255, 0.12);
+}
+body.theme-light .profile-icon-cell { background: #f5f5f7; }
+body.theme-light .profile-icon-cell:hover { background: #ececef; }
+body.theme-light .profile-icon-cell.selected {
+  background: rgba(128, 136, 255, 0.15);
+  border-color: #6b73d6;
+}
+
+/* --- Profile rows: icon column ---------------------------------------- */
+.profile-row,
+.profile-preset-row {
+  gap: 12px;
+}
+.profile-row-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+/* --- Sidebar profile badge -------------------------------------------- */
+.session-profile-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.session-profile-badge .profile-icon {
+  display: block;
+}
 body.theme-light .profiles-section-header {
   color: #6b6b70;
   border-top-color: #d1d1d6;

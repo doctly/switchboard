@@ -50,6 +50,12 @@ contextBridge.exposeInMainWorld('api', {
     setDefault: (id) => ipcRenderer.invoke('profiles:set-default', id),
   },
 
+  // Map of sessionId → profileId. Populated at session spawn; renderer reads
+  // the whole map at startup to drive sidebar icon badges.
+  sessionProfiles: {
+    getAll: () => ipcRenderer.invoke('session-profiles:get-all'),
+  },
+
   browseFolder: () => ipcRenderer.invoke('browse-folder'),
   addProject: (projectPath) => ipcRenderer.invoke('add-project', projectPath),
   removeProject: (projectPath) => ipcRenderer.invoke('remove-project', projectPath),

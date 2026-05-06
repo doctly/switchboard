@@ -12,6 +12,7 @@ const { buildClaudeCmd } = require('./claude-cmd');
 const { isSafeExternalUrl } = require('./url-guard');
 const branding = require('./branding');
 const profilesModule = require('./profiles');
+const sessionProfiles = require('./session-profiles');
 
 // Sync IPC for the preload to fetch the brand-strings snapshot at load
 // time. ipcMain.on handles sendSync via event.returnValue.
@@ -1125,6 +1126,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       // Apply Claude profile env (per-session profileId → fall back to global default).
       // Profile values override base env. Refs like "$DEEPSEEK_API_KEY" resolve against
       // the host process env; unresolved refs are dropped (not passed through literally).
+      // Also record the chosen profile id (or the resolved-default's id) so the sidebar
+      // can render the right icon badge — including across app restarts.
       try {
         const profile = profilesModule.pickProfileForSession(sessionOptions?.profileId);
         if (profile) {
@@ -1132,6 +1135,11 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
           Object.assign(ptyEnv, resolved);
           const dropped = Object.keys(profile.env).filter(k => !(k in resolved));
           log.info(`[profiles] Applied "${profile.name}" (${profile.id}): ${Object.keys(resolved).length} var(s)${dropped.length ? `, ${dropped.length} unresolved ref(s) dropped: ${dropped.join(',')}` : ''}`);
+          sessionProfiles.recordSessionProfile(sessionId, profile.id);
+        } else if (sessionOptions?.profileId === 'none') {
+          // Explicit pass-through clears any previously-recorded mapping so
+          // the badge disappears on the next sidebar render.
+          sessionProfiles.recordSessionProfile(sessionId, null);
         }
       } catch (err) {
         log.error(`[profiles] Failed to apply profile: ${err.message}`);
@@ -1494,6 +1502,7 @@ app.whenReady().then(() => {
 
   scheduleIpc.init(log, runScheduleCommand);
   profilesModule.init(log);
+  sessionProfiles.init(log);
   startScheduler(log, runScheduleCommand);
 
   // Re-index search if FTS table was recreated (e.g. tokenizer config change)
