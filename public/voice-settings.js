@@ -191,37 +191,6 @@
     testWrap.appendChild(testBtn); testWrap.appendChild(testOut);
     root.appendChild(field('Test transcription', 'Click → speak for 3 seconds → see what whisper transcribes. Bypasses the hotkey, so this isolates microphone + whisper from keyboard issues.', testWrap));
 
-    // Scheduled task — Layer 2
-    const taskWrap = document.createElement('div'); taskWrap.className = 'voice-server-controls';
-    const installBtn = document.createElement('button'); installBtn.className = 'voice-srv-btn'; installBtn.type = 'button'; installBtn.textContent = 'Install on login';
-    const uninstallBtn = document.createElement('button'); uninstallBtn.className = 'voice-srv-btn'; uninstallBtn.type = 'button'; uninstallBtn.textContent = 'Remove from login';
-    const taskStatus = document.createElement('span'); taskStatus.className = 'voice-task-status';
-    installBtn.onclick = async () => {
-      installBtn.disabled = true;
-      const r = await window.api.whisper.installTask();
-      installBtn.disabled = false;
-      taskStatus.textContent = r.ok ? 'Installed.' : `Install failed: ${r.error}`;
-      taskStatus.classList.toggle('is-error', !r.ok);
-      refreshTask();
-    };
-    uninstallBtn.onclick = async () => {
-      uninstallBtn.disabled = true;
-      const r = await window.api.whisper.uninstallTask();
-      uninstallBtn.disabled = false;
-      taskStatus.textContent = r.ok ? 'Removed.' : `Remove failed: ${r.error}`;
-      taskStatus.classList.toggle('is-error', !r.ok);
-      refreshTask();
-    };
-    async function refreshTask() {
-      const r = await window.api.whisper.queryTask();
-      installBtn.style.display = r.installed ? 'none' : '';
-      uninstallBtn.style.display = r.installed ? '' : 'none';
-      if (r.installed && !taskStatus.textContent) taskStatus.textContent = 'Logon task is registered.';
-    }
-    refreshTask();
-    taskWrap.appendChild(installBtn); taskWrap.appendChild(uninstallBtn); taskWrap.appendChild(taskStatus);
-    root.appendChild(field('Always available (login task)', 'Register a Windows scheduled task that starts whisper-server at user logon. No admin needed; runs in your user session so audio + GPU work as expected.', taskWrap));
-
     // Save handler exposed to caller — invoked from the dialog's Save button.
     onSave.collect = () => ({
       enabled: enabledIn.checked,

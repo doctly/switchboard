@@ -20,9 +20,8 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const http = require('http');
-const { spawn, execFile } = require('child_process');
+const { spawn } = require('child_process');
 
-const TASK_NAME = 'Switchboard-Whisper';
 const DEFAULT_PORT = 52391;
 const DEFAULT_HOST = '127.0.0.1';
 const HEALTH_TIMEOUT_MS = 30000;
@@ -288,69 +287,12 @@ async function start() {
   await spawnChild();
 }
 
-// ── Scheduled-task install / uninstall (Windows only) ────────────────────
-// Runs at user logon, in the user's session (audio + GPU access work).
-// No UAC needed because we use /SC ONLOGON (per-user task).
-
-function isWindows() { return process.platform === 'win32'; }
-
-function installScheduledTask() {
-  return new Promise((resolve) => {
-    if (!isWindows()) return resolve({ ok: false, error: 'scheduled-task install is Windows-only' });
-    const binary = findBinary(_settings);
-    if (!binary) return resolve({ ok: false, error: 'whisper-server.exe not found' });
-    // Pass the discovered binary into findModel so binary-relative search
-    // paths (binary-adjacent dir, project-root models/, etc.) are walked
-    // even if the user hasn't pinned an explicit binaryPath in settings.
-    // Same fix as PR #15 applied here for the install path.
-    const model = findModel({ ..._settings, binaryPath: binary }, _userDataDir);
-    if (!model) return resolve({ ok: false, error: 'model file not found' });
-
-    // Build the command line. schtasks /TR wants the full command quoted.
-    const cmd = `"${binary}" -m "${model}" --host ${_state.host} --port ${_state.port}`;
-    const args = [
-      '/Create', '/F',
-      '/SC', 'ONLOGON',
-      '/TN', TASK_NAME,
-      '/TR', cmd,
-      '/RL', 'LIMITED',  // user-level, no admin
-    ];
-    execFile('schtasks.exe', args, { windowsHide: true }, (err, stdout, stderr) => {
-      if (err) return resolve({ ok: false, error: (stderr || err.message).trim() });
-      resolve({ ok: true });
-    });
-  });
-}
-
-function uninstallScheduledTask() {
-  return new Promise((resolve) => {
-    if (!isWindows()) return resolve({ ok: false, error: 'scheduled-task uninstall is Windows-only' });
-    execFile('schtasks.exe', ['/Delete', '/F', '/TN', TASK_NAME], { windowsHide: true }, (err, _stdout, stderr) => {
-      if (err) return resolve({ ok: false, error: (stderr || err.message).trim() });
-      resolve({ ok: true });
-    });
-  });
-}
-
-function queryScheduledTask() {
-  return new Promise((resolve) => {
-    if (!isWindows()) return resolve({ installed: false });
-    execFile('schtasks.exe', ['/Query', '/TN', TASK_NAME], { windowsHide: true }, (err, stdout) => {
-      if (err) return resolve({ installed: false });
-      resolve({ installed: true, info: (stdout || '').trim() });
-    });
-  });
-}
-
-// Run the scheduled task immediately (e.g. after install).
-function runScheduledTask() {
-  return new Promise((resolve) => {
-    if (!isWindows()) return resolve({ ok: false });
-    execFile('schtasks.exe', ['/Run', '/TN', TASK_NAME], { windowsHide: true }, (err) => {
-      resolve({ ok: !err });
-    });
-  });
-}
+// Note: scheduled-task install/uninstall is intentionally NOT performed
+// from inside Switchboard. It's been left to the user's own schtasks.exe
+// or Task Scheduler GUI invocation — the in-app paths added more friction
+// (UAC quirks, restricted-token failures) than they removed. Switchboard
+// still detects an externally-managed whisper-server on the configured
+// port via probe(), so a user-installed scheduled task plugs in cleanly.
 
 // ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -372,9 +314,6 @@ async function init({ log, app, getMainWindow, ipcMain, getVoiceSettings }) {
   ipcMain.handle('whisper:start', async () => { await start(); return getStatus(); });
   ipcMain.handle('whisper:stop', () => { killChild(); return getStatus(); });
   ipcMain.handle('whisper:restart', async () => { killChild(); _stopping = false; await start(); return getStatus(); });
-  ipcMain.handle('whisper:install-task', async () => installScheduledTask());
-  ipcMain.handle('whisper:uninstall-task', async () => uninstallScheduledTask());
-  ipcMain.handle('whisper:query-task', async () => queryScheduledTask());
   ipcMain.handle('whisper:update-settings', async (_e, next) => {
     _settings = { ..._settings, ...(next || {}) };
     return { ok: true };
@@ -398,11 +337,7 @@ module.exports = {
   start,
   killChild,
   getStatus,
-  installScheduledTask,
-  uninstallScheduledTask,
-  queryScheduledTask,
-  runScheduledTask,
   // Exposed for tests
   _internal: { findBinary, findModel, modelSearchPaths, probe, waitUntilReady },
-  TASK_NAME, DEFAULT_PORT, DEFAULT_HOST,
+  DEFAULT_PORT, DEFAULT_HOST,
 };
