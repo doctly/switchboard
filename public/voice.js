@@ -64,7 +64,12 @@
     const hkIsCtrl = CTRL_CODES.includes(hk.key);
     const hkIsShift = SHIFT_CODES.includes(hk.key);
     const hkIsMeta = META_CODES.includes(hk.key);
-    if (!hkIsCtrl && !hkIsMeta && (!!hk.ctrl) !== (ev.ctrlKey || ev.metaKey)) return false;
+    // AltGr keyboards (UK, EU layouts) synthesise *both* ctrlKey and
+    // altKey when AltRight is pressed. Treat ctrlKey as don't-care for
+    // AltRight specifically so the hotkey isn't silently rejected by
+    // the AltGr-induced ctrlKey flag.
+    const isAltRightHotkey = hk.key === 'AltRight';
+    if (!hkIsCtrl && !hkIsMeta && !isAltRightHotkey && (!!hk.ctrl) !== (ev.ctrlKey || ev.metaKey)) return false;
     if (!hkIsShift && (!!hk.shift) !== ev.shiftKey) return false;
     if (!hkIsAlt && (!!hk.alt) !== ev.altKey) return false;
     return true;
@@ -438,9 +443,56 @@
   }
 
   // Public API for the settings panel + manual triggers.
+  // testTranscribe records for ~3s, runs transcription, and resolves to
+  // a {ok, transcript|error} for the settings test button — bypasses the
+  // hotkey path entirely so you can isolate audio/whisper from keyboard.
+  async function testTranscribe(durationMs) {
+    if (_state.mode !== 'idle') return { ok: false, error: 'busy' };
+    _state.mode = 'recording-toggle';
+    const ok = await startRecording();
+    if (!ok) {
+      _state.mode = 'idle';
+      return { ok: false, error: 'startRecording failed (see console)' };
+    }
+    await new Promise(r => setTimeout(r, Math.max(500, durationMs || 3000)));
+    // stopAndTranscribe drives the rest; report based on indicator state.
+    return new Promise((resolve) => {
+      const wrap = async () => {
+        const startedAt = Date.now();
+        // Mirror the stop+transcribe path but capture the result here.
+        const recorder = _state.recorder;
+        if (!recorder) { _state.mode = 'idle'; resolve({ ok: false, error: 'no recorder' }); return; }
+        const chunks = _state.chunks;
+        const stoppedPromise = new Promise((r) => { recorder.onstop = r; });
+        try { recorder.stop(); } catch {}
+        await stoppedPromise;
+        teardownRecording();
+        _state.mode = 'transcribing';
+        showIndicator('Transcribing test…', '', 'transcribing');
+        try {
+          const opusBlob = new Blob(chunks, { type: chunks[0]?.type || 'audio/webm' });
+          const wavBlob = await opusToWav(opusBlob, TARGET_SAMPLE_RATE);
+          const text = await transcribe(wavBlob);
+          const trimmed = (text || '').trim();
+          showIndicator('Test result', trimmed || '(empty)', trimmed ? null : 'error');
+          setTimeout(hideIndicator, 4000);
+          _state.mode = 'idle';
+          resolve({ ok: true, transcript: trimmed, durationMs: Date.now() - startedAt });
+        } catch (err) {
+          showIndicator('Test failed', err.message || String(err), 'error');
+          setTimeout(hideIndicator, 4000);
+          _state.mode = 'idle';
+          resolve({ ok: false, error: err.message || String(err) });
+        }
+      };
+      wrap();
+    });
+  }
+
   window.voice = {
     refreshSettings,
     onPttDown, onPttUp, onToggle,
+    testTranscribe,
     getServerState: () => _serverState,
   };
 

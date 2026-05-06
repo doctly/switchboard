@@ -150,6 +150,32 @@
     ctrls.appendChild(startBtn); ctrls.appendChild(stopBtn); ctrls.appendChild(restartBtn);
     root.appendChild(field('Server', 'Manage the whisper-server child process.', ctrls));
 
+    // Diagnostic — record 3s, transcribe, show result. Bypasses the hotkey
+    // path so you can isolate audio/whisper from keyboard issues.
+    const testWrap = document.createElement('div'); testWrap.className = 'voice-server-controls';
+    const testBtn = document.createElement('button'); testBtn.className = 'voice-srv-btn'; testBtn.type = 'button';
+    testBtn.textContent = 'Test microphone (3s)';
+    const testOut = document.createElement('span'); testOut.className = 'voice-task-status';
+    testBtn.onclick = async () => {
+      if (!window.voice || typeof window.voice.testTranscribe !== 'function') {
+        testOut.textContent = 'voice module not loaded'; testOut.classList.add('is-error'); return;
+      }
+      testBtn.disabled = true;
+      testOut.classList.remove('is-error');
+      testOut.textContent = 'Recording 3s…';
+      const r = await window.voice.testTranscribe(3000);
+      testBtn.disabled = false;
+      if (r.ok) {
+        testOut.textContent = r.transcript ? `OK: "${r.transcript}"` : 'OK but no speech detected';
+        testOut.classList.toggle('is-error', !r.transcript);
+      } else {
+        testOut.textContent = `Failed: ${r.error}`;
+        testOut.classList.add('is-error');
+      }
+    };
+    testWrap.appendChild(testBtn); testWrap.appendChild(testOut);
+    root.appendChild(field('Test transcription', 'Click → speak for 3 seconds → see what whisper transcribes. Bypasses the hotkey, so this isolates microphone + whisper from keyboard issues.', testWrap));
+
     // Scheduled task — Layer 2
     const taskWrap = document.createElement('div'); taskWrap.className = 'voice-server-controls';
     const installBtn = document.createElement('button'); installBtn.className = 'voice-srv-btn'; installBtn.type = 'button'; installBtn.textContent = 'Install on login';
