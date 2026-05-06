@@ -451,11 +451,12 @@ ipcMain.handle('watch-file', (_event, filePath) => {
 });
 
 ipcMain.handle('unwatch-file', (_event, filePath) => {
-  const resolved = path.resolve(filePath);
-  const watcher = fileWatchers.get(resolved);
+  const check = assertPathAllowed(filePath, 'read');
+  if (!check.ok) return { ok: false, error: check.error };
+  const watcher = fileWatchers.get(check.resolved);
   if (watcher) {
     watcher.close();
-    fileWatchers.delete(resolved);
+    fileWatchers.delete(check.resolved);
   }
   return { ok: true };
 });
@@ -1417,6 +1418,31 @@ ipcMain.handle('updater-install', () => {});
 
 // --- App lifecycle ---
 app.whenReady().then(() => {
+  // Content-Security-Policy: lock the renderer to same-origin script/style
+  // execution. xterm/codemirror are bundled locally; markdown is rendered
+  // through DOMPurify before reaching the DOM, so 'unsafe-inline' is not
+  // required for scripts. Inline styles are still allowed (xterm injects
+  // colour styles at runtime via setAttribute('style', …)).
+  const { session } = require('electron');
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          "default-src 'self'; " +
+          "script-src 'self'; " +
+          "style-src 'self' 'unsafe-inline'; " +
+          "img-src 'self' data: blob:; " +
+          "font-src 'self' data:; " +
+          "connect-src 'self'; " +
+          "object-src 'none'; " +
+          "base-uri 'self'; " +
+          "frame-ancestors 'none'"
+        ],
+      },
+    });
+  });
+
   // Seed path-guard allowed roots from every known Claude projects folder
   // so the file panel can read project files immediately at startup.
   try {
