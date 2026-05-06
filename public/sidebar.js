@@ -702,17 +702,20 @@ function buildSessionItem(session) {
 
   // Profile icon badge: only shown when the session was launched with a
   // non-default profile (default-profile sessions stay clean). The badge
-  // uses the profile's chosen icon and tooltips the profile name.
+  // uses the profile's chosen icon and tooltips the profile name. Lives
+  // in the left column, directly under the pin, so it's clearly visible
+  // and sized large enough (20px) to recognise the brand monogram at a
+  // glance without crowding the session title.
+  let profileBadgeEl = null;
   try {
     const profileId = (window._sessionProfileMap || {})[session.sessionId];
     if (profileId && profileId !== window._defaultProfileId) {
       const profile = (window._profilesById || {})[profileId];
       if (profile && profile.icon && typeof window.renderProfileIcon === 'function') {
-        const wrap = document.createElement('span');
-        wrap.className = 'session-profile-badge';
-        wrap.title = profile.name;
-        wrap.appendChild(window.renderProfileIcon(profile.icon, 14));
-        summaryEl.prepend(wrap);
+        profileBadgeEl = document.createElement('span');
+        profileBadgeEl.className = 'session-profile-badge';
+        profileBadgeEl.title = profile.name;
+        profileBadgeEl.appendChild(window.renderProfileIcon(profile.icon, 20));
       }
     }
   } catch {}
@@ -757,7 +760,14 @@ function buildSessionItem(session) {
     actions.appendChild(launchConfigBtn);
   }
 
-  row.appendChild(pin);
+  // Left column stacks pin on top with the profile badge directly below
+  // when the session is on a non-default profile. Keeps both visible
+  // without crowding the title row.
+  const leftCol = document.createElement('div');
+  leftCol.className = 'session-leftcol';
+  leftCol.appendChild(pin);
+  if (profileBadgeEl) leftCol.appendChild(profileBadgeEl);
+  row.appendChild(leftCol);
   row.appendChild(dot);
   row.appendChild(info);
   row.appendChild(actions);
