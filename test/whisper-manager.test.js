@@ -34,16 +34,40 @@ test('findBinary: explicit but missing returns null (no autodetect surprise)', (
   }
 });
 
-test('modelSearchPaths: ordering is explicit → adjacent → userData', () => {
+test('modelSearchPaths: explicit override comes first', () => {
   const order = modelSearchPaths(
     { modelPath: '/explicit/model.bin', binaryPath: 'C:/foo/build/bin/Release/whisper-server.exe' },
     'C:/Users/x/AppData/Roaming/Switchboard'
   );
   assert.strictEqual(order[0], '/explicit/model.bin');
-  // Adjacent: ../../../models/<name> from the binary
-  assert.ok(order[1].endsWith(path.join('models', 'ggml-large-v3-turbo.bin')));
-  // userData fallback last
-  assert.ok(order[2].includes('whisper-models'));
+});
+
+test('modelSearchPaths: searches binary-adjacent dir', () => {
+  const order = modelSearchPaths(
+    { binaryPath: 'C:/foo/build/bin/Release/whisper-server.exe' },
+    'C:/userData'
+  );
+  // Binary-adjacent path must be present and point at the binary's own dir.
+  assert.ok(order.some(p => p === path.join('C:/foo/build/bin/Release', 'ggml-large-v3-turbo.bin')),
+    'expected binary-adjacent search path: ' + JSON.stringify(order));
+});
+
+test('modelSearchPaths: searches whisper.cpp project root models/ (4 levels up)', () => {
+  const order = modelSearchPaths(
+    { binaryPath: 'D:/development/whisper.cpp-src/build/bin/Release/whisper-server.exe' },
+    'C:/userData'
+  );
+  // Canonical whisper.cpp layout: models/ at the project root.
+  assert.ok(order.some(p => p === path.join('D:/development/whisper.cpp-src', 'models', 'ggml-large-v3-turbo.bin')),
+    'expected project-root models/ in: ' + JSON.stringify(order));
+});
+
+test('modelSearchPaths: userData fallback comes last', () => {
+  const order = modelSearchPaths(
+    { binaryPath: 'C:/foo/build/bin/Release/whisper-server.exe' },
+    'C:/Users/x/AppData/Roaming/Switchboard'
+  );
+  assert.ok(order[order.length - 1].includes('whisper-models'));
 });
 
 test('findModel: returns first existing path', () => {

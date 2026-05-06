@@ -38,15 +38,30 @@ const WHISPER_BINARY_CANDIDATES = [
 ];
 
 const MODEL_FILENAME = 'ggml-large-v3-turbo.bin';
-// Model search order: explicit settings override → adjacent to the binary →
-// our managed userData dir. We don't auto-download in v1; we surface a
-// clear error and the user fetches it via the existing whisper.cpp script.
+// Model search order, most-specific first:
+//   1. Explicit settings override (Settings → Voice → Model Path)
+//   2. Same directory as whisper-server.exe (most permissive — works no
+//      matter where the user dropped the file)
+//   3. <repo-root>/models/ for the standard whisper.cpp project layout
+//      (binary at <root>/build/bin/Release/, models at <root>/models/)
+//   4. <repo-root>/build/models/ — alternative layouts seen in the wild
+//   5. <userData>/whisper-models/ — Switchboard-managed fallback
+// We don't auto-download in v1; we surface a clear error and the user
+// fetches it via the existing whisper.cpp download-ggml-model script.
 function modelSearchPaths(opts, userDataDir) {
   const out = [];
   if (opts.modelPath) out.push(opts.modelPath);
   if (opts.binaryPath) {
-    const adj = path.join(path.dirname(path.dirname(path.dirname(opts.binaryPath))), 'models', MODEL_FILENAME);
-    out.push(adj);
+    const binDir = path.dirname(opts.binaryPath);
+    // 2: alongside the binary
+    out.push(path.join(binDir, MODEL_FILENAME));
+    // 3: <root>/models/ — for whisper.cpp's canonical layout, that's
+    //    4 dirnames up from <root>/build/bin/Release/<exe>.
+    const fourUp = path.dirname(path.dirname(path.dirname(path.dirname(opts.binaryPath))));
+    out.push(path.join(fourUp, 'models', MODEL_FILENAME));
+    // 4: <build>/models/ — 3 dirnames up.
+    const threeUp = path.dirname(path.dirname(path.dirname(opts.binaryPath)));
+    out.push(path.join(threeUp, 'models', MODEL_FILENAME));
   }
   if (userDataDir) out.push(path.join(userDataDir, 'whisper-models', MODEL_FILENAME));
   return out;
