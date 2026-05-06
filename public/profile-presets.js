@@ -46,6 +46,15 @@
         ANTHROPIC_DEFAULT_HAIKU_MODEL: 'deepseek-v4-flash',
         CLAUDE_CODE_SUBAGENT_MODEL: 'deepseek-v4-flash',
         CLAUDE_CODE_EFFORT_LEVEL: 'max',
+        // Override metadata.user_id with a clean static value. DeepSeek's
+        // Anthropic-compat endpoint validates user_id against the regex
+        // ^[a-zA-Z0-9_-]+$. Claude Code's default user_id (a hash + suffix
+        // for sub-agent calls) contains characters that fail the regex,
+        // producing "400 Invalid 'user_id'" errors mid-session, especially
+        // once subagents are spawned. CLAUDE_CODE_EXTRA_BODY is shallow-
+        // merged into every API request body, so this metadata block
+        // replaces whatever Claude Code constructed.
+        CLAUDE_CODE_EXTRA_BODY: '{"metadata":{"user_id":"switchboard-deepseek"}}',
         // Stability flags for third-party Anthropic-compatible endpoints:
         //   NONESSENTIAL_TRAFFIC=1 — bundles DISABLE_AUTOUPDATER /
         //     DISABLE_BUG_COMMAND / DISABLE_ERROR_REPORTING / DISABLE_TELEMETRY
