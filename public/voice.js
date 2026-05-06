@@ -145,7 +145,10 @@
       setTimeout(hideIndicator, 2400);
       return false;
     }
-    if (_state.mode !== 'idle') return false;
+    // NOTE: callers gate on _state.mode === 'idle' BEFORE flipping mode and
+    // then calling us — so by the time we run, mode is already 'recording-*'.
+    // The previous check `if (_state.mode !== 'idle') return false` therefore
+    // always tripped and silently rejected every record attempt.
 
     let stream;
     try {
