@@ -73,6 +73,7 @@ contextBridge.exposeInMainWorld('api', {
   // (logon-trigger) install for "always available" mode.
   whisper: {
     status: () => ipcRenderer.invoke('whisper:status'),
+    ping: () => ipcRenderer.invoke('whisper:ping'),
     start: () => ipcRenderer.invoke('whisper:start'),
     stop: () => ipcRenderer.invoke('whisper:stop'),
     restart: () => ipcRenderer.invoke('whisper:restart'),
