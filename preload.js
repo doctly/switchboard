@@ -69,6 +69,24 @@ contextBridge.exposeInMainWorld('api', {
     },
   },
 
+  // Local whisper.cpp HTTP server: status + lifecycle control + scheduled-task
+  // (logon-trigger) install for "always available" mode.
+  whisper: {
+    status: () => ipcRenderer.invoke('whisper:status'),
+    start: () => ipcRenderer.invoke('whisper:start'),
+    stop: () => ipcRenderer.invoke('whisper:stop'),
+    restart: () => ipcRenderer.invoke('whisper:restart'),
+    installTask: () => ipcRenderer.invoke('whisper:install-task'),
+    uninstallTask: () => ipcRenderer.invoke('whisper:uninstall-task'),
+    queryTask: () => ipcRenderer.invoke('whisper:query-task'),
+    updateSettings: (next) => ipcRenderer.invoke('whisper:update-settings', next),
+    onState: (cb) => {
+      const handler = (_e, s) => cb(s);
+      ipcRenderer.on('whisper-state', handler);
+      return () => ipcRenderer.removeListener('whisper-state', handler);
+    },
+  },
+
   browseFolder: () => ipcRenderer.invoke('browse-folder'),
   addProject: (projectPath) => ipcRenderer.invoke('add-project', projectPath),
   removeProject: (projectPath) => ipcRenderer.invoke('remove-project', projectPath),
