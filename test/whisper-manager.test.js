@@ -123,9 +123,7 @@ test('waitUntilReady: returns false when deadline hits without success', async (
   assert.strictEqual(ok, false);
 });
 
-test('TASK_NAME and DEFAULT_PORT are stable constants', () => {
-  assert.strictEqual(typeof wm.TASK_NAME, 'string');
-  assert.ok(wm.TASK_NAME.length > 0);
+test('DEFAULT_PORT is a stable, non-clashing dynamic-range port', () => {
   assert.strictEqual(typeof wm.DEFAULT_PORT, 'number');
   assert.ok(wm.DEFAULT_PORT >= 1024 && wm.DEFAULT_PORT < 65536);
 });

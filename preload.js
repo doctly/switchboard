@@ -77,9 +77,6 @@ contextBridge.exposeInMainWorld('api', {
     start: () => ipcRenderer.invoke('whisper:start'),
     stop: () => ipcRenderer.invoke('whisper:stop'),
     restart: () => ipcRenderer.invoke('whisper:restart'),
-    installTask: () => ipcRenderer.invoke('whisper:install-task'),
-    uninstallTask: () => ipcRenderer.invoke('whisper:uninstall-task'),
-    queryTask: () => ipcRenderer.invoke('whisper:query-task'),
     updateSettings: (next) => ipcRenderer.invoke('whisper:update-settings', next),
     onState: (cb) => {
       const handler = (_e, s) => cb(s);
