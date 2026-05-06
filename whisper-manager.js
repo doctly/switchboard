@@ -292,8 +292,12 @@ function installScheduledTask() {
   return new Promise((resolve) => {
     if (!isWindows()) return resolve({ ok: false, error: 'scheduled-task install is Windows-only' });
     const binary = findBinary(_settings);
-    const model = findModel(_settings, _userDataDir);
     if (!binary) return resolve({ ok: false, error: 'whisper-server.exe not found' });
+    // Pass the discovered binary into findModel so binary-relative search
+    // paths (binary-adjacent dir, project-root models/, etc.) are walked
+    // even if the user hasn't pinned an explicit binaryPath in settings.
+    // Same fix as PR #15 applied here for the install path.
+    const model = findModel({ ..._settings, binaryPath: binary }, _userDataDir);
     if (!model) return resolve({ ok: false, error: 'model file not found' });
 
     // Build the command line. schtasks /TR wants the full command quoted.
@@ -353,6 +357,12 @@ async function init({ log, app, getMainWindow, ipcMain, getVoiceSettings }) {
   _settings = (typeof getVoiceSettings === 'function' ? getVoiceSettings() : null) || {};
 
   ipcMain.handle('whisper:status', () => getStatus());
+  // Quick ping — useful for the settings panel "Test connection" button.
+  // Returns whether the configured host:port responds to HTTP.
+  ipcMain.handle('whisper:ping', async () => {
+    const ok = await probe(_state.host, _state.port, 1500);
+    return { ok, host: _state.host, port: _state.port, endpoint: `http://${_state.host}:${_state.port}/inference` };
+  });
   ipcMain.handle('whisper:start', async () => { await start(); return getStatus(); });
   ipcMain.handle('whisper:stop', () => { killChild(); return getStatus(); });
   ipcMain.handle('whisper:restart', async () => { killChild(); _stopping = false; await start(); return getStatus(); });

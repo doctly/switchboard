@@ -147,8 +147,23 @@
     startBtn.onclick = () => window.api.whisper.start().then(() => refreshStatus());
     stopBtn.onclick = () => window.api.whisper.stop().then(() => refreshStatus());
     restartBtn.onclick = () => window.api.whisper.restart().then(() => refreshStatus());
-    ctrls.appendChild(startBtn); ctrls.appendChild(stopBtn); ctrls.appendChild(restartBtn);
-    root.appendChild(field('Server', 'Manage the whisper-server child process.', ctrls));
+    const pingBtn = document.createElement('button'); pingBtn.className = 'voice-srv-btn'; pingBtn.type = 'button'; pingBtn.textContent = 'Ping';
+    const pingOut = document.createElement('span'); pingOut.className = 'voice-task-status';
+    pingBtn.onclick = async () => {
+      pingBtn.disabled = true;
+      pingOut.classList.remove('is-error');
+      pingOut.textContent = 'Pinging…';
+      try {
+        const r = await window.api.whisper.ping();
+        pingOut.textContent = r.ok ? `Reachable at ${r.endpoint}` : `Unreachable at ${r.endpoint} — server not running on configured port`;
+        pingOut.classList.toggle('is-error', !r.ok);
+      } catch (err) {
+        pingOut.textContent = 'Ping failed: ' + (err.message || err);
+        pingOut.classList.add('is-error');
+      } finally { pingBtn.disabled = false; }
+    };
+    ctrls.appendChild(startBtn); ctrls.appendChild(stopBtn); ctrls.appendChild(restartBtn); ctrls.appendChild(pingBtn); ctrls.appendChild(pingOut);
+    root.appendChild(field('Server', 'Manage + diagnose the whisper-server child process. "Ping" reports whether the configured port is reachable.', ctrls));
 
     // Diagnostic — record 3s, transcribe, show result. Bypasses the hotkey
     // path so you can isolate audio/whisper from keyboard issues.
