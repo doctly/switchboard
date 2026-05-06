@@ -254,20 +254,36 @@ function createWindow() {
     if (key === 'r' && input.control && input.shift) event.preventDefault();
   });
 
-  // Save window bounds on move/resize (debounced)
+  // Save window bounds on move/resize (debounced) + on close (immediate).
+  // The debounced save handles in-session resizing; the immediate save on
+  // close-request captures the final state even if the user closed the
+  // window within the debounce window — which used to lose the latest
+  // bounds because the setTimeout fired after isDestroyed() was already true.
   let boundsTimer = null;
-  const saveBounds = () => {
-    if (boundsTimer) clearTimeout(boundsTimer);
-    boundsTimer = setTimeout(() => {
-      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMinimized()) return;
-      const b = mainWindow.getBounds();
-      const global = getSetting('global') || {};
-      global.windowBounds = { x: b.x, y: b.y, width: b.width, height: b.height };
-      setSetting('global', global);
-    }, 500);
+  const writeBoundsNow = () => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMinimized()) return;
+    const b = mainWindow.getBounds();
+    const global = getSetting('global') || {};
+    global.windowBounds = { x: b.x, y: b.y, width: b.width, height: b.height };
+    setSetting('global', global);
   };
-  mainWindow.on('resize', saveBounds);
-  mainWindow.on('move', saveBounds);
+  const saveBoundsDebounced = () => {
+    if (boundsTimer) clearTimeout(boundsTimer);
+    boundsTimer = setTimeout(writeBoundsNow, 500);
+  };
+  mainWindow.on('resize', saveBoundsDebounced);
+  mainWindow.on('move', saveBoundsDebounced);
+  // 'close' fires while the window is still alive — perfect time to flush.
+  // Cancel any pending debounced write so we don't double-save.
+  mainWindow.on('close', () => {
+    if (boundsTimer) { clearTimeout(boundsTimer); boundsTimer = null; }
+    writeBoundsNow();
+  });
+  // Belt-and-braces for app-wide quit (Cmd+Q on macOS, taskbar quit, etc.).
+  app.on('before-quit', () => {
+    if (boundsTimer) { clearTimeout(boundsTimer); boundsTimer = null; }
+    writeBoundsNow();
+  });
 
   // Also save immediately before close (debounce may not have flushed)
   mainWindow.on('close', () => {
