@@ -585,9 +585,16 @@ function rebindSidebarEvents(projects) {
 
     const launchConfigBtn = item.querySelector('.session-launch-config-btn');
     if (launchConfigBtn) {
+      launchConfigBtn.title = 'Resume with profile…';
       launchConfigBtn.onclick = (e) => {
         e.stopPropagation();
-        showResumeSessionDialog(session);
+        // Quick popover: pick a profile, click → resume on that backend.
+        // Bottom entry opens the full Resume dialog for permission-mode etc.
+        if (typeof showResumeProfilePopover === 'function') {
+          showResumeProfilePopover(session, launchConfigBtn);
+        } else {
+          showResumeSessionDialog(session);
+        }
       };
     }
 
