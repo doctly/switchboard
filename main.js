@@ -1444,7 +1444,10 @@ app.whenReady().then(() => {
           "style-src 'self' 'unsafe-inline'; " +
           "img-src 'self' data: blob:; " +
           "font-src 'self' data:; " +
-          "connect-src 'self'; " +
+          // 127.0.0.1 + localhost on any port for local services
+          // (whisper.cpp transcription server, future local proxies, etc.).
+          // Routable network is still blocked.
+          "connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; " +
           "object-src 'none'; " +
           "base-uri 'self'; " +
           "frame-ancestors 'none'"
