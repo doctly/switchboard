@@ -13,6 +13,7 @@ const { isSafeExternalUrl } = require('./url-guard');
 const branding = require('./branding');
 const profilesModule = require('./profiles');
 const sessionProfiles = require('./session-profiles');
+const analyticsModule = require('./analytics');
 
 // Sync IPC for the preload to fetch the brand-strings snapshot at load
 // time. ipcMain.on handles sendSync via event.returnValue.
@@ -1503,6 +1504,7 @@ app.whenReady().then(() => {
   scheduleIpc.init(log, runScheduleCommand);
   profilesModule.init(log);
   sessionProfiles.init(log);
+  analyticsModule.init(log, () => mainWindow);
   startScheduler(log, runScheduleCommand);
 
   // Re-index search if FTS table was recreated (e.g. tokenizer config change)
