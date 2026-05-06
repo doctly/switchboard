@@ -834,8 +834,19 @@ async function openSession(session, customOptions) {
   // Create new terminal entry (hidden until showSession)
   const entry = createTerminalEntry(session);
 
-  // Open terminal in main process
-  const resumeOptions = customOptions || await resolveDefaultSessionOptions({ projectPath });
+  // Open terminal in main process. Plain-click resume (no customOptions)
+  // should keep using whatever profile this session last ran with — that's
+  // the only way "resume" makes intuitive sense when you've been working
+  // against a non-default backend like DeepSeek. Fall back to the global
+  // default only if there's no recorded profile for this sessionId.
+  let resumeOptions;
+  if (customOptions) {
+    resumeOptions = customOptions;
+  } else {
+    resumeOptions = await resolveDefaultSessionOptions({ projectPath });
+    const recordedProfile = (window._sessionProfileMap || {})[sessionId];
+    if (recordedProfile) resumeOptions.profileId = recordedProfile;
+  }
   const result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions);
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
