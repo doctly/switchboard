@@ -15,6 +15,7 @@ const profilesModule = require('./profiles');
 const sessionProfiles = require('./session-profiles');
 const analyticsModule = require('./analytics');
 const whisperManager = require('./whisper-manager');
+const { computeWindowBounds } = require('./window-bounds');
 
 // Sync IPC for the preload to fetch the brand-strings snapshot at load
 // time. ipcMain.on handles sendSync via event.returnValue.
@@ -111,76 +112,18 @@ const activeSessions = new Map();
 let mainWindow = null;
 
 function createWindow() {
-  // Restore saved window bounds
-  const savedBounds = getSetting('global')?.windowBounds;
-  // Conservative default: fits a 1366×768 laptop comfortably and looks
-  // sensible on a 1920×1080 monitor. Users with bigger displays just
-  // resize once and the bounds persist.
-  let bounds = { width: 1180, height: 800 };
-
-  let restorePosition = null;
-  if (savedBounds && savedBounds.width && savedBounds.height) {
-    bounds.width = savedBounds.width;
-    bounds.height = savedBounds.height;
-
-    // Only restore position if it's on a visible display
-    if (savedBounds.x != null && savedBounds.y != null) {
-      const displays = screen.getAllDisplays();
-      const onScreen = displays.some(d => {
-        const b = d.bounds;
-        return savedBounds.x >= b.x - 100 && savedBounds.x < b.x + b.width &&
-               savedBounds.y >= b.y - 100 && savedBounds.y < b.y + b.height;
-      });
-      if (onScreen) {
-        restorePosition = { x: savedBounds.x, y: savedBounds.y };
-      }
-    }
-  }
-
-  // Clamp window bounds to the active display's work area so we never open
-  // larger than the screen. Without this, a windowBounds saved on a larger
-  // monitor (or from an older corrupted value) makes the window open edge-
-  // to-edge or off-screen on the current display.
-  //
-  // For multi-monitor setups, also cap to the SMALLEST display's work area.
-  // This keeps the window comfortably sized whether the user moves it to a
-  // smaller secondary monitor or keeps it on the primary — the fixed-size
-  // default never opens "huge for the big monitor" on a smaller screen.
-  // Once the user resizes it and the new bounds get saved, that wins.
+  // All bounds-computation logic lives in window-bounds.js as a pure
+  // function — fully covered by test/window-bounds.test.js. createWindow
+  // just collects the inputs and applies the result.
+  const savedBounds = getSetting('global')?.windowBounds || null;
+  let bounds, restorePosition;
   try {
-    const targetDisplay = restorePosition
-      ? screen.getDisplayNearestPoint(restorePosition)
-      : screen.getPrimaryDisplay();
-    const work = targetDisplay.workAreaSize;  // excludes taskbar/dock
-    let maxW = Math.max(800, Math.floor(work.width * 0.95));
-    let maxH = Math.max(500, Math.floor(work.height * 0.95));
-    // Tighten further to the smallest display's work area when multi-monitor.
-    const allDisplays = screen.getAllDisplays();
-    if (allDisplays.length > 1) {
-      const smallest = allDisplays.reduce((acc, d) =>
-        (d.workAreaSize.width * d.workAreaSize.height < acc.workAreaSize.width * acc.workAreaSize.height) ? d : acc,
-        allDisplays[0]);
-      const smW = Math.max(800, Math.floor(smallest.workAreaSize.width * 0.95));
-      const smH = Math.max(500, Math.floor(smallest.workAreaSize.height * 0.95));
-      if (smW < maxW) maxW = smW;
-      if (smH < maxH) maxH = smH;
-    }
-    if (bounds.width > maxW) bounds.width = maxW;
-    if (bounds.height > maxH) bounds.height = maxH;
-    // Also clamp the restore position so the window doesn't spawn pinned
-    // to the bottom-right of an off-screen origin.
-    if (restorePosition) {
-      const origin = targetDisplay.workArea;
-      if (restorePosition.x + bounds.width > origin.x + origin.width) {
-        restorePosition.x = origin.x + Math.max(0, origin.width - bounds.width);
-      }
-      if (restorePosition.y + bounds.height > origin.y + origin.height) {
-        restorePosition.y = origin.y + Math.max(0, origin.height - bounds.height);
-      }
-      if (restorePosition.x < origin.x) restorePosition.x = origin.x;
-      if (restorePosition.y < origin.y) restorePosition.y = origin.y;
-    }
-  } catch {}
+    const displays = screen.getAllDisplays();
+    ({ bounds, restorePosition } = computeWindowBounds(savedBounds, displays));
+  } catch {
+    bounds = { width: 1400, height: 900 };
+    restorePosition = null;
+  }
 
   mainWindow = new BrowserWindow({
     ...bounds,
