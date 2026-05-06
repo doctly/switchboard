@@ -170,7 +170,10 @@ async function spawnChild() {
     });
     return;
   }
-  const model = findModel(_settings, _userDataDir);
+  // Pass the *discovered* binary path into the model search so binary-
+  // relative locations (binary-adjacent dir, project-root models/, etc.)
+  // are checked even when the user hasn't pinned a binaryPath in settings.
+  const model = findModel({ ..._settings, binaryPath: binary }, _userDataDir);
   if (!model) {
     setState({
       status: 'error',
@@ -259,12 +262,13 @@ async function start() {
 
   // Externally managed (scheduled task or user-launched)?
   if (await detectExternal(_state.host, _state.port)) {
+    const detectedBinary = findBinary(_settings);
     setState({
       status: 'ready',
       error: null,
       managedBy: 'external',
-      binaryPath: findBinary(_settings),
-      modelPath: findModel(_settings, _userDataDir),
+      binaryPath: detectedBinary,
+      modelPath: findModel({ ..._settings, binaryPath: detectedBinary }, _userDataDir),
     });
     if (_logger) _logger.info(`[whisper] using externally-managed server at ${_state.host}:${_state.port}`);
     return;
