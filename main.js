@@ -262,7 +262,14 @@ function createWindow() {
   let boundsTimer = null;
   const writeBoundsNow = () => {
     if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMinimized()) return;
-    const b = mainWindow.getBounds();
+    // getNormalBounds() returns the un-maximized "restore" bounds — what
+    // we want to persist. getBounds() returns the *current* size which,
+    // when maximized via Windows snap or title-bar double-click, is the
+    // entire monitor's work area. Saving that meant the next launch
+    // restored the window pinned full-screen with no way to escape.
+    const b = (typeof mainWindow.getNormalBounds === 'function')
+      ? mainWindow.getNormalBounds()
+      : mainWindow.getBounds();
     const global = getSetting('global') || {};
     global.windowBounds = { x: b.x, y: b.y, width: b.width, height: b.height };
     setSetting('global', global);
