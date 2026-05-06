@@ -18,6 +18,10 @@ const path = require('path');
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ENV_REF_RE = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$/;
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+// Icon key — references an entry in the renderer-side PROFILE_ICONS catalog.
+// Validated as a short slug so a malicious value can't smuggle markup through
+// even though the renderer uses createElementNS rather than innerHTML.
+const ICON_KEY_RE = /^[a-z][a-z0-9_-]{0,32}$/;
 const MAX_PROFILES = 32;
 const MAX_ENV_VARS = 64;
 const MAX_VALUE_LEN = 4096;
@@ -47,6 +51,10 @@ function isValidProfile(p) {
     if (!ENV_NAME_RE.test(k)) return false;
     const v = p.env[k];
     if (typeof v !== 'string' || v.length > MAX_VALUE_LEN) return false;
+  }
+  // Optional icon: must be a known short slug if present.
+  if (p.icon !== undefined && p.icon !== null && p.icon !== '') {
+    if (typeof p.icon !== 'string' || !ICON_KEY_RE.test(p.icon)) return false;
   }
   return true;
 }

@@ -29,11 +29,11 @@
     const isNew = !profile;
     let state;
     if (profile) {
-      state = { id: profile.id, name: profile.name, env: { ...profile.env } };
+      state = { id: profile.id, name: profile.name, env: { ...profile.env }, icon: profile.icon || '' };
     } else if (preset) {
-      state = { id: uid(), name: preset.name, env: { ...preset.env } };
+      state = { id: uid(), name: preset.name, env: { ...preset.env }, icon: preset.icon || '' };
     } else {
-      state = { id: uid(), name: '', env: {} };
+      state = { id: uid(), name: '', env: {}, icon: '' };
     }
 
     const titleText = isNew
@@ -64,6 +64,35 @@
     const nameInput = nameField.querySelector('.profile-name-input');
     nameInput.value = state.name;
     dialog.appendChild(nameField);
+
+    // Icon picker — controls the badge shown on sidebar sessions launched
+    // with this profile. Pre-selects the preset's default for new-from-template.
+    const iconField = el('div', 'settings-field settings-field-wide profile-icon-field');
+    const iconLabel = el('div', 'settings-field-info');
+    iconLabel.innerHTML =
+      '<span class="settings-label">Icon</span>' +
+      '<div class="settings-description">Shown on sidebar sessions launched with this profile (default profile sessions stay unbadged).</div>';
+    iconField.appendChild(iconLabel);
+    const iconGrid = el('div', 'profile-icon-grid');
+    const iconKeys = (typeof window.getProfileIconKeys === 'function') ? window.getProfileIconKeys() : [];
+    function renderIconGrid() {
+      iconGrid.innerHTML = '';
+      for (const key of iconKeys) {
+        const cell = el('button', 'profile-icon-cell' + (state.icon === key ? ' selected' : ''));
+        cell.type = 'button';
+        cell.title = (window.PROFILE_ICONS && window.PROFILE_ICONS[key] && window.PROFILE_ICONS[key].label) || key;
+        cell.dataset.iconKey = key;
+        cell.appendChild(window.renderProfileIcon(key, 24));
+        cell.onclick = () => {
+          state.icon = (state.icon === key) ? '' : key;  // click again to clear
+          renderIconGrid();
+        };
+        iconGrid.appendChild(cell);
+      }
+    }
+    renderIconGrid();
+    iconField.appendChild(iconGrid);
+    dialog.appendChild(iconField);
 
     // Env vars section
     const envSection = el('div', 'settings-field settings-field-wide profile-env-section');
@@ -154,6 +183,10 @@
       deleteBtn.onclick = async () => {
         if (!confirm(`Delete profile "${state.name || state.id}"?`)) return;
         await window.api.profiles.delete(state.id);
+        if (typeof window.refreshProfileCaches === 'function') {
+          await window.refreshProfileCaches();
+          if (typeof refreshSidebar === 'function') refreshSidebar();
+        }
         close();
         onDelete && onDelete();
       };
@@ -174,8 +207,14 @@
       }
       if (invalid) { alert(invalid); return; }
 
-      const result = await window.api.profiles.save({ id: state.id, name, env });
+      const payload = { id: state.id, name, env };
+      if (state.icon) payload.icon = state.icon;
+      const result = await window.api.profiles.save(payload);
       if (!result.ok) { alert(`Save failed: ${result.error}`); return; }
+      if (typeof window.refreshProfileCaches === 'function') {
+        await window.refreshProfileCaches();
+        if (typeof refreshSidebar === 'function') refreshSidebar();
+      }
       close();
       onSave && onSave();
     };
@@ -205,6 +244,12 @@
     for (const p of data.profiles) {
       const isDefault = p.id === data.defaultProfileId;
       const row = el('div', 'profile-row');
+      // Lead with the profile's icon so the row matches the sidebar badge.
+      if (p.icon && typeof window.renderProfileIcon === 'function') {
+        const icoWrap = el('div', 'profile-row-icon');
+        icoWrap.appendChild(window.renderProfileIcon(p.icon, 28));
+        row.appendChild(icoWrap);
+      }
       const meta = el('div', 'profile-row-meta');
       const nm = el('div', 'profile-row-name', p.name);
       if (isDefault) {
@@ -221,6 +266,10 @@
       setDefaultBtn.textContent = isDefault ? 'Default ✓' : 'Set default';
       setDefaultBtn.onclick = async () => {
         await window.api.profiles.setDefault(isDefault ? null : p.id);
+        if (typeof window.refreshProfileCaches === 'function') {
+          await window.refreshProfileCaches();
+          if (typeof refreshSidebar === 'function') refreshSidebar();
+        }
         overlay.remove();
         showProfilesManager();
       };
@@ -250,6 +299,11 @@
       const tplList = el('div', 'profile-presets-list');
       for (const preset of presets) {
         const row = el('div', 'profile-preset-row');
+        if (preset.icon && typeof window.renderProfileIcon === 'function') {
+          const icoWrap = el('div', 'profile-row-icon');
+          icoWrap.appendChild(window.renderProfileIcon(preset.icon, 28));
+          row.appendChild(icoWrap);
+        }
         const meta = el('div', 'profile-row-meta');
         const nm = el('div', 'profile-row-name', preset.name);
         const sub = el('div', 'profile-row-sub', preset.summary || '');

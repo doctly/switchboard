@@ -19,6 +19,20 @@ test('isValidProfile accepts a well-formed profile', () => {
   }), true);
 });
 
+test('isValidProfile accepts an optional icon', () => {
+  assert.strictEqual(profiles.isValidProfile({ id: 'a', name: 'A', env: {}, icon: 'deepseek' }), true);
+  assert.strictEqual(profiles.isValidProfile({ id: 'a', name: 'A', env: {}, icon: '' }), true);
+  assert.strictEqual(profiles.isValidProfile({ id: 'a', name: 'A', env: {}, icon: null }), true);
+});
+
+test('isValidProfile rejects malformed icon keys', () => {
+  const base = { id: 'a', name: 'A', env: {} };
+  assert.strictEqual(profiles.isValidProfile({ ...base, icon: 'Has Spaces' }), false);
+  assert.strictEqual(profiles.isValidProfile({ ...base, icon: '../etc/passwd' }), false);
+  assert.strictEqual(profiles.isValidProfile({ ...base, icon: 'a'.repeat(64) }), false);
+  assert.strictEqual(profiles.isValidProfile({ ...base, icon: 123 }), false);
+});
+
 test('isValidProfile rejects bad ids, names, env', () => {
   const base = { id: 'a', name: 'A', env: {} };
   assert.strictEqual(profiles.isValidProfile({ ...base, id: 'has spaces' }), false);

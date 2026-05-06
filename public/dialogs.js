@@ -375,6 +375,16 @@ async function showNewSessionDialog(project) {
 
 async function showResumeSessionDialog(session) {
   const effective = await window.api.getEffectiveSettings(session.projectPath);
+  let profilesData = { profiles: [], defaultProfileId: null };
+  try { profilesData = await window.api.profiles.list(); } catch {}
+  // Pre-select whatever profile this session was last launched with, so the
+  // resume dialog reflects the current backend by default and the user can
+  // see at a glance what they're running on.
+  let lastProfileId = null;
+  try {
+    const map = await window.api.sessionProfiles.getAll();
+    lastProfileId = map[session.sessionId] || null;
+  } catch {}
 
   const overlay = document.createElement('div');
   overlay.className = 'new-session-overlay';
@@ -403,11 +413,40 @@ async function showResumeSessionDialog(session) {
 
   const sessionName = session.name || session.summary || session.sessionId.slice(0, 8);
 
+  // Build profile dropdown options. Pre-selects last-used so resuming
+  // keeps the same backend unless the user picks a different one — but
+  // the pick takes effect on this resume's pty spawn.
+  const profileOpts = (() => {
+    const opts = [];
+    const defaultName = profilesData.defaultProfileId
+      ? (profilesData.profiles.find(p => p.id === profilesData.defaultProfileId) || {}).name || ''
+      : null;
+    opts.push({ value: '', label: defaultName ? `Default (${defaultName})` : 'Default (none)' });
+    opts.push({ value: 'none', label: 'No profile (pass-through)' });
+    for (const p of profilesData.profiles) opts.push({ value: p.id, label: p.name });
+    // Pre-selected value: prefer the last-used profile if it still exists.
+    let pre = '';
+    if (lastProfileId === null) pre = '';
+    else if (lastProfileId && profilesData.profiles.find(p => p.id === lastProfileId)) pre = lastProfileId;
+    return { html: opts.map(o =>
+      `<option value="${escapeHtml(o.value)}" ${o.value === pre ? 'selected' : ''}>${escapeHtml(o.label)}</option>`
+    ).join(''), pre };
+  })();
+
   dialog.innerHTML = `
     <h3>Resume Session — ${escapeHtml(sessionName)}</h3>
     <div class="settings-field">
       <div class="settings-label">Permission Mode</div>
       <div class="permission-grid" id="rsd-mode-grid">${renderModeGrid()}</div>
+    </div>
+    <div class="settings-field">
+      <div class="settings-field-info">
+        <span class="settings-label">Profile</span>
+        <div class="settings-description">Switch backend on resume — env vars apply to the new pty spawn</div>
+      </div>
+      <div class="settings-field-control">
+        <select class="settings-input" id="rsd-profile" style="width:200px">${profileOpts.html}</select>
+      </div>
     </div>
     <div class="settings-field">
       <div class="settings-field-info">
@@ -479,6 +518,8 @@ async function showResumeSessionDialog(session) {
     if (preLaunch) options.preLaunchCmd = preLaunch;
     options.addDirs = dialog.querySelector('#rsd-add-dirs').value.trim();
     if (effective.mcpEmulation === false) options.mcpEmulation = false;
+    const profileSel = dialog.querySelector('#rsd-profile').value;
+    if (profileSel) options.profileId = profileSel;
     close();
     openSession(session, options);
   }

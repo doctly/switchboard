@@ -27,11 +27,13 @@
         ANTHROPIC_AUTH_TOKEN: '$ANTHROPIC_API_KEY',
       },
       tokenEnvHint: 'ANTHROPIC_API_KEY',
+      icon: 'anthropic',
     },
     {
       key: 'deepseek',
       name: 'DeepSeek',
       summary: "DeepSeek's Anthropic-compatible endpoint. Set DEEPSEEK_API_KEY on your host.",
+      icon: 'deepseek',
       env: {
         ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic',
         ANTHROPIC_AUTH_TOKEN: '$DEEPSEEK_API_KEY',
@@ -48,6 +50,7 @@
       key: 'glm',
       name: 'GLM (Z.ai)',
       summary: 'Z.ai GLM-5.x via Anthropic-compatible endpoint. Set ZAI_API_KEY on your host.',
+      icon: 'glm',
       env: {
         ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic',
         ANTHROPIC_AUTH_TOKEN: '$ZAI_API_KEY',
@@ -65,6 +68,7 @@
       key: 'openrouter',
       name: 'OpenRouter',
       summary: 'OpenRouter\'s Anthropic skin — failover across providers. Set OPENROUTER_API_KEY on your host.',
+      icon: 'openrouter',
       env: {
         ANTHROPIC_BASE_URL: 'https://openrouter.ai/api',
         ANTHROPIC_AUTH_TOKEN: '$OPENROUTER_API_KEY',
