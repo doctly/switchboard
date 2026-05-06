@@ -8,7 +8,7 @@
        code. style-src allows inline because existing widgets set element
        styles programmatically; injected HTML is sanitized elsewhere. -->
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:*; object-src 'none'; base-uri 'self'; frame-src 'none';">
+        content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:* wss://127.0.0.1:* wss://localhost:*; object-src 'none'; base-uri 'self'; frame-src 'none';">
   <title>Switchboard</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
   <link rel="stylesheet" href="style.css">
