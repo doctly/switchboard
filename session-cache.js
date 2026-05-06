@@ -4,6 +4,7 @@ const { Worker } = require('worker_threads');
 const { getFolderIndexMtimeMs } = require('./folder-index-state');
 const { deriveProjectPath } = require('./derive-project-path');
 const { readSessionFile } = require('./read-session-file');
+const { encodeProjectPath } = require('./encode-project-path');
 
 /**
  * Session cache module.
@@ -170,13 +171,13 @@ function buildProjectsFromCache(showArchived) {
   const global = getSetting('global') || {};
   const hiddenProjects = new Set(global.hiddenProjects || []);
 
-  // Group by folder (worktree sessions appear as separate projects)
+  // Group by folder (worktree sessions appear as separate projects).
+  // Only insert a project entry once we have a session that survives the
+  // archive filter — otherwise folders whose sessions are all archived would
+  // appear in the sidebar as undismissable phantom entries.
   const projectMap = new Map();
   for (const row of cachedRows) {
     if (hiddenProjects.has(row.projectPath)) continue;
-    if (!projectMap.has(row.folder)) {
-      projectMap.set(row.folder, { folder: row.folder, projectPath: row.projectPath, sessions: [] });
-    }
     const meta = metaMap.get(row.sessionId);
     const s = {
       sessionId: row.sessionId,
@@ -192,6 +193,9 @@ function buildProjectsFromCache(showArchived) {
       archived: meta?.archived || 0,
     };
     if (!showArchived && s.archived) continue;
+    if (!projectMap.has(row.folder)) {
+      projectMap.set(row.folder, { folder: row.folder, projectPath: row.projectPath, sessions: [] });
+    }
     projectMap.get(row.folder).sessions.push(s);
   }
 
@@ -212,7 +216,7 @@ function buildProjectsFromCache(showArchived) {
   // Inject active plain terminal sessions so they participate in sorting
   for (const [sessionId, session] of activeSessions) {
     if (session.exited || !session.isPlainTerminal) continue;
-    const folder = session.projectPath.replace(/[/_]/g, '-').replace(/^-/, '-');
+    const folder = encodeProjectPath(session.projectPath);
     if (hiddenProjects.has(session.projectPath)) continue;
     if (!projectMap.has(folder)) {
       projectMap.set(folder, { folder, projectPath: session.projectPath, sessions: [] });
