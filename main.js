@@ -113,7 +113,10 @@ let mainWindow = null;
 function createWindow() {
   // Restore saved window bounds
   const savedBounds = getSetting('global')?.windowBounds;
-  let bounds = { width: 1400, height: 900 };
+  // Conservative default: fits a 1366×768 laptop comfortably and looks
+  // sensible on a 1920×1080 monitor. Users with bigger displays just
+  // resize once and the bounds persist.
+  let bounds = { width: 1180, height: 800 };
 
   let restorePosition = null;
   if (savedBounds && savedBounds.width && savedBounds.height) {
@@ -138,13 +141,30 @@ function createWindow() {
   // larger than the screen. Without this, a windowBounds saved on a larger
   // monitor (or from an older corrupted value) makes the window open edge-
   // to-edge or off-screen on the current display.
+  //
+  // For multi-monitor setups, also cap to the SMALLEST display's work area.
+  // This keeps the window comfortably sized whether the user moves it to a
+  // smaller secondary monitor or keeps it on the primary — the fixed-size
+  // default never opens "huge for the big monitor" on a smaller screen.
+  // Once the user resizes it and the new bounds get saved, that wins.
   try {
     const targetDisplay = restorePosition
       ? screen.getDisplayNearestPoint(restorePosition)
       : screen.getPrimaryDisplay();
     const work = targetDisplay.workAreaSize;  // excludes taskbar/dock
-    const maxW = Math.max(800, Math.floor(work.width * 0.95));
-    const maxH = Math.max(500, Math.floor(work.height * 0.95));
+    let maxW = Math.max(800, Math.floor(work.width * 0.95));
+    let maxH = Math.max(500, Math.floor(work.height * 0.95));
+    // Tighten further to the smallest display's work area when multi-monitor.
+    const allDisplays = screen.getAllDisplays();
+    if (allDisplays.length > 1) {
+      const smallest = allDisplays.reduce((acc, d) =>
+        (d.workAreaSize.width * d.workAreaSize.height < acc.workAreaSize.width * acc.workAreaSize.height) ? d : acc,
+        allDisplays[0]);
+      const smW = Math.max(800, Math.floor(smallest.workAreaSize.width * 0.95));
+      const smH = Math.max(500, Math.floor(smallest.workAreaSize.height * 0.95));
+      if (smW < maxW) maxW = smW;
+      if (smH < maxH) maxH = smH;
+    }
     if (bounds.width > maxW) bounds.width = maxW;
     if (bounds.height > maxH) bounds.height = maxH;
     // Also clamp the restore position so the window doesn't spawn pinned
