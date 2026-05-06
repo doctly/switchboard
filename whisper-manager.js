@@ -31,10 +31,16 @@ const MAX_LOG_LINES = 200;
 
 // Detected whisper.cpp install paths to try in order. The first one with a
 // matching whisper-server.exe is used unless the user overrides via settings.
+// Most-permanent locations first so users who relocate from a build dir to
+// a managed install path automatically pick up the move on next launch.
 const WHISPER_BINARY_CANDIDATES = [
+  // Recommended permanent install locations (managed, won't disappear when
+  // the user cleans up build outputs).
+  'C:/whisper-cpp/whisper-server.exe',
+  'C:/Program Files/whisper-cpp/whisper-server.exe',
+  // Build-tree fallbacks for users running directly from a clone.
   'D:/development/whisper.cpp-src/build/bin/Release/whisper-server.exe',
   'C:/development/whisper.cpp-src/build/bin/Release/whisper-server.exe',
-  // Common community install paths — we'll add to this list as we hear of others.
 ];
 
 const MODEL_FILENAME = 'ggml-large-v3-turbo.bin';
