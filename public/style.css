@@ -3779,6 +3779,8 @@ body { display: flex; flex-direction: column; }
   font-style: italic;
 }
 .profiles-dialog {
+  width: 820px;
+  max-width: 95vw;
   max-height: 85vh;
   overflow-y: auto;
 }
@@ -3831,15 +3833,21 @@ body.theme-light .profiles-section-header {
 }
 .profile-env-row {
   display: grid;
-  grid-template-columns: 1fr 1.5fr auto auto;
+  grid-template-columns: 240px 1fr auto auto;
   gap: 8px;
   align-items: center;
 }
 .profile-env-row .profile-env-key,
 .profile-env-row .profile-env-val {
   width: 100%;
+  min-width: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
+  text-overflow: ellipsis;
+}
+.profile-env-row .profile-env-val {
+  /* Anthropic env vars (base URLs, model ids) can be long; let it grow. */
+  font-size: 12.5px;
 }
 .profile-env-status {
   font-size: 10px;

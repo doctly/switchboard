@@ -46,6 +46,7 @@ const memoryPanel = new ViewerPanel(memoryViewer, {
 const terminalArea = document.getElementById('terminal-area');
 const settingsViewer = document.getElementById('settings-viewer');
 const globalSettingsBtn = document.getElementById('global-settings-btn');
+const globalProfilesBtn = document.getElementById('global-profiles-btn');
 const addProjectBtn = document.getElementById('add-project-btn');
 const resortBtn = document.getElementById('resort-btn');
 const jsonlViewer = document.getElementById('jsonl-viewer');
@@ -416,6 +417,13 @@ globalSettingsBtn.innerHTML = ICONS.gear(18);
 globalSettingsBtn.addEventListener('click', () => {
   openSettingsViewer('global');
 });
+
+// --- Global profiles button: top-bar shortcut to the profile manager ---
+if (globalProfilesBtn) {
+  globalProfilesBtn.addEventListener('click', () => {
+    if (typeof window.showProfilesManager === 'function') window.showProfilesManager();
+  });
+}
 
 // --- Add project button ---
 addProjectBtn.addEventListener('click', () => {
