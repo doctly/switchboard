@@ -3865,12 +3865,23 @@ body.theme-light .profile-icon-cell.selected {
   align-items: center;
 }
 
-/* --- Sidebar profile badge -------------------------------------------- */
+/* --- Sidebar left column (pin + profile badge) ----------------------- */
+.session-leftcol {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+.session-leftcol .session-pin {
+  /* Pin keeps its own clickable target; we just stack vertically. */
+}
+
 .session-profile-badge {
   display: inline-flex;
   align-items: center;
-  margin-right: 6px;
-  vertical-align: middle;
+  justify-content: center;
 }
 .session-profile-badge .profile-icon {
   display: block;
