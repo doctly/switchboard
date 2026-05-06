@@ -13,11 +13,15 @@ function readSessionFile(filePath, folder, projectPath) {
     let textContent = '';
     let slug = null;
     let customTitle = null;
+    let aiTitle = null;
     for (const line of lines) {
       const entry = JSON.parse(line);
       if (entry.slug && !slug) slug = entry.slug;
       if (entry.type === 'custom-title' && entry.customTitle) {
         customTitle = entry.customTitle;
+      }
+      if (entry.type === 'ai-title' && entry.aiTitle) {
+        aiTitle = entry.aiTitle;
       }
       if (entry.type === 'user' || entry.type === 'assistant' ||
           (entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'))) {
@@ -45,7 +49,7 @@ function readSessionFile(filePath, folder, projectPath) {
       summary, firstPrompt: summary,
       created: stat.birthtime.toISOString(),
       modified: stat.mtime.toISOString(),
-      messageCount, textContent, slug, customTitle,
+      messageCount, textContent, slug, customTitle: customTitle || aiTitle,
     };
   } catch {
     return null;

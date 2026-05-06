@@ -175,7 +175,7 @@ function createTerminalEntry(session) {
     fontSize: 12,
     fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
     theme: TERMINAL_THEME,
-    cursorBlink: true,
+    cursorBlink: false,
     scrollback: 10000,
     convertEol: true,
     allowProposedApi: true,
@@ -202,6 +202,8 @@ function createTerminalEntry(session) {
   }));
   const searchAddon = new SearchAddon.SearchAddon();
   terminal.loadAddon(searchAddon);
+  terminal.loadAddon(new UnicodeGraphemesAddon.UnicodeGraphemesAddon());
+  terminal.unicode.activeVersion = '15';
   terminal.open(container);
   container.style.backgroundColor = TERMINAL_THEME.background;
 
