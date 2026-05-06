@@ -246,6 +246,8 @@
         </div>
       </div>` : ''}
 
+      ${!isProject ? `<div class="settings-section" id="sv-voice-mount"></div>` : ''}
+
       ${!isProject ? `<div class="settings-section">
         <div class="settings-section-title">Version</div>
         <div class="settings-field">
@@ -262,6 +264,22 @@
       </div>
     </div>
   `;
+
+    // Mount the voice (whisper) settings sub-panel into the global settings.
+    let _voiceCollect = null;
+    if (!isProject) {
+      const mount = settingsViewerBody.querySelector('#sv-voice-mount');
+      if (mount && typeof window.buildVoicePanel === 'function') {
+        const onSave = {};
+        try {
+          const panel = await window.buildVoicePanel(current.voice || {}, onSave);
+          mount.appendChild(panel);
+          _voiceCollect = onSave.collect || null;
+        } catch (err) {
+          console.error('voice panel build failed:', err);
+        }
+      }
+    }
 
     // Use-global checkboxes toggle field disabled state
     settingsViewerBody.querySelectorAll('.use-global-cb').forEach(cb => {
@@ -312,6 +330,23 @@
         settings.terminalTheme = settingsViewerBody.querySelector('#sv-terminal-theme').value || 'switchboard';
         settings.mcpEmulation = settingsViewerBody.querySelector('#sv-mcp-emulation').checked;
         settings.shellProfile = settingsViewerBody.querySelector('#sv-shell-profile').value || 'auto';
+
+        // Voice (whisper) settings — collect from the mounted sub-panel if present.
+        if (_voiceCollect) {
+          try {
+            const voiceCfg = _voiceCollect();
+            settings.voice = voiceCfg;
+            // Push to whisper-manager so port/host changes apply immediately
+            // (next start/restart picks them up).
+            if (window.api && window.api.whisper) {
+              try { await window.api.whisper.updateSettings(voiceCfg); } catch {}
+            }
+            // Refresh renderer-side voice state too.
+            if (window.voice && typeof window.voice.refreshSettings === 'function') {
+              window.voice.refreshSettings();
+            }
+          } catch {}
+        }
 
         // Light UI mode is a local preference — apply immediately and persist in localStorage.
         const lightUi = settingsViewerBody.querySelector('#sv-light-ui');

@@ -1,0 +1,199 @@
+// voice-settings.js — wire the voice block in the global Settings panel.
+// Renders inside the existing settings dialog when scope === 'global'.
+
+(function () {
+  function fmtHotkey(hk) {
+    if (!hk) return '';
+    const parts = [];
+    if (hk.ctrl) parts.push('Ctrl');
+    if (hk.shift) parts.push('Shift');
+    if (hk.alt) parts.push('Alt');
+    parts.push(hk.key || '?');
+    return parts.join('+');
+  }
+
+  // Capture the next key event into a hotkey object. Used by the "click to
+  // bind" inputs in the settings panel.
+  function bindHotkey(button, onCapture) {
+    const original = button.textContent;
+    button.textContent = 'Press a key…';
+    button.classList.add('voice-hotkey-binding');
+    function handler(ev) {
+      // Allow modifier-only PTT keys (e.g. Right Alt).
+      ev.preventDefault();
+      const isModifierOnly = ['AltLeft', 'AltRight', 'ControlLeft', 'ControlRight', 'ShiftLeft', 'ShiftRight'].includes(ev.code);
+      const hk = {
+        key: ev.code,
+        ctrl: !isModifierOnly && ev.ctrlKey,
+        shift: !isModifierOnly && ev.shiftKey,
+        alt: !isModifierOnly && ev.altKey,
+      };
+      window.removeEventListener('keydown', handler, true);
+      button.classList.remove('voice-hotkey-binding');
+      button.textContent = fmtHotkey(hk);
+      onCapture(hk);
+    }
+    function cancel() {
+      window.removeEventListener('keydown', handler, true);
+      button.classList.remove('voice-hotkey-binding');
+      button.textContent = original;
+    }
+    window.addEventListener('keydown', handler, true);
+    setTimeout(() => {
+      // Cancel binding mode if user clicks elsewhere within ~6s.
+      const onClick = (ev) => {
+        if (ev.target !== button) {
+          document.removeEventListener('mousedown', onClick, true);
+          cancel();
+        }
+      };
+      document.addEventListener('mousedown', onClick, true);
+    }, 0);
+  }
+
+  // Build the voice settings sub-panel as a DocumentFragment to be slotted
+  // into the global settings viewer.
+  async function buildVoicePanel(currentVoice, onSave) {
+    const root = document.createElement('div');
+    root.className = 'voice-settings';
+    const v = Object.assign({
+      enabled: true, host: '127.0.0.1', port: 52391, language: 'en', autoSubmit: false,
+      hotkeyPtt: { key: 'AltRight' },
+      hotkeyToggle: { key: 'Space', ctrl: true, shift: true },
+    }, currentVoice || {});
+
+    const headerH = document.createElement('div');
+    headerH.className = 'settings-section-title';
+    headerH.textContent = 'Voice (local Whisper)';
+    root.appendChild(headerH);
+
+    const status = document.createElement('div');
+    status.className = 'voice-status-line';
+    status.textContent = 'Checking server…';
+    root.appendChild(status);
+
+    async function refreshStatus() {
+      try {
+        const s = await window.api.whisper.status();
+        const isReady = s && s.status === 'ready';
+        status.classList.toggle('is-ready', !!isReady);
+        status.classList.toggle('is-error', s && s.status === 'error');
+        let text = `Server: ${s?.status || '?'}`;
+        if (s?.endpoint) text += `  ·  ${s.endpoint}`;
+        if (s?.managedBy) text += `  ·  ${s.managedBy}`;
+        if (s?.modelPath) text += `\nModel: ${s.modelPath}`;
+        if (s?.binaryPath) text += `\nBinary: ${s.binaryPath}`;
+        if (s?.error) text += `\nError: ${s.error}`;
+        status.textContent = text;
+      } catch { status.textContent = 'Server: unknown'; }
+    }
+    refreshStatus();
+    if (window.api && window.api.whisper && window.api.whisper.onState) {
+      window.api.whisper.onState(() => refreshStatus());
+    }
+
+    function field(label, desc, control) {
+      const f = document.createElement('div');
+      f.className = 'settings-field settings-field-wide';
+      const info = document.createElement('div'); info.className = 'settings-field-info';
+      const lbl = document.createElement('span'); lbl.className = 'settings-label'; lbl.textContent = label;
+      const d = document.createElement('div'); d.className = 'settings-description'; d.textContent = desc;
+      info.appendChild(lbl); info.appendChild(d);
+      const wrap = document.createElement('div'); wrap.className = 'settings-field-control'; wrap.appendChild(control);
+      f.appendChild(info); f.appendChild(wrap);
+      return f;
+    }
+
+    // Enabled
+    const enabledIn = document.createElement('input'); enabledIn.type = 'checkbox'; enabledIn.checked = !!v.enabled;
+    const enabledLbl = document.createElement('label'); enabledLbl.className = 'settings-toggle';
+    const enabledSlider = document.createElement('span'); enabledSlider.className = 'settings-toggle-slider';
+    enabledLbl.appendChild(enabledIn); enabledLbl.appendChild(enabledSlider);
+    root.appendChild(field('Enable voice', 'Listen for hotkeys, record, transcribe via local whisper-server.', enabledLbl));
+
+    // Host + port
+    const hostIn = document.createElement('input'); hostIn.className = 'settings-input'; hostIn.style.width = '160px'; hostIn.value = v.host;
+    const portIn = document.createElement('input'); portIn.className = 'settings-input'; portIn.type = 'number'; portIn.style.width = '90px'; portIn.value = String(v.port);
+    const hp = document.createElement('div'); hp.style.display = 'flex'; hp.style.gap = '6px';
+    hp.appendChild(hostIn); hp.appendChild(portIn);
+    root.appendChild(field('Server host / port', '127.0.0.1 + a unique port (default 52391).', hp));
+
+    // Language
+    const langIn = document.createElement('input'); langIn.className = 'settings-input'; langIn.style.width = '90px'; langIn.value = v.language;
+    root.appendChild(field('Language', 'ISO-639-1 (e.g. en, de). Use "auto" to autodetect.', langIn));
+
+    // Auto-submit
+    const autoIn = document.createElement('input'); autoIn.type = 'checkbox'; autoIn.checked = !!v.autoSubmit;
+    const autoLbl = document.createElement('label'); autoLbl.className = 'settings-toggle';
+    const autoSlider = document.createElement('span'); autoSlider.className = 'settings-toggle-slider';
+    autoLbl.appendChild(autoIn); autoLbl.appendChild(autoSlider);
+    root.appendChild(field('Auto-submit', 'Append Enter after inserting transcript (skips manual review).', autoLbl));
+
+    // Hotkeys
+    let pttHk = v.hotkeyPtt;
+    let togHk = v.hotkeyToggle;
+    const pttBtn = document.createElement('button'); pttBtn.className = 'voice-hotkey-btn'; pttBtn.type = 'button'; pttBtn.textContent = fmtHotkey(pttHk);
+    pttBtn.onclick = () => bindHotkey(pttBtn, (hk) => { pttHk = hk; });
+    root.appendChild(field('Push-to-talk hotkey', 'Hold to record, release to transcribe + insert.', pttBtn));
+    const togBtn = document.createElement('button'); togBtn.className = 'voice-hotkey-btn'; togBtn.type = 'button'; togBtn.textContent = fmtHotkey(togHk);
+    togBtn.onclick = () => bindHotkey(togBtn, (hk) => { togHk = hk; });
+    root.appendChild(field('Toggle hotkey', 'First press starts, second press stops + transcribes.', togBtn));
+
+    // Server lifecycle controls
+    const ctrls = document.createElement('div'); ctrls.className = 'voice-server-controls';
+    const startBtn = document.createElement('button'); startBtn.className = 'voice-srv-btn'; startBtn.type = 'button'; startBtn.textContent = 'Start';
+    const stopBtn = document.createElement('button'); stopBtn.className = 'voice-srv-btn'; stopBtn.type = 'button'; stopBtn.textContent = 'Stop';
+    const restartBtn = document.createElement('button'); restartBtn.className = 'voice-srv-btn'; restartBtn.type = 'button'; restartBtn.textContent = 'Restart';
+    startBtn.onclick = () => window.api.whisper.start().then(() => refreshStatus());
+    stopBtn.onclick = () => window.api.whisper.stop().then(() => refreshStatus());
+    restartBtn.onclick = () => window.api.whisper.restart().then(() => refreshStatus());
+    ctrls.appendChild(startBtn); ctrls.appendChild(stopBtn); ctrls.appendChild(restartBtn);
+    root.appendChild(field('Server', 'Manage the whisper-server child process.', ctrls));
+
+    // Scheduled task — Layer 2
+    const taskWrap = document.createElement('div'); taskWrap.className = 'voice-server-controls';
+    const installBtn = document.createElement('button'); installBtn.className = 'voice-srv-btn'; installBtn.type = 'button'; installBtn.textContent = 'Install on login';
+    const uninstallBtn = document.createElement('button'); uninstallBtn.className = 'voice-srv-btn'; uninstallBtn.type = 'button'; uninstallBtn.textContent = 'Remove from login';
+    const taskStatus = document.createElement('span'); taskStatus.className = 'voice-task-status';
+    installBtn.onclick = async () => {
+      installBtn.disabled = true;
+      const r = await window.api.whisper.installTask();
+      installBtn.disabled = false;
+      taskStatus.textContent = r.ok ? 'Installed.' : `Install failed: ${r.error}`;
+      taskStatus.classList.toggle('is-error', !r.ok);
+      refreshTask();
+    };
+    uninstallBtn.onclick = async () => {
+      uninstallBtn.disabled = true;
+      const r = await window.api.whisper.uninstallTask();
+      uninstallBtn.disabled = false;
+      taskStatus.textContent = r.ok ? 'Removed.' : `Remove failed: ${r.error}`;
+      taskStatus.classList.toggle('is-error', !r.ok);
+      refreshTask();
+    };
+    async function refreshTask() {
+      const r = await window.api.whisper.queryTask();
+      installBtn.style.display = r.installed ? 'none' : '';
+      uninstallBtn.style.display = r.installed ? '' : 'none';
+      if (r.installed && !taskStatus.textContent) taskStatus.textContent = 'Logon task is registered.';
+    }
+    refreshTask();
+    taskWrap.appendChild(installBtn); taskWrap.appendChild(uninstallBtn); taskWrap.appendChild(taskStatus);
+    root.appendChild(field('Always available (login task)', 'Register a Windows scheduled task that starts whisper-server at user logon. No admin needed; runs in your user session so audio + GPU work as expected.', taskWrap));
+
+    // Save handler exposed to caller — invoked from the dialog's Save button.
+    onSave.collect = () => ({
+      enabled: enabledIn.checked,
+      host: hostIn.value.trim() || '127.0.0.1',
+      port: parseInt(portIn.value, 10) || 52391,
+      language: langIn.value.trim() || 'en',
+      autoSubmit: autoIn.checked,
+      hotkeyPtt: pttHk,
+      hotkeyToggle: togHk,
+    });
+
+    return root;
+  }
+
+  window.buildVoicePanel = buildVoicePanel;
+})();

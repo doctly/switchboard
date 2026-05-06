@@ -4104,6 +4104,104 @@ body.theme-light .analytics-compare-sel {
   background: #ebebef; color: #1d1d1f; border-color: #d1d1d6;
 }
 
+/* --- Voice (Whisper) indicator + settings ----------------------------- */
+.voice-indicator {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: #1f1f30;
+  border: 1px solid #2d2d44;
+  border-radius: 24px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
+  font-size: 13px;
+  color: #d0d0e0;
+  z-index: 9999;
+  user-select: none;
+  pointer-events: none;
+}
+.voice-indicator.voice-recording { border-color: #ef4444; }
+.voice-indicator.voice-transcribing { border-color: #fbbf24; }
+.voice-indicator.voice-error { border-color: #ef4444; background: #2a1f25; }
+.voice-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #6b6b70;
+  flex-shrink: 0;
+}
+.voice-recording .voice-dot {
+  background: #ef4444;
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+.voice-transcribing .voice-dot {
+  background: #fbbf24;
+  animation: voice-spin 1s linear infinite;
+}
+@keyframes voice-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.7); }
+}
+@keyframes voice-spin {
+  from { box-shadow: 0 0 0 0 rgba(251,191,36,0.6); }
+  to   { box-shadow: 0 0 0 8px rgba(251,191,36,0); }
+}
+.voice-status { font-weight: 600; }
+.voice-meter {
+  width: 80px; height: 4px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.voice-meter-fill {
+  display: block; height: 100%;
+  background: linear-gradient(90deg, #22c55e, #fbbf24, #ef4444);
+  width: 0%;
+  transition: width 80ms linear;
+}
+.voice-hint { font-size: 11px; color: #888; }
+
+.voice-settings .voice-status-line {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid #2d2d44;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #aaa;
+  margin: 8px 0;
+  white-space: pre-wrap;
+}
+.voice-settings .voice-status-line.is-ready { color: #22c55e; }
+.voice-settings .voice-status-line.is-error { color: #ef4444; }
+.voice-hotkey-btn,
+.voice-srv-btn {
+  background: #2a2a3e;
+  color: #d0d0e0;
+  border: 1px solid #3a3a55;
+  padding: 5px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  cursor: pointer;
+}
+.voice-hotkey-btn:hover, .voice-srv-btn:hover { background: #34344a; }
+.voice-hotkey-btn.voice-hotkey-binding {
+  border-color: #fbbf24;
+  color: #fbbf24;
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+.voice-server-controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.voice-task-status { font-size: 11px; color: #888; }
+.voice-task-status.is-error { color: #ef4444; }
+
+body.theme-light .voice-indicator { background: #ffffff; color: #1d1d1f; border-color: #d1d1d6; }
+body.theme-light .voice-settings .voice-status-line { background: #f5f5f7; border-color: #d1d1d6; color: #6b6b70; }
+body.theme-light .voice-hotkey-btn,
+body.theme-light .voice-srv-btn { background: #ebebef; color: #1d1d1f; border-color: #d1d1d6; }
+
 /* --- Sidebar left column (pin + profile badge) ----------------------- */
 .session-leftcol {
   display: flex;
