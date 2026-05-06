@@ -352,6 +352,26 @@
   }
 
   // ── Inject into the active terminal ────────────────────────────────────
+  // Long transcripts dropped their leading characters when sent as one
+  // big sendInput because the receiving TUI processed them char-by-char
+  // and the line buffer (~4 KB) overflowed before the app drained it.
+  // Bracketed-paste mode (ESC [ 200 ~ ... ESC [ 201 ~) tells the terminal
+  // "everything between these markers is one paste block, deliver it
+  // atomically" — Claude Code's TUI honours this and reads the whole
+  // payload at once instead of replaying it as keystrokes.
+  const BRACKETED_PASTE_START = '\x1b[200~';
+  const BRACKETED_PASTE_END = '\x1b[201~';
+
+  // Strip control characters from the transcript before injection so a
+  // hypothetical ESC byte in the whisper output (vanishingly unlikely
+  // for clean speech, but defensive) can't terminate the paste block
+  // early or smuggle escape sequences into the terminal.
+  function sanitiseForPaste(text) {
+    // Keep ordinary printable + common whitespace (\n is already collapsed
+    // upstream by flattenWhitespace; tab/CR also dropped here for safety).
+    return String(text).replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
+  }
+
   async function injectText(text, autoSubmit) {
     const sid = window.activeSessionId || sessionStorage.getItem('activeSessionId');
     if (!sid) {
@@ -363,9 +383,14 @@
       return { ok: false, error: 'sendInput unavailable' };
     }
     try {
-      window.api.sendInput(sid, text);
+      const safe = sanitiseForPaste(text);
+      // Bracketed paste: open marker, payload, close marker. Send as a
+      // single sendInput so the markers + text arrive in one PTY write —
+      // splitting them risks the terminal seeing an unterminated paste
+      // block if a flush happens between writes.
+      window.api.sendInput(sid, BRACKETED_PASTE_START + safe + BRACKETED_PASTE_END);
       if (autoSubmit) window.api.sendInput(sid, '\r');
-      console.info('[voice] inject ok', { sid, autoSubmit });
+      console.info('[voice] inject ok', { sid, autoSubmit, len: safe.length });
       return { ok: true };
     } catch (err) {
       console.error('[voice] inject threw', err);
