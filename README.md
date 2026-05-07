@@ -1,6 +1,39 @@
 # Switchboard
 
-Desktop app for managing local Claude Code CLI sessions. Hardened fork for corp / offline use.
+Desktop app for managing local Claude Code CLI sessions. This is a fork of [doctly/switchboard](https://github.com/doctly/switchboard) — see below for what's different and why.
+
+## Changes from upstream
+
+This fork exists because upstream's design center is the individual developer on the public internet. I needed something that works in a different environment — corporate, offline-capable, and opinionated about what leaves the machine.
+
+### What's been added
+
+| Area | What changed |
+|------|-------------|
+| **Voice dictation** | Local whisper.cpp integration — managed whisper-server process, nothing leaves the machine. PTT/toggle modes, AltGr-aware hotkeys, transcript preview, bracketed-paste injection, model autodetection. |
+| **Profiles** | Named configuration profiles per session with env-var overrides, presets, and profile icons. Switch between internal endpoints, models, or contexts without editing rc files. |
+| **Analytics** | Session-level usage stats, token counts, model usage, tool call frequency. Activity heatmap, aggregated charts, background aggregation worker. All stored locally in SQLite. |
+| **Window bounds** | Remembers where you put it, clamps to the active display, survives restarts across multi-monitor setups. Doesn't save a maximized state that breaks on a different screen. Hard caps + 17 contract tests. |
+| **Taskbar flash** | Flashes the Windows taskbar / bounces the macOS dock when Claude needs approval or attention and the window isn't focused. |
+| **Light theme** | Complete light-mode stylesheet for every panel — sidebar, viewer panels, session items, settings, dialogs. Each element styled individually, not a color-invert. |
+| **Status dots** | Running, busy, response-ready, and needs-attention states visible from the sidebar. Dots enlarged for actual visibility. |
+| **Scheduled tasks** | Cron-based recurring Claude Code tasks with AI-selected permissions, auto-accept edits, and sidebar integration. |
+| **Skins / branding** | Runtime skin loader with `SWITCHBOARD_SKIN` env var support. Drop in icons, colors, and product name per build. |
+| **Build-and-run** | One-command build + launch per platform (`npm run build-and-run`). No hunting for the output binary. |
+
+### What's been hardened
+
+| Area | What changed |
+|------|-------------|
+| **Path guard** | IPC file-path whitelist (project dirs + `~/.claude/`) with deny list for credential files (`.ssh`, `.aws/credentials`, `.netrc`, `.gnupg`, SSH keys). |
+| **MCP auth** | Per-session localhost WebSocket with constant-time token comparison, `0600` lockfiles, Origin-header rejection. Binds `127.0.0.1` only. |
+| **CSP** | `connect-src` restricted to `'self'` and `ws(s)://127.0.0.1:*`. No external domains. |
+| **Renderer** | Sandboxed with context isolation, no Node integration. |
+| **Shell commands** | Built with strict validation and POSIX single-quote escaping (`claude-cmd.js`). No string concatenation of user input into shell strings. |
+| **Deps** | Pinned to exact versions in `package-lock.json`. `npm install` blocked by a preinstall guard — use `npm ci`. |
+| **No auto-updates** | `electron-updater` removed. The app never contacts GitHub or any update server. |
+| **No usage API** | `claude-auth.js` and Rate-Limits panel removed. The child `claude` process makes its own API calls; the app doesn't phone home. |
+| **Zero runtime egress** | The only outbound call from the app itself is `shell.openExternal` on a user-clicked link. |
 
 ## Core features
 
@@ -26,71 +59,6 @@ Switchboard parses OSC escape sequences from each Claude CLI PTY and surfaces st
 - **Taskbar flash** — Windows taskbar / macOS dock bounces when attention is needed and the window isn't focused
 - **Response ready** — blue dot when Claude finishes and has unread output
 - **Status bar** — free-form status messages from the main process
-
-### Voice dictation (fork addition)
-- Local whisper.cpp integration — managed whisper-server process, nothing leaves the machine
-- Push-to-talk and toggle dictation modes
-- Configurable hotkey with AltGr-aware modifier matching
-- Transcript preview and inline error display
-- Bracketed-paste injection so long transcripts don't truncate
-- Auto-detects `C:\whisper-cpp\` and project-root `models/` for model files
-
-### Profiles system (fork addition)
-- Named configuration profiles per session: env vars, API endpoints, model settings
-- Profile presets for common setups
-- Per-session override of `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and other env vars
-- Profile icons and visual identity in the sidebar
-
-### Analytics (fork addition)
-- Session-level usage stats: token counts, model usage, tool call frequency
-- Activity heatmap and aggregated charts
-- Aggregation worker for background stat crunching
-
-### Scheduled tasks (fork addition)
-- Create recurring Claude Code tasks with cron expressions
-- AI-selected permission grants and auto-accept edits
-- Sidebar icon for task monitoring
-
-## About this fork
-
-This fork exists because the upstream [doctly/switchboard](https://github.com/doctly/switchboard) is a solid foundation, but its design center is the individual developer on the public internet. I needed something that works in a different environment — corporate, offline-capable, and opinionated about what leaves the machine. The changes fall into a few themes:
-
-### Keep everything local
-
-The fork assumes you might not want your voice, your usage data, or your app talking to servers you didn't ask it to. So:
-
-- **Voice dictation runs locally** via whisper.cpp. No cloud STT, no audio leaving the machine. The app manages the whisper-server process — model autodetection, PTT/toggle modes, AltGr-aware hotkeys, and bracketed-paste so long transcripts don't truncate in the terminal.
-- **Auto-updates are removed.** The app never contacts GitHub or any update server. You control when to pull and rebuild.
-- **Anthropic usage API is removed.** No rate-limit polling, no account metadata calls. The child `claude` process makes its own API calls; the app doesn't phone home on its own.
-- **Analytics stay local.** Session stats, token counts, and activity heatmaps are all computed and stored in your SQLite database. Nothing is sent anywhere.
-
-### Lock down the surface area
-
-If this is going to run shell commands and manage file access on a corp machine, the attack surface matters:
-
-- **Path guard** with an explicit whitelist (project directories + `~/.claude/`) and a deny list for credential files (`.ssh`, `.aws/credentials`, `.netrc`, `.gnupg`, SSH keys).
-- **MCP auth** — per-session localhost WebSocket with constant-time token comparison, `0600` lockfiles, Origin-header rejection. Binds `127.0.0.1` only.
-- **CSP** restricts `connect-src` to `'self'` and `ws(s)://127.0.0.1:*`. No external domains.
-- **Renderer** runs with `sandbox: true`, `contextIsolation: true`, `nodeIntegration: false`.
-- **Shell commands** to the Claude CLI are built with strict validation and POSIX single-quote escaping (`claude-cmd.js`). No string concatenation of user input into shell strings.
-- **Deps pinned** to exact versions in `package-lock.json`. `npm install` is blocked by a `preinstall` guard — use `npm ci`.
-- **Zero runtime egress** from the app itself. The only outbound call is `shell.openExternal` on a user-clicked link. The child `claude` process makes its own API calls — point it at your internal endpoint with `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`.
-
-### Quality-of-life that compound over hours of use
-
-These aren't architectural — they're the kind of thing you notice when you live in the app all day:
-
-- **Profiles** — named configurations (env vars, API endpoints, model settings) you can assign per session. Switch between internal endpoints, models, or contexts without editing rc files.
-- **Window bounds** — the window remembers where you put it, clamps to the active display, and survives restarts correctly even across multi-monitor setups. It doesn't save a maximized state that breaks on a different screen.
-- **Taskbar flash** — when Claude needs approval or attention and you're alt-tabbed away, the taskbar (Windows) or dock (macOS) bounces so you don't miss it.
-- **Light theme** — complete light-mode stylesheet for every panel (sidebar, viewer panels, session items, settings, dialogs). Not just a color-invert — each element was styled individually.
-- **Status dots at a glance** — running, busy, response-ready, and needs-attention states are all visible from the sidebar without opening a terminal. The dots are large enough to actually see.
-
-### Removed from upstream
-
-- Auto-updates (`electron-updater`)
-- Anthropic usage API (`claude-auth.js`, Rate-Limits panel)
-- Upstream CI workflows (corp build pipeline is separate)
 
 ## Build / run
 
