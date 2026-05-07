@@ -897,6 +897,7 @@ const SETTING_DEFAULTS = {
   terminalTheme: 'switchboard',
   mcpEmulation: false,
   shellProfile: 'auto',
+  agentTeams: false,
 };
 
 ipcMain.handle('get-shell-profiles', () => {
@@ -1165,6 +1166,13 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         }
       } catch (err) {
         log.error(`[profiles] Failed to apply profile: ${err.message}`);
+      }
+
+      // Agent teams: when disabled (default), prevent the Claude CLI from
+      // spawning sub-agents via the Task tool. When enabled, sub-agents are
+      // allowed and the profile's CLAUDE_CODE_SUBAGENT_MODEL (if any) is used.
+      if (!sessionOptions?.agentTeams) {
+        ptyEnv.CLAUDE_CODE_DISABLE_SUBAGENTS = '1';
       }
 
       // Schedule cleanup of the system-prompt temp file once the shell has

@@ -17,6 +17,7 @@ async function resolveDefaultSessionOptions(project) {
     if (effective.worktreeName) options.worktreeName = effective.worktreeName;
   }
   if (effective.chrome) options.chrome = true;
+  if (effective.agentTeams) options.agentTeams = true;
   if (effective.preLaunchCmd) options.preLaunchCmd = effective.preLaunchCmd;
   if (effective.addDirs) options.addDirs = effective.addDirs;
   if (effective.mcpEmulation === false) options.mcpEmulation = false;
@@ -290,6 +291,15 @@ async function showNewSessionDialog(project) {
         <label class="settings-toggle"><input type="checkbox" id="nsd-chrome" ${effective.chrome ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
       </div>
     </div>
+    <div class="settings-field">
+      <div class="settings-field-info">
+        <span class="settings-label">Agent Teams</span>
+        <div class="settings-description">Allow Claude to spawn sub-agents for parallel work</div>
+      </div>
+      <div class="settings-field-control">
+        <label class="settings-toggle"><input type="checkbox" id="nsd-agent-teams" ${effective.agentTeams ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+      </div>
+    </div>
     <div class="settings-field settings-field-wide">
       <div class="settings-field-info">
         <span class="settings-label">Pre-launch Command</span>
@@ -350,6 +360,9 @@ async function showNewSessionDialog(project) {
     }
     if (dialog.querySelector('#nsd-chrome').checked) {
       options.chrome = true;
+    }
+    if (dialog.querySelector('#nsd-agent-teams').checked) {
+      options.agentTeams = true;
     }
     const preLaunch = dialog.querySelector('#nsd-pre-launch').value.trim();
     if (preLaunch) options.preLaunchCmd = preLaunch;

@@ -74,6 +74,7 @@
     const themeValue = fieldValue('terminalTheme', 'switchboard');
     const mcpEmulationValue = fieldValue('mcpEmulation', true);
     const shellProfileValue = fieldValue('shellProfile', 'auto');
+    const agentTeamsValue = fieldValue('agentTeams', false);
 
     // Discover available shell profiles
     let shellProfiles = [];
@@ -139,6 +140,19 @@
           </div>
           <div class="settings-field-control">
             <label class="settings-toggle"><input type="checkbox" id="sv-chrome" ${chromeValue ? 'checked' : ''} ${fieldDisabled('chrome')}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <div class="settings-field-header">
+              <span class="settings-label">Agent Teams</span>
+              ${useGlobalCheckbox('agentTeams')}
+            </div>
+            <div class="settings-description">Allow Claude to spawn sub-agents for parallel work. Disabled by default — enable to let Claude use teams of agents for complex tasks.</div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" id="sv-agent-teams" ${agentTeamsValue ? 'checked' : ''} ${fieldDisabled('agentTeams')}><span class="settings-toggle-slider"></span></label>
           </div>
         </div>
 
@@ -290,6 +304,7 @@
           worktree: 'sv-worktree',
           worktreeName: 'sv-worktree-name',
           chrome: 'sv-chrome',
+          agentTeams: 'sv-agent-teams',
           preLaunchCmd: 'sv-pre-launch',
           addDirs: 'sv-add-dirs',
         };
@@ -312,6 +327,7 @@
               worktree: () => settingsViewerBody.querySelector('#sv-worktree').checked,
               worktreeName: () => settingsViewerBody.querySelector('#sv-worktree-name').value.trim(),
               chrome: () => settingsViewerBody.querySelector('#sv-chrome').checked,
+              agentTeams: () => settingsViewerBody.querySelector('#sv-agent-teams').checked,
               preLaunchCmd: () => settingsViewerBody.querySelector('#sv-pre-launch').value.trim(),
               addDirs: () => settingsViewerBody.querySelector('#sv-add-dirs').value.trim(),
             };
@@ -323,6 +339,7 @@
         settings.worktree = settingsViewerBody.querySelector('#sv-worktree').checked;
         settings.worktreeName = settingsViewerBody.querySelector('#sv-worktree-name').value.trim();
         settings.chrome = settingsViewerBody.querySelector('#sv-chrome').checked;
+        settings.agentTeams = settingsViewerBody.querySelector('#sv-agent-teams').checked;
         settings.preLaunchCmd = settingsViewerBody.querySelector('#sv-pre-launch').value.trim();
         settings.addDirs = settingsViewerBody.querySelector('#sv-add-dirs').value.trim();
         settings.visibleSessionCount = parseInt(settingsViewerBody.querySelector('#sv-visible-count').value) || 10;
