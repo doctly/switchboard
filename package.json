@@ -18,6 +18,10 @@
     "build:win": "npm run bundle:codemirror && npm run apply-branding && electron-builder --win --config electron-builder-config.json",
     "build:win:portable": "npm run bundle:codemirror && npm run apply-branding && electron-builder --win --dir --config electron-builder-config.json",
     "build:linux": "npm run bundle:codemirror && npm run apply-branding && electron-builder --linux --config electron-builder-config.json",
+    "build-and-run": "node scripts/build-and-run.js",
+    "build-and-run:win": "npm run bundle:codemirror && npm run apply-branding && electron-builder --win --dir --config electron-builder-config.json && ./dist/win-unpacked/Switchboard.exe",
+    "build-and-run:mac": "npm run bundle:codemirror && npm run apply-branding && electron-builder --mac --config electron-builder-config.json && open dist/mac*/Switchboard.app",
+    "build-and-run:linux": "npm run bundle:codemirror && npm run apply-branding && electron-builder --linux --config electron-builder-config.json && dist/Switchboard-*.AppImage",
     "release": "npm run bundle:codemirror && npm run apply-branding && electron-builder --publish always --config electron-builder-config.json",
     "preinstall": "node scripts/preinstall-guard.js",
     "postinstall": "node scripts/postinstall.js"

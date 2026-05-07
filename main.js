@@ -223,6 +223,12 @@ function createWindow() {
   };
   mainWindow.on('resize', saveBoundsDebounced);
   mainWindow.on('move', saveBoundsDebounced);
+  // Stop taskbar flash when user focuses the window
+  mainWindow.on('focus', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.flashFrame(false);
+    }
+  });
   // 'close' fires while the window is still alive — perfect time to flush.
   // Cancel any pending debounced write so we don't double-save.
   mainWindow.on('close', () => {
@@ -1250,6 +1256,11 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
           log.info(`[OSC 9] session=${currentId} message="${payload}"`);
           if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('terminal-notification', currentId, payload);
+            // Flash taskbar (Windows) / bounce dock (macOS) when attention is needed
+            // and the window is not focused — so the user notices even when alt-tabbed away.
+            if (/attention|approval|permission|needs your|wants to enter/i.test(payload) && !mainWindow.isFocused()) {
+              mainWindow.flashFrame(true);
+            }
           }
         }
       }
