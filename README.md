@@ -51,46 +51,46 @@ Switchboard parses OSC escape sequences from each Claude CLI PTY and surfaces st
 - AI-selected permission grants and auto-accept edits
 - Sidebar icon for task monitoring
 
-## Changes from upstream
+## About this fork
 
-This fork adds significant functionality on top of [doctly/switchboard](https://github.com/doctly/switchboard):
+This fork exists because the upstream [doctly/switchboard](https://github.com/doctly/switchboard) is a solid foundation, but its design center is the individual developer on the public internet. I needed something that works in a different environment — corporate, offline-capable, and opinionated about what leaves the machine. The changes fall into a few themes:
 
-| Area | What changed |
-|------|-------------|
-| **Voice** | Local whisper.cpp dictation with PTT/toggle, model autodetection, transcript preview, AltGr hotkeys, bracketed-paste injection |
-| **Profiles** | Full session-profile system with env-var overrides, presets, and profile icons |
-| **Analytics** | Session stats aggregation, usage charts, activity heatmap |
-| **Window** | Bounds clamping to display work area, normal-bounds persistence, multi-monitor support, hard caps + contract tests |
-| **Taskbar** | Flash on attention/approval prompts when window isn't focused |
-| **Light theme** | Complete light-mode stylesheet for sidebar, viewer panels, session items, settings, dialogs |
-| **Path guard** | IPC file-path whitelist with deny list for credentials and sensitive files |
-| **MCP auth** | Per-session localhost WebSocket with constant-time token comparison, 0600 lockfiles |
-| **Branding** | Runtime skin/branding loader with `SWITCHBOARD_SKIN` env var support |
-| **CSP** | Content-Security-Policy restricting connect-src to self + localhost WebSocket |
-| **Build** | `build-and-run` scripts for one-command build + launch per platform |
-| **Scheduled tasks** | Cron-based recurring Claude tasks with sidebar integration |
-| **Security** | IPC hardening, sandboxed renderer, context isolation, no auto-updates, no usage API calls |
+### Keep everything local
+
+The fork assumes you might not want your voice, your usage data, or your app talking to servers you didn't ask it to. So:
+
+- **Voice dictation runs locally** via whisper.cpp. No cloud STT, no audio leaving the machine. The app manages the whisper-server process — model autodetection, PTT/toggle modes, AltGr-aware hotkeys, and bracketed-paste so long transcripts don't truncate in the terminal.
+- **Auto-updates are removed.** The app never contacts GitHub or any update server. You control when to pull and rebuild.
+- **Anthropic usage API is removed.** No rate-limit polling, no account metadata calls. The child `claude` process makes its own API calls; the app doesn't phone home on its own.
+- **Analytics stay local.** Session stats, token counts, and activity heatmaps are all computed and stored in your SQLite database. Nothing is sent anywhere.
+
+### Lock down the surface area
+
+If this is going to run shell commands and manage file access on a corp machine, the attack surface matters:
+
+- **Path guard** with an explicit whitelist (project directories + `~/.claude/`) and a deny list for credential files (`.ssh`, `.aws/credentials`, `.netrc`, `.gnupg`, SSH keys).
+- **MCP auth** — per-session localhost WebSocket with constant-time token comparison, `0600` lockfiles, Origin-header rejection. Binds `127.0.0.1` only.
+- **CSP** restricts `connect-src` to `'self'` and `ws(s)://127.0.0.1:*`. No external domains.
+- **Renderer** runs with `sandbox: true`, `contextIsolation: true`, `nodeIntegration: false`.
+- **Shell commands** to the Claude CLI are built with strict validation and POSIX single-quote escaping (`claude-cmd.js`). No string concatenation of user input into shell strings.
+- **Deps pinned** to exact versions in `package-lock.json`. `npm install` is blocked by a `preinstall` guard — use `npm ci`.
+- **Zero runtime egress** from the app itself. The only outbound call is `shell.openExternal` on a user-clicked link. The child `claude` process makes its own API calls — point it at your internal endpoint with `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`.
+
+### Quality-of-life that compound over hours of use
+
+These aren't architectural — they're the kind of thing you notice when you live in the app all day:
+
+- **Profiles** — named configurations (env vars, API endpoints, model settings) you can assign per session. Switch between internal endpoints, models, or contexts without editing rc files.
+- **Window bounds** — the window remembers where you put it, clamps to the active display, and survives restarts correctly even across multi-monitor setups. It doesn't save a maximized state that breaks on a different screen.
+- **Taskbar flash** — when Claude needs approval or attention and you're alt-tabbed away, the taskbar (Windows) or dock (macOS) bounces so you don't miss it.
+- **Light theme** — complete light-mode stylesheet for every panel (sidebar, viewer panels, session items, settings, dialogs). Not just a color-invert — each element was styled individually.
+- **Status dots at a glance** — running, busy, response-ready, and needs-attention states are all visible from the sidebar without opening a terminal. The dots are large enough to actually see.
 
 ### Removed from upstream
-- **Auto-updates** — `electron-updater` removed; the app never contacts GitHub
-- **Anthropic usage API** — `claude-auth.js` and Rate-Limits panel removed
-- **CI workflows** — upstream `.github/workflows/` removed (corp build pipeline is separate)
 
-## Offline / corp posture
-
-- **No auto-updates.** The app never contacts GitHub.
-- **No Anthropic usage API.** Rate-limits and account panels are removed.
-- **CSP** restricts `connect-src` to `'self'` + `ws(s)://127.0.0.1:*`.
-- **Renderer** runs with `sandbox: true`, `contextIsolation: true`, `nodeIntegration: false`.
-- **IPC path access** goes through a whitelist (project dirs + `~/.claude/`) with a deny list for `.credentials.json`, `.ssh`, `.aws/credentials`, `.netrc`, `.gnupg`, `id_rsa/id_ed25519`.
-- **Shell commands** to the Claude CLI are built with strict validation + POSIX single-quote escaping (`claude-cmd.js`).
-- **MCP WebSocket** binds `127.0.0.1` only; auth token compared in constant time; lockfile `0600`; Origin-header connections rejected.
-- **Deps pinned** to exact versions in `package-lock.json`. `npm install` is blocked by a `preinstall` guard — use `npm ci`.
-
-Outbound network:
-
-- **Zero runtime egress** from Switchboard itself (other than `shell.openExternal` on a user-clicked terminal link).
-- The child `claude` process makes its own calls; point it at your internal endpoint with `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` in `~/.zshrc`. `window.api.reloadShellEnv()` re-sources rc files without an app restart.
+- Auto-updates (`electron-updater`)
+- Anthropic usage API (`claude-auth.js`, Rate-Limits panel)
+- Upstream CI workflows (corp build pipeline is separate)
 
 ## Build / run
 
