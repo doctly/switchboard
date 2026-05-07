@@ -1168,11 +1168,11 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         log.error(`[profiles] Failed to apply profile: ${err.message}`);
       }
 
-      // Agent teams: when disabled (default), prevent the Claude CLI from
-      // spawning sub-agents via the Task tool. When enabled, sub-agents are
-      // allowed and the profile's CLAUDE_CODE_SUBAGENT_MODEL (if any) is used.
-      if (!sessionOptions?.agentTeams) {
-        ptyEnv.CLAUDE_CODE_DISABLE_SUBAGENTS = '1';
+      // Agent Teams: experimental multi-agent coordination (sub-agents that
+      // communicate directly with each other). Standard sub-agents (Task tool)
+      // are always enabled — this only gates the experimental teams feature.
+      if (sessionOptions?.agentTeams) {
+        ptyEnv.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '1';
       }
 
       // Schedule cleanup of the system-prompt temp file once the shell has
