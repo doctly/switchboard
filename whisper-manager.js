@@ -90,6 +90,23 @@ let _logger = null;
 let _settings = {};
 let _userDataDir = null;
 let _onStateChange = null;
+let _diskLogStream = null;   // append-only fs stream for whisper-server stdio
+
+function openDiskLog() {
+  if (_diskLogStream || !_userDataDir) return;
+  try {
+    const dir = path.join(_userDataDir, 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    _diskLogStream = fs.createWriteStream(path.join(dir, 'whisper.log'), { flags: 'a' });
+    _diskLogStream.write(`\n=== whisper-server session ${new Date().toISOString()} ===\n`);
+  } catch (err) {
+    if (_logger) _logger.warn('[whisper] failed to open disk log:', err.message);
+  }
+}
+function writeDiskLog(line) {
+  if (!_diskLogStream) return;
+  try { _diskLogStream.write(line + '\n'); } catch {}
+}
 
 function getStatus() {
   return {
@@ -215,20 +232,22 @@ async function spawnChild() {
   _child = child;
   setState({ pid: child.pid });
 
+  openDiskLog();
   child.stdout.on('data', (d) => {
     for (const line of d.toString('utf8').split('\n')) {
       const s = line.trimEnd();
-      if (s) pushLog(s);
+      if (s) { pushLog(s); writeDiskLog(`[out] ${s}`); }
     }
   });
   child.stderr.on('data', (d) => {
     for (const line of d.toString('utf8').split('\n')) {
       const s = line.trimEnd();
-      if (s) pushLog(s);
+      if (s) { pushLog(s); writeDiskLog(`[err] ${s}`); }
     }
   });
   child.on('exit', (code, signal) => {
     if (_logger) _logger.info(`[whisper] child exited code=${code} signal=${signal}`);
+    writeDiskLog(`[lifecycle] child exited code=${code} signal=${signal}`);
     _child = null;
     if (_stopping) return;
     // Unexpected exit → backoff restart.

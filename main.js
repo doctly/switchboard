@@ -22,6 +22,33 @@ const { computeWindowBounds } = require('./window-bounds');
 ipcMain.on('branding:getStrings', (event) => {
   event.returnValue = branding.strings || {};
 });
+
+// Renderer → main log bridge. Renderer code (voice.js etc.) used to call
+// console.log/info/warn/error which only landed in DevTools — useless when
+// DevTools won't open. This pipes those calls through to electron-log so
+// they end up in <userData>/logs/main.log on disk where they can be tailed
+// or shared. Levels match electron-log: silly|debug|info|warn|error.
+ipcMain.on('renderer-log', (_event, level, msg, meta) => {
+  try {
+    const fn = (log[level] && typeof log[level] === 'function') ? log[level] : log.info;
+    if (meta !== undefined && meta !== null) {
+      fn(`[renderer] ${msg}`, meta);
+    } else {
+      fn(`[renderer] ${msg}`);
+    }
+  } catch {}
+});
+
+// Path to the active electron-log file — renderer can ask so the voice
+// settings panel can show "logs are at: <path>".
+ipcMain.handle('get-log-path', () => {
+  try {
+    const t = log.transports && log.transports.file;
+    if (typeof t.getFile === 'function') return t.getFile().path;
+    if (t.resolvePath) return t.resolvePath({}, { fileName: 'main.log' });
+    return null;
+  } catch { return null; }
+});
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
 log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 
@@ -190,11 +217,19 @@ function createWindow() {
   // Prevent Cmd+R / Ctrl+Shift+R from reloading the page (Chromium built-in).
   // Ctrl+R alone on macOS is NOT a reload shortcut and must pass through to xterm
   // for reverse-i-search.
+  // Also force-toggle DevTools on Ctrl+Shift+I / F12 even when xterm has focus
+  // — the default Chromium shortcut gets eaten by xterm otherwise.
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return;
     const key = input.key.toLowerCase();
     if (key === 'r' && input.meta) event.preventDefault();
     if (key === 'r' && input.control && input.shift) event.preventDefault();
+    if ((key === 'i' && input.control && input.shift) || key === 'f12') {
+      event.preventDefault();
+      const wc = mainWindow.webContents;
+      if (wc.isDevToolsOpened()) wc.closeDevTools();
+      else wc.openDevTools({ mode: 'detach' });
+    }
   });
 
   // Save window bounds on move/resize (debounced) + on close (immediate).
@@ -1339,6 +1374,56 @@ ipcMain.on('terminal-input', (_event, sessionId, data) => {
   const session = activeSessions.get(sessionId);
   if (session && !session.exited) {
     session.pty.write(data);
+  }
+});
+
+// --- IPC: voice-log (renderer → main → electron-log) ---
+// Voice transcription runs entirely in the renderer; without this bridge,
+// failed dictations leave no disk trace because console.info from the
+// renderer does not flow through electron-log. Mirror level/event/data
+// into the main log so we can post-mortem any failure from main.log.
+ipcMain.on('voice-log', (_event, level, event, data) => {
+  const fn = (log[level] || log.info).bind(log);
+  try {
+    fn(`[voice] ${event}`, data || {});
+  } catch {
+    log.info(`[voice] ${event}`);
+  }
+});
+
+// --- IPC: voice-save-wav (belt-and-braces) ---
+// The renderer hands us the encoded WAV before it submits to whisper.
+// We persist it under userData/voice-tmp/ so a failed transcription or
+// inject still leaves the actual audio behind. Old files are pruned on
+// each save (keep last 20) so disk doesn't grow unboundedly. Returns
+// the absolute path; renderer surfaces it in the failure indicator.
+ipcMain.handle('voice-save-wav', async (_event, bytes) => {
+  try {
+    const fsp = require('fs').promises;
+    const fs = require('fs');
+    const path = require('path');
+    const dir = path.join(app.getPath('userData'), 'voice-tmp');
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const file = path.join(dir, `dictation-${stamp}.wav`);
+    // bytes arrives as a Uint8Array via structured clone; Buffer.from
+    // accepts ArrayBufferView so this is a zero-copy wrap.
+    const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    await fsp.writeFile(file, buf);
+    // Prune: keep newest 20.
+    try {
+      const entries = (await fsp.readdir(dir))
+        .filter(n => n.endsWith('.wav'))
+        .map(n => ({ n, t: fs.statSync(path.join(dir, n)).mtimeMs }))
+        .sort((a, b) => b.t - a.t);
+      for (const e of entries.slice(20)) {
+        try { await fsp.unlink(path.join(dir, e.n)); } catch {}
+      }
+    } catch {}
+    return { ok: true, path: file };
+  } catch (err) {
+    log.warn('[voice] save-wav failed:', err && err.message);
+    return { ok: false, error: err && err.message };
   }
 });
 

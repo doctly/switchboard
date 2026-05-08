@@ -11,6 +11,17 @@ try {
 
 contextBridge.exposeInMainWorld('api', {
   strings: brandingStringsSnapshot,
+
+  // Disk logging bridge — renderer messages go through main and into
+  // electron-log (<userData>/logs/main.log). Use this instead of
+  // console.* so logs survive even when DevTools won't open.
+  log: {
+    debug: (msg, meta) => ipcRenderer.send('renderer-log', 'debug', msg, meta),
+    info:  (msg, meta) => ipcRenderer.send('renderer-log', 'info', msg, meta),
+    warn:  (msg, meta) => ipcRenderer.send('renderer-log', 'warn', msg, meta),
+    error: (msg, meta) => ipcRenderer.send('renderer-log', 'error', msg, meta),
+  },
+  getLogPath: () => ipcRenderer.invoke('get-log-path'),
   // Invoke (request-response)
   getPlans: () => ipcRenderer.invoke('get-plans'),
   readPlan: (filename) => ipcRenderer.invoke('read-plan', filename),
@@ -94,6 +105,8 @@ contextBridge.exposeInMainWorld('api', {
   sendInput: (id, data) => ipcRenderer.send('terminal-input', id, data),
   resizeTerminal: (id, cols, rows) => ipcRenderer.send('terminal-resize', id, cols, rows),
   closeTerminal: (id) => ipcRenderer.send('close-terminal', id),
+  voiceLog: (level, event, data) => ipcRenderer.send('voice-log', level, event, data),
+  voiceSaveWav: (bytes) => ipcRenderer.invoke('voice-save-wav', bytes),
 
   // Listeners (main → renderer)
   onTerminalData: (callback) => {

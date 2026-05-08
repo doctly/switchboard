@@ -8,9 +8,12 @@
 //        Alt-Tab and minimise; the hotkey is only active when Switchboard
 //        window is focused so we don't fight other apps.
 //
-// Audio: MediaRecorder → WebM/Opus → AudioContext.decodeAudioData →
-// 16-bit PCM mono 16 kHz WAV → POST to whisper-server's /inference
-// endpoint as multipart/form-data with field name "file".
+// Audio: AudioWorklet captures raw Float32 mono PCM directly from the
+// MediaStreamSource → resample to 16 kHz via OfflineAudioContext → 16-bit
+// PCM WAV → save to disk (belt-and-braces) → POST to whisper-server's
+// /inference endpoint as multipart/form-data with field name "file".
+// We deliberately avoid MediaRecorder: WebM/Opus + decodeAudioData has
+// a long tail of silent-truncation failure modes for long dictations.
 //
 // Transcript is inserted via the existing `sendInput` IPC, identical to
 // typing. No auto-submit by default — the user presses Enter when ready.
@@ -74,11 +77,6 @@
     if (!hkIsAlt && (!!hk.alt) !== ev.altKey) return false;
     return true;
   }
-  function isModifierKey(ev) {
-    return ALT_CODES.includes(ev.code) || CTRL_CODES.includes(ev.code) ||
-           SHIFT_CODES.includes(ev.code) || META_CODES.includes(ev.code);
-  }
-
   // ── Indicator UI ───────────────────────────────────────────────────────
   function ensureIndicator() {
     if (_state.indicator) return _state.indicator;
@@ -150,6 +148,14 @@
     // The previous check `if (_state.mode !== 'idle') return false` therefore
     // always tripped and silently rejected every record attempt.
 
+    // Capture path: AudioWorklet → raw Float32 PCM → in-memory chunks.
+    // We deliberately do NOT use MediaRecorder. MediaRecorder produces a
+    // WebM/Opus container that must be round-tripped through decodeAudioData
+    // before we can resample, and that decode step has a long tail of
+    // silent-truncation bugs that lose all or part of long dictations.
+    // AudioWorklet runs on the audio rendering thread, gets raw samples
+    // directly from the source node, and is not subject to main-thread
+    // jank. No codec, no container — much harder to lose audio.
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -162,45 +168,70 @@
     }
     _state.stream = stream;
 
-    // Audio analyser for the level meter (parallel to the recorder).
+    let ac, src, ana, worklet, silentSink;
     try {
       const Ctor = window.AudioContext || window.webkitAudioContext;
-      const ac = new Ctor();
-      const src = ac.createMediaStreamSource(stream);
-      const ana = ac.createAnalyser();
+      ac = new Ctor();
+      // Worklet module load is async and must complete before we can
+      // construct the AudioWorkletNode. Cache the loaded-promise on the
+      // context so successive recordings don't re-fetch.
+      await ac.audioWorklet.addModule('voice-worklet.js');
+      src = ac.createMediaStreamSource(stream);
+      ana = ac.createAnalyser();
       ana.fftSize = 1024;
+      worklet = new AudioWorkletNode(ac, 'voice-capture');
+      // The audio graph only runs when nodes connect to the destination,
+      // so route the worklet through a muted gain → destination. Gain=0
+      // means we don't echo the mic back to the speakers; the worklet
+      // still receives input and posts samples.
+      silentSink = ac.createGain();
+      silentSink.gain.value = 0;
       src.connect(ana);
-      _state.audioContext = ac;
-      _state.audioSource = src;
-      _state.audioAnalyser = ana;
-    } catch {}
+      src.connect(worklet);
+      worklet.connect(silentSink);
+      silentSink.connect(ac.destination);
+    } catch (err) {
+      logVoice('error', 'audio-graph-init-failed', { error: err.message || String(err) });
+      showIndicator('Audio init failed', err.message || String(err), 'error');
+      setTimeout(hideIndicator, 4000);
+      try { stream.getTracks().forEach(t => t.stop()); } catch {}
+      _state.stream = null;
+      return false;
+    }
 
-    const mimeType = pickRecorderMime();
-    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-    _state.recorder = recorder;
-    _state.chunks = [];
-    recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) _state.chunks.push(e.data); };
-    recorder.start(250);   // emit chunks every 250ms; helps if user records long
+    _state.audioContext = ac;
+    _state.audioSource = src;
+    _state.audioAnalyser = ana;
+    _state.worklet = worklet;
+    _state.silentSink = silentSink;
+    _state.pcmChunks = [];
+    _state.pcmSampleCount = 0;
+    _state.captureSampleRate = ac.sampleRate;
+
+    worklet.port.onmessage = (e) => {
+      const buf = e.data;
+      if (buf && buf.length) {
+        _state.pcmChunks.push(buf);
+        _state.pcmSampleCount += buf.length;
+      }
+    };
+
     _state.startedAt = Date.now();
-
     showIndicator('Listening', 'Speak now', 'recording');
     startLevelLoop();
     return true;
   }
 
-  function pickRecorderMime() {
-    const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
-    for (const m of candidates) {
-      try { if (MediaRecorder.isTypeSupported(m)) return m; } catch {}
-    }
-    return null;
-  }
-
   function teardownRecording() {
     stopLevelLoop();
-    if (_state.recorder) {
-      try { _state.recorder.stop(); } catch {}
-      _state.recorder = null;
+    if (_state.worklet) {
+      try { _state.worklet.port.onmessage = null; } catch {}
+      try { _state.worklet.disconnect(); } catch {}
+      _state.worklet = null;
+    }
+    if (_state.silentSink) {
+      try { _state.silentSink.disconnect(); } catch {}
+      _state.silentSink = null;
     }
     if (_state.stream) {
       try { _state.stream.getTracks().forEach(t => t.stop()); } catch {}
@@ -215,13 +246,14 @@
   }
 
   async function stopAndTranscribe() {
-    if (!_state.recorder || _state.mode === 'transcribing' || _state.mode === 'idle') return;
-    const recorder = _state.recorder;
+    if (_state.mode === 'transcribing' || _state.mode === 'idle') return;
+    if (!_state.audioContext || !_state.pcmChunks) return;
     const elapsed = Date.now() - _state.startedAt;
-    const chunks = _state.chunks;
-    const stoppedPromise = new Promise((resolve) => { recorder.onstop = resolve; });
-    try { recorder.stop(); } catch {}
-    await stoppedPromise;
+    // Snapshot capture state *before* teardown — teardown closes the
+    // AudioContext and nulls out _state.pcmChunks/sampleRate.
+    const pcmChunks = _state.pcmChunks;
+    const totalSamples = _state.pcmSampleCount;
+    const captureSampleRate = _state.captureSampleRate;
 
     teardownRecording();
 
@@ -235,67 +267,163 @@
     _state.mode = 'transcribing';
     showIndicator('Transcribing…', '', 'transcribing');
 
+    let savedWavPath = null;
     try {
-      const opusBlob = new Blob(chunks, { type: chunks[0]?.type || 'audio/webm' });
-      console.info('[voice] recorded', { ms: elapsed, bytes: opusBlob.size, mime: opusBlob.type });
-      const wavBlob = await opusToWav(opusBlob, TARGET_SAMPLE_RATE);
-      console.info('[voice] wav-encoded', { bytes: wavBlob.size });
+      logVoice('info', 'recorded', {
+        ms: elapsed,
+        captureRate: captureSampleRate,
+        samples: totalSamples,
+        chunks: pcmChunks.length,
+        capturedSec: Number((totalSamples / captureSampleRate).toFixed(2)),
+      });
+
+      // Sanity check: capture duration must be roughly the wall-clock
+      // duration. If samples are missing (audio thread starvation, worklet
+      // crash) fail loudly rather than transcribe a partial.
+      const capturedSec = totalSamples / captureSampleRate;
+      if (capturedSec * 1000 < elapsed * 0.6) {
+        const err = new Error(
+          `audio capture truncated: ${(elapsed/1000).toFixed(1)}s recorded but ` +
+          `${capturedSec.toFixed(1)}s captured`
+        );
+        err.code = 'CAPTURE_TRUNCATED';
+        err.recordedMs = elapsed;
+        err.capturedMs = Math.round(capturedSec * 1000);
+        throw err;
+      }
+
+      const wavBytes = await pcmChunksToWavBytes(pcmChunks, totalSamples, captureSampleRate, TARGET_SAMPLE_RATE);
+      logVoice('info', 'wav-encoded', { bytes: wavBytes.byteLength, sampleRate: TARGET_SAMPLE_RATE });
+
+      // Belt-and-braces: persist the WAV to disk before submitting. If
+      // anything downstream fails (whisper crash, network blip, inject
+      // error), the user can resubmit or inspect the actual audio. The
+      // file is kept in a rotating temp dir under userData/voice-tmp/.
+      try {
+        if (window.api && window.api.voiceSaveWav) {
+          const r = await window.api.voiceSaveWav(wavBytes);
+          if (r && r.ok) savedWavPath = r.path;
+        }
+      } catch (err) {
+        logVoice('warn', 'wav-save-failed', { error: err.message || String(err) });
+      }
+      if (savedWavPath) logVoice('info', 'wav-saved', { path: savedWavPath });
+
+      const wavBlob = new Blob([wavBytes], { type: 'audio/wav' });
       const text = await transcribe(wavBlob);
       const trimmed = (text || '').trim();
-      console.info('[voice] transcript', { len: trimmed.length, preview: trimmed.slice(0, 80) });
+      logVoice('info', 'transcript', { len: trimmed.length, preview: trimmed.slice(0, 120), wav: savedWavPath });
       if (!trimmed) {
         showIndicator('No speech detected', 'Try again, or speak louder', 'error');
         setTimeout(hideIndicator, 2500);
       } else {
-        // Visible confirmation that we got a transcript and where it went.
+        // Always copy to clipboard before injecting — guarantees the user
+        // can manually paste even if injection fails or text gets eaten by
+        // a TUI mode (slash-command picker, dialog, etc.).
+        const clipOk = await writeClipboard(trimmed);
         const sid = window.activeSessionId || sessionStorage.getItem('activeSessionId');
         if (!sid) {
-          showIndicator('No active session', 'Open a Claude session first, then try again', 'error');
-          setTimeout(hideIndicator, 4000);
+          showIndicator(
+            'No active session',
+            clipOk ? 'Copied to clipboard — paste manually' : 'Open a Claude session first, then try again',
+            'error'
+          );
+          setTimeout(hideIndicator, 4500);
+          logVoice('warn', 'inject-skipped-no-session', { clipboard: clipOk, len: trimmed.length });
         } else {
           const result = await injectText(trimmed, _settings.autoSubmit);
           if (result && result.ok) {
-            // Brief preview so the user sees what was injected.
-            showIndicator('Inserted', trimmed.length > 60 ? trimmed.slice(0, 57) + '…' : trimmed);
-            setTimeout(hideIndicator, 1800);
+            const preview = trimmed.length > 60 ? trimmed.slice(0, 57) + '…' : trimmed;
+            showIndicator('Inserted' + (clipOk ? ' (clipboard backup)' : ''), preview);
+            setTimeout(hideIndicator, 2200);
           } else {
-            showIndicator('Insert failed', (result && result.error) || 'sendInput unavailable', 'error');
-            setTimeout(hideIndicator, 4000);
+            showIndicator(
+              'Insert failed',
+              clipOk
+                ? `Transcript on clipboard — paste with Ctrl+V. Reason: ${(result && result.error) || 'sendInput unavailable'}`
+                : (result && result.error) || 'sendInput unavailable',
+              'error'
+            );
+            setTimeout(hideIndicator, 6000);
+            logVoice('error', 'inject-failed', { clipboard: clipOk, error: result && result.error, len: trimmed.length });
           }
         }
       }
     } catch (err) {
-      console.error('[voice] transcription failed', err);
-      showIndicator('Transcription failed', err.message || String(err), 'error');
-      setTimeout(hideIndicator, 3500);
+      logVoice('error', 'transcription-failed', {
+        error: err.message || String(err),
+        code: err.code || null,
+        recordedMs: err.recordedMs || null,
+        capturedMs: err.capturedMs || null,
+        wav: savedWavPath,
+      });
+      const detail = (err.message || String(err)) +
+        (savedWavPath ? ` — audio saved at ${savedWavPath}` : '');
+      showIndicator('Transcription failed', detail, 'error');
+      setTimeout(hideIndicator, 8000);
     } finally {
       _state.mode = 'idle';
     }
   }
 
-  // ── Opus → 16 kHz mono WAV ─────────────────────────────────────────────
-  async function opusToWav(blob, targetSampleRate) {
-    const arrayBuf = await blob.arrayBuffer();
-    const Ctor = window.AudioContext || window.webkitAudioContext;
-    // OfflineAudioContext gives us deterministic resampling without playing audio.
-    const probe = new Ctor();
-    let decoded;
-    try { decoded = await probe.decodeAudioData(arrayBuf.slice(0)); }
-    finally { try { probe.close(); } catch {} }
+  async function writeClipboard(text) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (err) {
+      logVoice('warn', 'clipboard-failed', { error: err.message || String(err) });
+    }
+    return false;
+  }
 
-    const offlineLength = Math.ceil(decoded.duration * targetSampleRate);
-    const offline = new OfflineAudioContext(1, offlineLength, targetSampleRate);
-    const src = offline.createBufferSource();
-    src.buffer = decoded;
-    // Sum stereo → mono by going through a 1-channel destination.
-    const merger = offline.createChannelMerger(1);
-    src.connect(merger);
-    merger.connect(offline.destination);
-    src.start(0);
-    const rendered = await offline.startRendering();
-    const pcm16 = float32ToPcm16(rendered.getChannelData(0));
-    const wav = encodeWav(pcm16, targetSampleRate);
-    return new Blob([wav], { type: 'audio/wav' });
+  function logVoice(level, event, data) {
+    try {
+      const line = `[voice] ${event} ${JSON.stringify(data || {})}`;
+      // Console mirror — handy when DevTools is open.
+      const fn = console[level] || console.info;
+      fn.call(console, line);
+      // Disk mirror — main process forwards to electron-log so a failed
+      // dictation leaves an on-disk trace even when DevTools is closed.
+      if (window.api && window.api.voiceLog) window.api.voiceLog(level, event, data || {});
+    } catch {}
+  }
+
+  // ── Raw PCM chunks → 16 kHz mono WAV ──────────────────────────────────
+  // Concatenate the Float32 frames the worklet produced, resample from the
+  // capture context's native rate (typically 48 kHz) to whisper's 16 kHz
+  // via OfflineAudioContext, then encode a 16-bit PCM WAV. No codec round
+  // trip, no decodeAudioData — the resampler is the only Web Audio step,
+  // and it operates on data we already hold so there's nothing to lose.
+  async function pcmChunksToWavBytes(chunks, totalSamples, sourceRate, targetRate) {
+    const merged = new Float32Array(totalSamples);
+    let off = 0;
+    for (const c of chunks) {
+      merged.set(c, off);
+      off += c.length;
+    }
+    let final;
+    if (sourceRate === targetRate) {
+      final = merged;
+    } else {
+      // Build an AudioBuffer holding our captured samples, render via
+      // OfflineAudioContext at the target rate. This uses the same
+      // high-quality resampling Chromium uses for normal playback.
+      const inCtx = new OfflineAudioContext(1, merged.length, sourceRate);
+      const inBuf = inCtx.createBuffer(1, merged.length, sourceRate);
+      inBuf.copyToChannel(merged, 0);
+      const outLen = Math.ceil(merged.length * targetRate / sourceRate);
+      const outCtx = new OfflineAudioContext(1, outLen, targetRate);
+      const src = outCtx.createBufferSource();
+      src.buffer = inBuf;
+      src.connect(outCtx.destination);
+      src.start(0);
+      const rendered = await outCtx.startRendering();
+      final = rendered.getChannelData(0);
+    }
+    const pcm16 = float32ToPcm16(final);
+    return encodeWav(pcm16, targetRate);
   }
 
   function float32ToPcm16(f32) {
@@ -334,21 +462,51 @@
     return String(s || '').replace(/\s+/g, ' ').trim();
   }
 
-  async function transcribe(wavBlob) {
+  // Inference timeout: whisper-server processes large-v3-turbo at roughly
+  // realtime/4 on CPU and faster on GPU; 5 minutes of audio is the longest
+  // realistic dictation, which decodes well under 2min. Cap at 4min so a
+  // wedged request fails loudly instead of hanging the indicator.
+  const TRANSCRIBE_TIMEOUT_MS = 4 * 60 * 1000;
+
+  async function transcribeOnce(wavBlob) {
     const endpoint = `http://${_settings.host}:${_settings.port}/inference`;
     const fd = new FormData();
     fd.append('file', wavBlob, 'audio.wav');
     if (_settings.language) fd.append('language', _settings.language);
     fd.append('response_format', 'json');
     fd.append('temperature', '0');
-    const res = await fetch(endpoint, { method: 'POST', body: fd });
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), TRANSCRIBE_TIMEOUT_MS);
+    let res;
+    try {
+      res = await fetch(endpoint, { method: 'POST', body: fd, signal: ctl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status} — ${body.slice(0, 160)}`);
+      const err = new Error(`HTTP ${res.status} — ${body.slice(0, 160)}`);
+      err.status = res.status;
+      throw err;
     }
     const data = await res.json();
     const raw = (typeof data.text === 'string') ? data.text : (data.transcription || data.transcript || '');
     return flattenWhitespace(raw);
+  }
+
+  async function transcribe(wavBlob) {
+    // One automatic retry on network error or 5xx, with a brief delay so
+    // an in-flight whisper-server restart (whisper-manager backoff) has a
+    // chance to come back up.
+    try {
+      return await transcribeOnce(wavBlob);
+    } catch (err) {
+      const retriable = !err.status || err.status >= 500;
+      if (!retriable) throw err;
+      logVoice('warn', 'transcribe-retry', { reason: err.message || String(err) });
+      await new Promise(r => setTimeout(r, 1500));
+      return await transcribeOnce(wavBlob);
+    }
   }
 
   // ── Inject into the active terminal ────────────────────────────────────
@@ -468,8 +626,26 @@
     }, true);
     window.addEventListener('keyup', (ev) => {
       if (!_settings.enabled) return;
-      // Treat any release of the PTT key (or its modifier sibling) as up.
-      if (_state.pttKeyHeld && (matches(ev, _settings.hotkeyPtt) || isModifierKey(ev))) {
+      // Only release on the actual PTT key. The previous logic also released
+      // on *any* modifier keyup as a fallback for keyboard layouts where the
+      // hotkey-down event arrives without a clean keyup, but it had a much
+      // worse failure mode: brushing Shift or Ctrl mid-sentence silently
+      // ended the recording, producing the "I dictated for 30s and got
+      // nothing back" symptom. Sibling-modifier match is still allowed when
+      // the PTT key is itself a bare modifier and the user releases the
+      // *other* side (e.g. PTT=AltRight, OS only fires AltLeft keyup).
+      if (!_state.pttKeyHeld) return;
+      const hk = _settings.hotkeyPtt;
+      const hkIsModifier = hk && (ALT_CODES.includes(hk.key) || CTRL_CODES.includes(hk.key) ||
+                                  SHIFT_CODES.includes(hk.key) || META_CODES.includes(hk.key));
+      const sameFamily =
+        hkIsModifier && (
+          (ALT_CODES.includes(hk.key) && ALT_CODES.includes(ev.code)) ||
+          (CTRL_CODES.includes(hk.key) && CTRL_CODES.includes(ev.code)) ||
+          (SHIFT_CODES.includes(hk.key) && SHIFT_CODES.includes(ev.code)) ||
+          (META_CODES.includes(hk.key) && META_CODES.includes(ev.code))
+        );
+      if (matches(ev, hk) || sameFamily) {
         _state.pttKeyHeld = false;
         if (_state.mode === 'recording-ptt') onPttUp();
       }
@@ -489,44 +665,38 @@
   async function testTranscribe(durationMs) {
     if (_state.mode !== 'idle') return { ok: false, error: 'busy' };
     _state.mode = 'recording-toggle';
+    const startedAt = Date.now();
     const ok = await startRecording();
     if (!ok) {
       _state.mode = 'idle';
       return { ok: false, error: 'startRecording failed (see console)' };
     }
     await new Promise(r => setTimeout(r, Math.max(500, durationMs || 3000)));
-    // stopAndTranscribe drives the rest; report based on indicator state.
-    return new Promise((resolve) => {
-      const wrap = async () => {
-        const startedAt = Date.now();
-        // Mirror the stop+transcribe path but capture the result here.
-        const recorder = _state.recorder;
-        if (!recorder) { _state.mode = 'idle'; resolve({ ok: false, error: 'no recorder' }); return; }
-        const chunks = _state.chunks;
-        const stoppedPromise = new Promise((r) => { recorder.onstop = r; });
-        try { recorder.stop(); } catch {}
-        await stoppedPromise;
-        teardownRecording();
-        _state.mode = 'transcribing';
-        showIndicator('Transcribing test…', '', 'transcribing');
-        try {
-          const opusBlob = new Blob(chunks, { type: chunks[0]?.type || 'audio/webm' });
-          const wavBlob = await opusToWav(opusBlob, TARGET_SAMPLE_RATE);
-          const text = await transcribe(wavBlob);
-          const trimmed = (text || '').trim();
-          showIndicator('Test result', trimmed || '(empty)', trimmed ? null : 'error');
-          setTimeout(hideIndicator, 4000);
-          _state.mode = 'idle';
-          resolve({ ok: true, transcript: trimmed, durationMs: Date.now() - startedAt });
-        } catch (err) {
-          showIndicator('Test failed', err.message || String(err), 'error');
-          setTimeout(hideIndicator, 4000);
-          _state.mode = 'idle';
-          resolve({ ok: false, error: err.message || String(err) });
-        }
-      };
-      wrap();
-    });
+    if (!_state.audioContext) {
+      _state.mode = 'idle';
+      return { ok: false, error: 'no capture context' };
+    }
+    const pcmChunks = _state.pcmChunks;
+    const totalSamples = _state.pcmSampleCount;
+    const captureSampleRate = _state.captureSampleRate;
+    teardownRecording();
+    _state.mode = 'transcribing';
+    showIndicator('Transcribing test…', '', 'transcribing');
+    try {
+      const wavBytes = await pcmChunksToWavBytes(pcmChunks, totalSamples, captureSampleRate, TARGET_SAMPLE_RATE);
+      const wavBlob = new Blob([wavBytes], { type: 'audio/wav' });
+      const text = await transcribe(wavBlob);
+      const trimmed = (text || '').trim();
+      showIndicator('Test result', trimmed || '(empty)', trimmed ? null : 'error');
+      setTimeout(hideIndicator, 4000);
+      _state.mode = 'idle';
+      return { ok: true, transcript: trimmed, durationMs: Date.now() - startedAt };
+    } catch (err) {
+      showIndicator('Test failed', err.message || String(err), 'error');
+      setTimeout(hideIndicator, 4000);
+      _state.mode = 'idle';
+      return { ok: false, error: err.message || String(err) };
+    }
   }
 
   window.voice = {
