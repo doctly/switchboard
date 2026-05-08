@@ -221,6 +221,12 @@ async function spawnChild() {
     '--port', String(_state.port),
     // -1 lets ggml pick CPU thread count; default 4 is usually fine on modern boxes.
     '--threads', String(Math.max(4, Math.min(16, os.cpus().length || 4))),
+    // Accept any audio format the renderer sends — whisper.cpp's server
+    // only natively reads WAV, but with --convert it shells out to ffmpeg
+    // to transcode (Opus/WebM/m4a/etc → WAV) before transcribing. Lets
+    // us record with MediaRecorder (browser-native Opus codec) and
+    // submit the file directly without resampling/decoding in renderer.
+    '--convert',
   ];
   if (_settings.extraArgs && Array.isArray(_settings.extraArgs)) args.push(..._settings.extraArgs);
 
