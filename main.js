@@ -1427,6 +1427,168 @@ ipcMain.handle('voice-save-wav', async (_event, bytes) => {
   }
 });
 
+// --- IPC: voice-record-* — main owns the recording file lifecycle ---
+//
+// Why these live in main: when audio capture state lived in the renderer
+// (AudioWorklet → main-thread accumulation), main-thread jank during
+// recording dropped audio frames irrecoverably. With MediaRecorder in
+// the renderer producing Opus chunks every ~2 seconds, we can stream
+// each chunk through IPC and append it to a file in main. Memory in
+// the renderer doesn't grow, and the on-disk file IS the recording —
+// even if Switchboard crashed mid-dictation, the partial file would
+// survive on disk.
+//
+// Flow:
+//   start()            → returns { ok, recordingId, path }
+//   chunk(id, bytes)   → fire-and-forget append
+//   stop(id)           → close file, return { ok, path, sizeBytes }
+//   cancel(id)         → close + delete, return { ok }
+//
+// One concurrent recording per renderer is enough — the hotkey state
+// machine guarantees no overlap, but we still defensively reject a
+// second start while one is open.
+
+const _voiceRecordings = new Map();  // recordingId → { stream, path, sizeBytes }
+let _voiceRecordingSeq = 0;
+
+ipcMain.handle('voice-record-start', async () => {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const dir = path.join(app.getPath('userData'), 'voice-tmp');
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    // Extension is decided per-recording: MediaRecorder default is webm.
+    const recordingId = `rec-${++_voiceRecordingSeq}-${stamp}`;
+    const file = path.join(dir, `${recordingId}.webm`);
+    const stream = fs.createWriteStream(file, { flags: 'w' });
+    _voiceRecordings.set(recordingId, { stream, path: file, sizeBytes: 0, fs, path: file });
+    return { ok: true, recordingId, path: file };
+  } catch (err) {
+    log.warn('[voice] record-start failed:', err && err.message);
+    return { ok: false, error: err && err.message };
+  }
+});
+
+ipcMain.on('voice-record-chunk', (_event, recordingId, bytes) => {
+  const rec = _voiceRecordings.get(recordingId);
+  if (!rec || !bytes) return;
+  try {
+    const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    rec.stream.write(buf);
+    rec.sizeBytes += buf.length;
+  } catch (err) {
+    log.warn('[voice] record-chunk failed:', err && err.message);
+  }
+});
+
+ipcMain.handle('voice-record-stop', async (_event, recordingId) => {
+  const rec = _voiceRecordings.get(recordingId);
+  if (!rec) return { ok: false, error: 'unknown recordingId' };
+  return new Promise((resolve) => {
+    rec.stream.end(() => {
+      _voiceRecordings.delete(recordingId);
+      // Prune: keep newest 20 .webm/.wav files in voice-tmp.
+      try {
+        const fsp = require('fs').promises;
+        const fs = require('fs');
+        const path = require('path');
+        const dir = path.join(app.getPath('userData'), 'voice-tmp');
+        fsp.readdir(dir).then(names => {
+          const entries = names
+            .filter(n => /\.(webm|wav)$/i.test(n))
+            .map(n => ({ n, t: fs.statSync(path.join(dir, n)).mtimeMs }))
+            .sort((a, b) => b.t - a.t);
+          for (const e of entries.slice(20)) {
+            fsp.unlink(path.join(dir, e.n)).catch(() => {});
+          }
+        }).catch(() => {});
+      } catch {}
+      resolve({ ok: true, path: rec.path, sizeBytes: rec.sizeBytes });
+    });
+  });
+});
+
+ipcMain.handle('voice-record-cancel', async (_event, recordingId) => {
+  const rec = _voiceRecordings.get(recordingId);
+  if (!rec) return { ok: true };
+  return new Promise((resolve) => {
+    rec.stream.end(() => {
+      _voiceRecordings.delete(recordingId);
+      try { require('fs').unlinkSync(rec.path); } catch {}
+      resolve({ ok: true });
+    });
+  });
+});
+
+// Submit a previously-recorded file to whisper-server. Lives in main so
+// the renderer doesn't have to load the whole file back into memory just
+// to multipart-encode it — fs streams + form-data assembly happen here,
+// renderer just gets the transcript string back.
+ipcMain.handle('voice-transcribe-file', async (_event, filePath, opts) => {
+  const fs = require('fs');
+  const http = require('http');
+  const path = require('path');
+  try {
+    if (!fs.existsSync(filePath)) return { ok: false, error: `file not found: ${filePath}` };
+    const buf = await require('fs').promises.readFile(filePath);
+    const o = opts || {};
+    const host = o.host || '127.0.0.1';
+    const port = o.port || 52391;
+    const language = o.language || 'en';
+    const filename = path.basename(filePath);
+
+    // Multipart/form-data assembly. Boundary is a random string; we
+    // construct the body by concatenating headers + file bytes + closer.
+    const boundary = '----switchboardVoice' + Math.random().toString(36).slice(2);
+    const CRLF = '\r\n';
+    const head = Buffer.from(
+      `--${boundary}${CRLF}Content-Disposition: form-data; name="file"; filename="${filename}"${CRLF}` +
+      `Content-Type: application/octet-stream${CRLF}${CRLF}`,
+      'utf8'
+    );
+    const tail = Buffer.from(
+      `${CRLF}--${boundary}${CRLF}Content-Disposition: form-data; name="language"${CRLF}${CRLF}${language}${CRLF}` +
+      `--${boundary}${CRLF}Content-Disposition: form-data; name="response_format"${CRLF}${CRLF}json${CRLF}` +
+      `--${boundary}${CRLF}Content-Disposition: form-data; name="temperature"${CRLF}${CRLF}0${CRLF}` +
+      `--${boundary}--${CRLF}`,
+      'utf8'
+    );
+    const body = Buffer.concat([head, buf, tail]);
+
+    const result = await new Promise((resolve, reject) => {
+      const req = http.request({
+        host, port, path: '/inference', method: 'POST',
+        headers: {
+          'Content-Type': 'multipart/form-data; boundary=' + boundary,
+          'Content-Length': body.length,
+        },
+      }, (res) => {
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            reject(new Error(`HTTP ${res.statusCode} — ${text.slice(0, 240)}`));
+            return;
+          }
+          try { resolve(JSON.parse(text)); }
+          catch { resolve({ text }); }
+        });
+      });
+      req.on('error', reject);
+      req.write(body);
+      req.end();
+    });
+
+    const transcript = (result && (result.text || result.transcription || result.transcript)) || '';
+    return { ok: true, transcript };
+  } catch (err) {
+    log.warn('[voice] transcribe-file failed:', err && err.message);
+    return { ok: false, error: err && err.message };
+  }
+});
+
 // --- IPC: terminal-resize (fire-and-forget) ---
 ipcMain.on('terminal-resize', (_event, sessionId, cols, rows) => {
   const session = activeSessions.get(sessionId);

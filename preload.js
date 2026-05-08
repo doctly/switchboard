@@ -107,6 +107,17 @@ contextBridge.exposeInMainWorld('api', {
   closeTerminal: (id) => ipcRenderer.send('close-terminal', id),
   voiceLog: (level, event, data) => ipcRenderer.send('voice-log', level, event, data),
   voiceSaveWav: (bytes) => ipcRenderer.invoke('voice-save-wav', bytes),
+  // Streamed-to-disk recording — main process owns the file lifecycle.
+  // start() returns { ok, recordingId, path }; chunk(...) is fire-and-
+  // forget; stop() and cancel() return { ok, ... }. transcribeFile()
+  // submits a recorded file to whisper-server and returns { ok, transcript }.
+  voiceRecord: {
+    start:   () => ipcRenderer.invoke('voice-record-start'),
+    chunk:   (id, bytes) => ipcRenderer.send('voice-record-chunk', id, bytes),
+    stop:    (id) => ipcRenderer.invoke('voice-record-stop', id),
+    cancel:  (id) => ipcRenderer.invoke('voice-record-cancel', id),
+    transcribeFile: (path, opts) => ipcRenderer.invoke('voice-transcribe-file', path, opts || {}),
+  },
 
   // Listeners (main → renderer)
   onTerminalData: (callback) => {
