@@ -191,6 +191,28 @@
     testWrap.appendChild(testBtn); testWrap.appendChild(testOut);
     root.appendChild(field('Test transcription', 'Click → speak for 3 seconds → see what whisper transcribes. Bypasses the hotkey, so this isolates microphone + whisper from keyboard issues.', testWrap));
 
+    // Log path display — voice events (recorded / wav-encoded / transcript /
+    // inject ok|failed) are mirrored to the main electron-log file so they
+    // can be tailed/inspected when DevTools won't open. Each line is tagged
+    // [renderer] [voice] <event> {…json…}.
+    const logWrap = document.createElement('div'); logWrap.className = 'voice-server-controls'; logWrap.style.flexWrap = 'wrap';
+    const logPath = document.createElement('code');
+    logPath.style.fontSize = '11px';
+    logPath.style.userSelect = 'all';
+    logPath.textContent = 'resolving…';
+    if (window.api && typeof window.api.getLogPath === 'function') {
+      window.api.getLogPath().then(p => { logPath.textContent = p || '(unavailable)'; }).catch(() => { logPath.textContent = '(unavailable)'; });
+    } else {
+      logPath.textContent = '(getLogPath not available — restart Switchboard to load the new IPC)';
+    }
+    const copyBtn = document.createElement('button'); copyBtn.className = 'voice-srv-btn'; copyBtn.type = 'button'; copyBtn.textContent = 'Copy path';
+    copyBtn.onclick = async () => {
+      try { await navigator.clipboard.writeText(logPath.textContent); copyBtn.textContent = 'Copied'; setTimeout(() => { copyBtn.textContent = 'Copy path'; }, 1500); } catch {}
+    };
+    logWrap.appendChild(logPath);
+    logWrap.appendChild(copyBtn);
+    root.appendChild(field('Log file (on disk)', 'Voice diagnostics — recording length, transcript size, inject result, errors — are written here. Open it in any text editor for a post-mortem when something doesn\'t work.', logWrap));
+
     // Save handler exposed to caller — invoked from the dialog's Save button.
     onSave.collect = () => ({
       enabled: enabledIn.checked,
