@@ -208,11 +208,22 @@
     _state.pcmSampleCount = 0;
     _state.captureSampleRate = ac.sampleRate;
 
+    // Worklet posts either:
+    //   - A Float32Array batch (transferable buffer) of PCM samples
+    //   - A {type: 'final', observed, posted} object on flush — used to
+    //     verify the worklet didn't internally drop samples
+    _state.workletObserved = 0;
+    _state.workletPosted = 0;
     worklet.port.onmessage = (e) => {
-      const buf = e.data;
-      if (buf && buf.length) {
-        _state.pcmChunks.push(buf);
-        _state.pcmSampleCount += buf.length;
+      const data = e.data;
+      if (data && data.type === 'final') {
+        _state.workletObserved = data.observed || 0;
+        _state.workletPosted = data.posted || 0;
+        return;
+      }
+      if (data && data.length) {
+        _state.pcmChunks.push(data);
+        _state.pcmSampleCount += data.length;
       }
     };
 
@@ -249,11 +260,28 @@
     if (_state.mode === 'transcribing' || _state.mode === 'idle') return;
     if (!_state.audioContext || !_state.pcmChunks) return;
     const elapsed = Date.now() - _state.startedAt;
+
+    // Tell the worklet to flush its in-flight partial batch, then wait
+    // briefly for the final summary message to arrive so we know how
+    // many samples the worklet thread itself observed vs posted. The
+    // batch buffer is up to ~6.4k samples (~133 ms at 48 kHz) — without
+    // a flush, the very last fragment of every recording would be lost.
+    try {
+      if (_state.worklet && _state.worklet.port) {
+        _state.worklet.port.postMessage({ type: 'flush' });
+        // Give the audio thread a render quantum or two to deliver the
+        // flushed batch + the final summary. 50 ms is plenty.
+        await new Promise(r => setTimeout(r, 50));
+      }
+    } catch {}
+
     // Snapshot capture state *before* teardown — teardown closes the
     // AudioContext and nulls out _state.pcmChunks/sampleRate.
     const pcmChunks = _state.pcmChunks;
     const totalSamples = _state.pcmSampleCount;
     const captureSampleRate = _state.captureSampleRate;
+    const workletObserved = _state.workletObserved || 0;
+    const workletPosted = _state.workletPosted || 0;
 
     teardownRecording();
 
@@ -275,20 +303,35 @@
         samples: totalSamples,
         chunks: pcmChunks.length,
         capturedSec: Number((totalSamples / captureSampleRate).toFixed(2)),
+        workletObserved,
+        workletPosted,
+        // ipcLossSamples > 0 means the worklet posted samples that never
+        // made it to the main thread — Chromium's worklet→main IPC queue
+        // dropped them. Should be 0 with the 6,400-sample batching.
+        ipcLossSamples: Math.max(0, workletPosted - totalSamples),
+        // workletDropSamples > 0 means the audio thread observed samples
+        // it never queued for posting (extreme starvation). Should be 0.
+        workletDropSamples: Math.max(0, workletObserved - workletPosted),
       });
 
       // Sanity check: capture duration must be roughly the wall-clock
-      // duration. If samples are missing (audio thread starvation, worklet
-      // crash) fail loudly rather than transcribe a partial.
+      // duration. If samples are missing (audio thread starvation,
+      // postMessage queue overflow, worklet crash) fail loudly rather
+      // than transcribe a partial. Threshold tightened from 60% (way
+      // too lax — losing 40% of audio is a silent disaster) to 95%.
       const capturedSec = totalSamples / captureSampleRate;
-      if (capturedSec * 1000 < elapsed * 0.6) {
+      if (capturedSec * 1000 < elapsed * 0.95) {
         const err = new Error(
           `audio capture truncated: ${(elapsed/1000).toFixed(1)}s recorded but ` +
-          `${capturedSec.toFixed(1)}s captured`
+          `${capturedSec.toFixed(1)}s captured (worklet observed ` +
+          `${(workletObserved/captureSampleRate).toFixed(1)}s, posted ` +
+          `${(workletPosted/captureSampleRate).toFixed(1)}s)`
         );
         err.code = 'CAPTURE_TRUNCATED';
         err.recordedMs = elapsed;
         err.capturedMs = Math.round(capturedSec * 1000);
+        err.workletObservedMs = Math.round((workletObserved / captureSampleRate) * 1000);
+        err.workletPostedMs = Math.round((workletPosted / captureSampleRate) * 1000);
         throw err;
       }
 
