@@ -126,13 +126,13 @@ function createWindow() {
 
   // Open external links in the system browser instead of a child BrowserWindow
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
+    openExternalOnce(url);
     return { action: 'deny' };
   });
   mainWindow.webContents.on('will-navigate', (event, url) => {
     if (url !== mainWindow.webContents.getURL()) {
       event.preventDefault();
-      if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
+      openExternalOnce(url);
     }
   });
   // Override window.open so xterm WebLinksAddon's default handler (which does
@@ -343,9 +343,26 @@ ipcMain.handle('remove-project', (_event, projectPath) => {
 });
 
 // --- IPC: get-projects ---
+// Open an external URL, collapsing duplicate requests for the same URL within a
+// short window. A terminal URL can be matched by BOTH xterm's OSC 8 link provider
+// (via the linkHandler option) and the WebLinksAddon regex when a hyperlink's
+// visible text is itself a URL — common with CLIs like Claude Code that emit OSC 8.
+// Both fire on a single click, so the browser would otherwise open twice.
+let _lastExternalUrl = null;
+let _lastExternalAt = 0;
+function openExternalOnce(url) {
+  if (!/^https?:\/\//i.test(url)) return;
+  const now = Date.now();
+  if (url === _lastExternalUrl && now - _lastExternalAt < 700) return;
+  _lastExternalUrl = url;
+  _lastExternalAt = now;
+  return shell.openExternal(url).catch(() => {});
+}
+
+// --- IPC: open-external ---
 ipcMain.handle('open-external', (_event, url) => {
   log.info('[open-external IPC]', url);
-  if (/^https?:\/\//i.test(url)) return shell.openExternal(url);
+  return openExternalOnce(url);
 });
 
 // --- IPC: MCP bridge ---
