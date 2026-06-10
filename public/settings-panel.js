@@ -43,6 +43,7 @@
     document.getElementById('stats-viewer').style.display = 'none';
     document.getElementById('memory-viewer').style.display = 'none';
     document.getElementById('jsonl-viewer').style.display = 'none';
+    if (typeof hideOrchViewer === 'function') hideOrchViewer();
     settingsViewer.style.display = 'flex';
 
     function useGlobalCheckbox(fieldName) {

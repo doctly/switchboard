@@ -67,6 +67,23 @@ contextBridge.exposeInMainWorld('api', {
     getAll: () => ipcRenderer.invoke('session-profiles:get-all'),
   },
 
+  // Agent Teams orchestration — run/task state is file-based in each
+  // project's .switchboard dir; main watches it and pushes snapshots.
+  orchestration: {
+    watchProjects: (projectPaths) => ipcRenderer.invoke('orch:watch-projects', projectPaths),
+    getState: () => ipcRenderer.invoke('orch:get-state'),
+    getRun: (projectPath, runId) => ipcRenderer.invoke('orch:get-run', projectPath, runId),
+    readTaskFile: (projectPath, runId, taskId, which) => ipcRenderer.invoke('orch:read-task-file', projectPath, runId, taskId, which),
+    createRun: (projectPath, opts) => ipcRenderer.invoke('orch:create-run', projectPath, opts),
+    runAction: (projectPath, runId, action) => ipcRenderer.invoke('orch:run-action', projectPath, runId, action),
+    taskAction: (projectPath, runId, taskId, action) => ipcRenderer.invoke('orch:task-action', projectPath, runId, taskId, action),
+    onUpdated: (cb) => {
+      const handler = (_e, state) => cb(state);
+      ipcRenderer.on('orchestration-updated', handler);
+      return () => ipcRenderer.removeListener('orchestration-updated', handler);
+    },
+  },
+
   // Pre-aggregated per-backend analytics computed by a worker thread from
   // the JSONL session history. getCache returns instantly (cached read);
   // refresh kicks the worker; analytics-updated fires when fresh data is ready.

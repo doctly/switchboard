@@ -918,6 +918,7 @@ ipcMain.handle('delete-setting', (_event, key) => {
 
 // --- Scheduled tasks ---
 const scheduleIpc = require('./schedule-ipc');
+let orchModule = null; // Agent Teams orchestration (initialized in app.whenReady)
 
 const SETTING_DEFAULTS = {
   permissionMode: null,
@@ -1024,7 +1025,13 @@ ipcMain.handle('archive-session', (_event, sessionId, archived) => {
 });
 
 // --- IPC: open-terminal ---
-ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, sessionOptions) => {
+// The body lives in openTerminalImpl so the Agent Teams orchestrator
+// (orch-ipc.js / orch-spawner.js) can spawn sessions through the exact same
+// path the renderer uses — profiles, MCP, OSC parsing and all.
+ipcMain.handle('open-terminal', (_event, sessionId, projectPath, isNew, sessionOptions) =>
+  openTerminalImpl(sessionId, projectPath, isNew, sessionOptions));
+
+async function openTerminalImpl(sessionId, projectPath, isNew, sessionOptions) {
   if (!mainWindow) return { ok: false, error: 'no window' };
 
   // Reattach to existing session
@@ -1367,7 +1374,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   }
 
   return { ok: true, reattached: false, mcpActive: !!mcpServer };
-});
+}
 
 // --- IPC: terminal-input (fire-and-forget) ---
 ipcMain.on('terminal-input', (_event, sessionId, data) => {
@@ -1786,6 +1793,26 @@ app.whenReady().then(() => {
   }
 
   scheduleIpc.init(log, runScheduleCommand);
+
+  // Agent Teams orchestration: watcher + spawner + IPC. Sessions spawned by
+  // the orchestrator go through openTerminalImpl, so they behave exactly
+  // like user-opened terminals (profiles, buffering, busy detection).
+  const orchIpc = require('./orch-ipc');
+  orchModule = orchIpc.init(log, {
+    openTerminal: openTerminalImpl,
+    sendInput: (sessionId, text) => {
+      const session = activeSessions.get(sessionId);
+      if (!session || session.exited) return false;
+      try { session.pty.write(text); return true; } catch { return false; }
+    },
+    isSessionActive: (sessionId) => {
+      const session = activeSessions.get(sessionId);
+      return !!session && !session.exited;
+    },
+    isSessionBusy: (sessionId) => !!activeSessions.get(sessionId)?._cliBusy,
+    getMainWindow: () => mainWindow,
+  });
+
   profilesModule.init(log);
   sessionProfiles.init(log);
   analyticsModule.init(log, () => mainWindow);
@@ -1811,6 +1838,9 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  // Stop orchestration watchers/spawner
+  if (orchModule) { try { orchModule.dispose(); } catch {} orchModule = null; }
+
   // Shut down all MCP servers
   shutdownAllMcp();
 

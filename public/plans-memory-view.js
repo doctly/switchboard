@@ -86,6 +86,7 @@ async function openPlan(plan) {
   statsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
+  if (typeof hideOrchViewer === 'function') hideOrchViewer();
   planViewer.style.display = 'flex';
 
   planPanel.open(plan.title, currentPlanFilePath, currentPlanContent);
@@ -97,6 +98,7 @@ function hideAllViewers() {
   memoryViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
   jsonlViewer.style.display = 'none';
+  if (typeof hideOrchViewer === 'function') hideOrchViewer();
   terminalArea.style.display = '';
 }
 
@@ -273,6 +275,7 @@ async function openMemory(file) {
   planViewer.style.display = 'none';
   statsViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
+  if (typeof hideOrchViewer === 'function') hideOrchViewer();
   memoryViewer.style.display = 'flex';
 
   memoryPanel.open(file.filename, file.filePath, content);

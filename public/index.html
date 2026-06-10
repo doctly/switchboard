@@ -23,6 +23,7 @@
         <button class="sidebar-tab" data-tab="plans" title="Plans"><svg width="18" height="18" viewBox="0 0 17 17" fill="currentColor" stroke="currentColor" stroke-width="0"><path d="M14 2v-2h-13v17h13v-2h2v-13h-2zM2 16v-15h2v15h-2zM13 16h-8v-15h8v15zM15 14h-1v-3h1v3zM15 10h-1v-3h1v3zM14 6v-3h1v3h-1zM6 4h5v1h-5v-1zM6 6h4v1h-4v-1z"/></svg></button>
         <button class="sidebar-tab" data-tab="memory" title="Agent Files"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M19.938 10.5a4 4 0 0 1 .585.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M19.967 17.484A4 4 0 0 1 18 18"/></svg></button>
         <button class="sidebar-tab" data-tab="stats" title="Stats"><svg width="18" height="18" viewBox="0 0 512 512" fill="currentColor" stroke="currentColor" stroke-width="0"><path d="M128 496H48V304h80zm224 0h-80V208h80zm112 0h-80V96h80zm-224 0h-80V16h80z"/></svg></button>
+        <button class="sidebar-tab" data-tab="teams" title="Agent Teams"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="18" r="2.5"/><circle cx="19" cy="18" r="2.5"/><path d="M12 7.5v4"/><path d="M10.5 13.5 6.8 16"/><path d="m13.5 13.5 3.7 2.5"/></svg></button>
         <button id="global-profiles-btn" title="Manage profiles (env-var bundles for switching backends)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a4 4 0 014-4h8a4 4 0 014 4v2"/></svg></button>
         <button id="global-settings-btn" title="Global settings"></button>
         <button id="sidebar-collapse-btn" title="Hide sidebar"><svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 24 24" height="20" width="20" xmlns="http://www.w3.org/2000/svg"><path d="M18 3a3 3 0 0 1 2.995 2.824l.005 .176v12a3 3 0 0 1 -2.824 2.995l-.176 .005h-12a3 3 0 0 1 -2.995 -2.824l-.005 -.176v-12a3 3 0 0 1 2.824 -2.995l.176 -.005h12zm0 2h-9v14h9a1 1 0 0 0 .993 -.883l.007 -.117v-12a1 1 0 0 0 -.883 -.993l-.117 -.007zm-2.293 4.293a1 1 0 0 1 .083 1.32l-.083 .094l-1.292 1.293l1.292 1.293a1 1 0 0 1 .083 1.32l-.083 .094a1 1 0 0 1 -1.32 .083l-.094 -.083l-2 -2a1 1 0 0 1 -.083 -1.32l.083 -.094l2 -2a1 1 0 0 1 1.414 0z"></path></svg></button>
@@ -48,6 +49,7 @@
       <div class="plans-empty">Click the Stats tab to view activity heatmap.</div>
     </div>
     <div id="memory-content" style="display:none;"></div>
+    <div id="teams-content" style="display:none;"></div>
   </div>
   <div id="sidebar-resize-handle"></div>
   <div id="main">
@@ -67,6 +69,10 @@
         <span id="settings-viewer-title">Settings</span>
       </div>
       <div id="settings-viewer-body"></div>
+    </div>
+    <div id="orch-viewer" style="display:none;">
+      <div id="orch-viewer-header"></div>
+      <div id="orch-viewer-body"></div>
     </div>
     <div id="jsonl-viewer" style="display:none;">
       <div id="jsonl-viewer-header">
@@ -127,6 +133,7 @@
   <script src="dialogs.js"></script>
   <script src="sidebar.js"></script>
   <script src="plans-memory-view.js"></script>
+  <script src="orchestration-view.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -15,3 +15,4 @@ skins/*
 .env
 .cache/
 dev-app-update.yml
+test/artifacts/

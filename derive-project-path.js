@@ -17,8 +17,10 @@ function extractCwdFromJsonl(filePath) {
 
 function resolveWorktreePath(cwd) {
   if (!cwd) return cwd;
-  // Detect worktree paths: <project>/.claude-worktrees/<name>, <project>/.worktrees/<name>, or <project>/.claude/worktrees/<name>
-  const worktreeMatch = cwd.match(/^(.+?)\/\.(?:claude\/worktrees|claude-worktrees|worktrees)\/[^/]+\/?$/);
+  // Detect worktree paths: <project>/.claude-worktrees/<name>, <project>/.worktrees/<name>,
+  // <project>/.claude/worktrees/<name>, or <project>/.switchboard/worktrees/<name> (Agent Teams).
+  // Windows cwds use backslashes, so accept either separator.
+  const worktreeMatch = cwd.match(/^(.+?)[\\/]\.(?:claude[\\/]worktrees|claude-worktrees|switchboard[\\/]worktrees|worktrees)[\\/][^\\/]+[\\/]?$/);
   if (worktreeMatch) {
     const parent = worktreeMatch[1];
     if (fs.existsSync(parent)) return parent;
@@ -33,7 +35,7 @@ function deriveProjectPath(folderPath) {
     for (const e of entries) {
       if (e.isFile() && e.name.endsWith('.jsonl')) {
         const cwd = extractCwdFromJsonl(path.join(folderPath, e.name));
-        if (cwd) return cwd;
+        if (cwd) return resolveWorktreePath(cwd);
       }
     }
     // Check session subdirectories (UUID folders with subagent .jsonl files)
@@ -52,7 +54,7 @@ function deriveProjectPath(folderPath) {
           }
           if (jsonlPath) {
             const cwd = extractCwdFromJsonl(jsonlPath);
-            if (cwd) return cwd;
+            if (cwd) return resolveWorktreePath(cwd);
           }
         }
       } catch {}
@@ -61,4 +63,4 @@ function deriveProjectPath(folderPath) {
   return null;
 }
 
-module.exports = { deriveProjectPath };
+module.exports = { deriveProjectPath, resolveWorktreePath };

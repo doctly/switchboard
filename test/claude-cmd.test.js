@@ -233,3 +233,30 @@ test('shq quotes a string containing special shell metachars', () => {
     assert.ok(quoted.startsWith("'") && quoted.endsWith("'"), `wrap failed: ${quoted}`);
   }
 });
+
+test('appends initialPrompt as final positional arg, escaped', () => {
+  const r = buildClaudeCmd({ sessionId: UID, isNew: true, sessionOptions: { initialPrompt: "/sb-work T-1 — it's go time" } });
+  assert.equal(r.ok, true);
+  assert.ok(r.cmd.endsWith(`'/sb-work T-1 — it'\\''s go time'`), r.cmd);
+});
+
+test('initialPrompt comes after flags', () => {
+  const r = buildClaudeCmd({ sessionId: UID, isNew: false, sessionOptions: { permissionMode: 'acceptEdits', initialPrompt: 'hello' } });
+  assert.equal(r.ok, true);
+  assert.match(r.cmd, /--permission-mode 'acceptEdits' 'hello'$/);
+});
+
+test('rejects initialPrompt with control characters', () => {
+  const r = buildClaudeCmd({ sessionId: UID, isNew: true, sessionOptions: { initialPrompt: 'evil\x07bell' } });
+  assert.equal(r.ok, false);
+});
+
+test('allows multi-line initialPrompt', () => {
+  const r = buildClaudeCmd({ sessionId: UID, isNew: true, sessionOptions: { initialPrompt: 'line1\nline2' } });
+  assert.equal(r.ok, true);
+});
+
+test('rejects oversized initialPrompt', () => {
+  const r = buildClaudeCmd({ sessionId: UID, isNew: true, sessionOptions: { initialPrompt: 'x'.repeat(9000) } });
+  assert.equal(r.ok, false);
+});

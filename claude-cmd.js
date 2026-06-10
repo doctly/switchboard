@@ -61,6 +61,19 @@ function buildClaudeCmd({ sessionId, isNew, sessionOptions, tmpPromptPath }) {
     cmd += ` --append-system-prompt "$(cat ${shq(tmpPromptPath)})"`;
   }
 
+  // Initial prompt typed for the user at session start (Agent Teams uses
+  // this to boot workers with `/sb-work <task>`). Positional arg, so it must
+  // come last. Single-quote escaping handles arbitrary content; cap length
+  // to keep the command line sane.
+  if (sessionOptions?.initialPrompt) {
+    const prompt = String(sessionOptions.initialPrompt);
+    if (prompt.length > 8192) return { ok: false, error: 'initialPrompt too long' };
+    if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(prompt)) {
+      return { ok: false, error: 'initialPrompt contains control characters' };
+    }
+    cmd += ` ${shq(prompt)}`;
+  }
+
   if (sessionOptions?.preLaunchCmd) {
     // Intentionally unescaped: user-authored shell fragment.
     cmd = sessionOptions.preLaunchCmd + ' ' + cmd;

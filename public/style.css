@@ -4811,3 +4811,131 @@ body.theme-light .session-item.needs-attention .session-status-dot,
 body.theme-light .session-item.needs-attention .session-status-dot.running {
   background: #f0a050;
 }
+
+/* ====================== Agent Teams (orchestration) ====================== */
+
+#teams-content { overflow-y: auto; padding: 8px; }
+#orch-new-run-btn {
+  width: 100%; padding: 7px 10px; margin-bottom: 10px; cursor: pointer;
+  background: var(--accent, #d97757); color: #fff; border: none; border-radius: 6px;
+  font-size: 13px; font-weight: 600;
+}
+#orch-new-run-btn:hover { filter: brightness(1.1); }
+.orch-run-project {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+  opacity: 0.6; margin: 10px 4px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.orch-run-row {
+  padding: 8px 10px; border-radius: 6px; cursor: pointer; margin-bottom: 4px;
+  border: 1px solid transparent;
+}
+.orch-run-row:hover { background: rgba(128, 128, 128, 0.12); }
+.orch-run-row.active { background: rgba(217, 119, 87, 0.15); border-color: rgba(217, 119, 87, 0.4); }
+.orch-run-title { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+.orch-run-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; opacity: 0.85; }
+.orch-run-progress { font-size: 11px; opacity: 0.7; }
+
+.orch-chip {
+  display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 10px;
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
+  background: rgba(128, 128, 128, 0.2);
+}
+.orch-run-status-active, .orch-status-in_progress, .orch-status-spawning { background: rgba(46, 160, 67, 0.25); color: #4ec969; }
+.orch-run-status-planning { background: rgba(56, 139, 253, 0.25); color: #58a6ff; }
+.orch-run-status-paused { background: rgba(210, 153, 34, 0.25); color: #d29922; }
+.orch-run-status-done, .orch-status-done, .orch-status-approved { background: rgba(46, 160, 67, 0.3); color: #56d364; }
+.orch-run-status-abandoned { background: rgba(248, 81, 73, 0.2); color: #f85149; }
+.orch-status-ready { background: rgba(56, 139, 253, 0.25); color: #58a6ff; }
+.orch-status-needs_review, .orch-status-reviewing { background: rgba(163, 113, 247, 0.25); color: #a371f7; }
+.orch-status-changes_requested, .orch-status-merging { background: rgba(210, 153, 34, 0.25); color: #d29922; }
+.orch-status-blocked, .orch-status-failed { background: rgba(248, 81, 73, 0.25); color: #f85149; }
+
+#orch-viewer { flex-direction: column; flex: 1; min-width: 0; overflow: hidden; }
+#orch-viewer-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 14px; border-bottom: 1px solid rgba(128, 128, 128, 0.25); flex-wrap: wrap;
+}
+.orch-header-title-wrap { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
+#orch-viewer-title { font-size: 15px; font-weight: 700; }
+.orch-header-roles { font-size: 11px; opacity: 0.7; }
+.orch-header-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.orch-tab-btn, .orch-action-btn {
+  padding: 4px 10px; font-size: 12px; cursor: pointer; border-radius: 5px;
+  border: 1px solid rgba(128, 128, 128, 0.35); background: transparent; color: inherit;
+}
+.orch-tab-btn.active { background: rgba(217, 119, 87, 0.2); border-color: rgba(217, 119, 87, 0.5); }
+.orch-tab-btn:hover, .orch-action-btn:hover { background: rgba(128, 128, 128, 0.15); }
+
+#orch-viewer-body { flex: 1; overflow: auto; padding: 12px; }
+
+#orch-board { display: flex; gap: 10px; align-items: flex-start; min-height: 100%; }
+.orch-board-col {
+  flex: 1 0 170px; min-width: 170px; max-width: 260px; border-radius: 8px;
+  background: rgba(128, 128, 128, 0.07); padding: 8px;
+}
+.orch-board-col-head {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  opacity: 0.7; margin-bottom: 8px; padding: 0 2px;
+}
+.orch-card {
+  background: rgba(128, 128, 128, 0.12); border: 1px solid rgba(128, 128, 128, 0.2);
+  border-radius: 7px; padding: 8px; margin-bottom: 8px; font-size: 12px;
+}
+.orch-card-attention, .orch-card-blocked, .orch-card-failed { border-color: rgba(248, 81, 73, 0.5); }
+.orch-card-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 4px; }
+.orch-card-id { font-family: monospace; font-size: 11px; opacity: 0.75; }
+.orch-card-title { font-weight: 600; margin-bottom: 4px; line-height: 1.3; }
+.orch-card-meta { font-size: 11px; opacity: 0.65; margin-bottom: 6px; min-height: 0; }
+.orch-card-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.orch-card-actions button {
+  font-size: 11px; padding: 2px 8px; cursor: pointer; border-radius: 4px;
+  border: 1px solid rgba(128, 128, 128, 0.35); background: transparent; color: inherit;
+}
+.orch-card-actions button:hover { background: rgba(128, 128, 128, 0.18); }
+.orch-card-action-primary { border-color: rgba(217, 119, 87, 0.6) !important; color: #d97757 !important; }
+
+#orch-plan { display: flex; gap: 16px; align-items: flex-start; }
+#orch-plan-tree { flex: 0 0 320px; border-right: 1px solid rgba(128,128,128,0.2); padding-right: 12px; }
+.orch-tree-node { display: flex; align-items: center; gap: 7px; padding: 3px 0; font-size: 12px; }
+.orch-tree-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: rgba(128,128,128,0.5); }
+.orch-tree-dot.orch-status-done, .orch-tree-dot.orch-status-approved { background: #56d364; }
+.orch-tree-dot.orch-status-in_progress, .orch-tree-dot.orch-status-spawning { background: #4ec969; }
+.orch-tree-dot.orch-status-ready { background: #58a6ff; }
+.orch-tree-dot.orch-status-needs_review, .orch-tree-dot.orch-status-reviewing { background: #a371f7; }
+.orch-tree-dot.orch-status-changes_requested, .orch-tree-dot.orch-status-merging { background: #d29922; }
+.orch-tree-dot.orch-status-blocked, .orch-tree-dot.orch-status-failed { background: #f85149; }
+.orch-tree-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orch-tree-status { font-size: 10px; opacity: 0.6; }
+#orch-plan-md { flex: 1; min-width: 0; font-size: 13px; line-height: 1.55; }
+#orch-plan-md pre { white-space: pre-wrap; font-size: 12px; }
+
+#orch-timeline { font-size: 12px; }
+.orch-event { display: flex; gap: 10px; padding: 4px 0; border-bottom: 1px solid rgba(128,128,128,0.1); }
+.orch-event-ts { font-family: monospace; font-size: 11px; opacity: 0.55; flex: none; }
+.orch-event-type { font-weight: 600; flex: none; min-width: 110px; }
+.orch-event-text { opacity: 0.85; word-break: break-word; }
+
+.orch-modal-overlay {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+}
+.orch-modal {
+  background: var(--bg, #1e1e1e); border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 10px; width: min(680px, 90vw); max-height: 85vh; display: flex; flex-direction: column;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+}
+.orch-modal-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px; border-bottom: 1px solid rgba(128,128,128,0.25); font-weight: 700;
+}
+.orch-modal-head button { background: none; border: none; color: inherit; font-size: 18px; cursor: pointer; }
+.orch-modal-body { padding: 14px; overflow: auto; font-size: 12px; white-space: pre-wrap; }
+.orch-form { display: flex; flex-direction: column; gap: 10px; }
+.orch-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.orch-field > span { opacity: 0.75; }
+.orch-field input, .orch-field select, .orch-field textarea {
+  background: rgba(128,128,128,0.1); color: inherit; border: 1px solid rgba(128,128,128,0.35);
+  border-radius: 5px; padding: 6px 8px; font-size: 13px; font-family: inherit;
+}
+.orch-form-error { color: #f85149; font-size: 12px; min-height: 14px; }
+.orch-form-submit { padding: 8px 12px; font-size: 13px; font-weight: 600; cursor: pointer; background: transparent; border-radius: 6px; }
