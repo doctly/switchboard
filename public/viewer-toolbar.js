@@ -17,6 +17,10 @@ const GOTO_LINE_ICON = '<svg stroke="currentColor" fill="none" stroke-width="2" 
 
 const CLOSE_ICON = '<svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 512 512" width="14" height="14" xmlns="http://www.w3.org/2000/svg"><path d="M400 145.49 366.51 112 256 222.51 145.49 112 112 145.49 222.51 256 112 366.51 145.49 400 256 289.49 366.51 400 400 366.51 289.49 256 400 145.49z"></path></svg>';
 
+const FORMAT_ICON = '<svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" xmlns="http://www.w3.org/2000/svg"><path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h13"/><path d="m17 8 4 4-4 4"/></svg>';
+
+const DELETE_ICON = '<svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+
 /**
  * Flash a button with a brief color change to indicate success.
  * For icon buttons: flashes green. For text buttons: replaces text temporarily.
@@ -160,6 +164,25 @@ function createViewerToolbar(opts = {}) {
     controlsEl.appendChild(gotoLineBtn);
   }
 
+  let formatBtn = null;
+  if (opts.format) {
+    formatBtn = document.createElement('button');
+    formatBtn.className = 'fp-toolbar-btn fp-icon-btn';
+    formatBtn.title = 'Pretty-print JSON / JSONL';
+    formatBtn.innerHTML = FORMAT_ICON;
+    formatBtn.style.display = 'none'; // Shown by ViewerPanel only when content is parseable
+    controlsEl.appendChild(formatBtn);
+  }
+
+  let deleteBtn = null;
+  if (opts.delete) {
+    deleteBtn = document.createElement('button');
+    deleteBtn.className = 'fp-toolbar-btn fp-icon-btn fp-delete-btn';
+    deleteBtn.title = 'Delete file';
+    deleteBtn.innerHTML = DELETE_ICON;
+    controlsEl.appendChild(deleteBtn);
+  }
+
   let saveBtn = null;
   if (opts.save) {
     saveBtn = document.createElement('button');
@@ -193,6 +216,8 @@ function createViewerToolbar(opts = {}) {
     copyContentBtn,
     diffToggleBtn,
     gotoLineBtn,
+    formatBtn,
+    deleteBtn,
 
     setTitle(text) { titleEl.textContent = text; },
     setPath(text) { pathEl.textContent = text; },

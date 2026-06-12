@@ -1,10 +1,20 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, shell } = require('electron');
 const { Worker } = require('worker_threads');
+const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const pty = require('node-pty');
 const log = require('electron-log');
+
+// Dev builds default to a separate SQLite DB so they don't race on
+// session_cache with a running installed AppImage. Honors an explicit
+// SWITCHBOARD_DATA_DIR env var if set (test sandboxes, agent runs). This MUST
+// happen before db.js is required — db.js resolves DATA_DIR at module load.
+if (!app.isPackaged && !process.env.SWITCHBOARD_DATA_DIR) {
+  process.env.SWITCHBOARD_DATA_DIR = path.join(os.homedir(), '.switchboard-dev');
+}
+
 // getFolderIndexMtimeMs moved to session-cache.js
 const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer, cleanStaleLockFiles } = require('./mcp-bridge');
 const { fetchAndTransformUsage } = require('./claude-auth');
@@ -61,12 +71,13 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
 }
 const {
   getMeta, getAllMeta, toggleStar, setName, setArchived,
-  isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, upsertCachedSessions,
-  deleteCachedSession, deleteCachedFolder,
+  isCachePopulated, getAllCached, getCachedByFolder, getCachedByParent, getCachedFolder, getCachedSession, upsertCachedSessions,
+  deleteCachedSession, deleteCachedFolder, replaceSessionMetrics, touchCachedModified,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting,
+  getDailyMetrics, getDailyModelTokens, getModelUsage, getTotalCounts,
   closeDb,
 } = require('./db');
 
@@ -79,6 +90,10 @@ const MAX_BUFFER_SIZE = 256 * 1024;
 // Active PTY sessions
 const activeSessions = new Map();
 let mainWindow = null;
+
+// Subagent live-tail watchers (watchId → { filePath, parentSessionId, agentId, teardown })
+const subagentWatchers = new Map();
+let subagentWatcherSeq = 0;
 
 function createWindow() {
   // Restore saved window bounds
@@ -104,11 +119,12 @@ function createWindow() {
     }
   }
 
+  const appTitle = app.isPackaged ? 'Switchboard' : 'Switchboard (dev)';
   mainWindow = new BrowserWindow({
     ...bounds,
     minWidth: 800,
     minHeight: 500,
-    title: 'Switchboard',
+    title: appTitle,
     icon: path.join(__dirname, 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -123,6 +139,9 @@ function createWindow() {
   }
 
   mainWindow.loadFile(path.join(__dirname, 'public', 'index.html'));
+  mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+    if (level >= 2) log.error(`[renderer:${level}] ${sourceId}:${line} ${message}`);
+  });
 
   // Open external links in the system browser instead of a child BrowserWindow
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -202,6 +221,12 @@ function createWindow() {
       }
       activeSessions.delete(id);
     }
+    // Release all subagent file watchers (closes fs.watch handles + clears any
+    // debounce timers / polling fallbacks via the stored teardown closure)
+    for (const [, entry] of subagentWatchers) {
+      try { entry.teardown(); } catch {}
+    }
+    subagentWatchers.clear();
     mainWindow = null;
   });
 }
@@ -260,13 +285,14 @@ sessionCache.init({
   getMainWindow: () => mainWindow,
   log,
   db: {
-    deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession,
+    deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession, replaceSessionMetrics, touchCachedModified,
     deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
     setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName,
   },
 });
-const { readSessionFile, readFolderFromFilesystem, refreshFolder, populateCacheFromFilesystem,
+const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCacheFromFilesystem,
         buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker } = sessionCache;
+const { resolveJsonlPath, enumerateSessionFiles } = require('./read-session-file');
 
 
 // --- IPC: browse-folder ---
@@ -342,10 +368,194 @@ ipcMain.handle('remove-project', (_event, projectPath) => {
   }
 });
 
+// --- IPC: remap-project ---
+
+/**
+ * Atomically rewrite cwd occurrences of oldPath → newPath in a single JSONL
+ * file. Uses a .tmp sibling + rename for crash safety. On any failure the .tmp
+ * orphan is cleaned up so it cannot block a future remap attempt.
+ */
+function rewriteJsonlAtomic(filePath, oldPath, newPath) {
+  const tmp = filePath + '.tmp';
+  try {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const updated = content.split('\n').map(line => {
+      if (!line) return line;
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed.cwd === oldPath) {
+          parsed.cwd = newPath;
+          return JSON.stringify(parsed);
+        }
+      } catch {}
+      return line;
+    }).join('\n');
+    fs.writeFileSync(tmp, updated);
+    fs.renameSync(tmp, filePath);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch {}
+    throw err;
+  }
+}
+
+ipcMain.handle('remap-project', (_event, oldPath, newPath) => {
+  try {
+    // Validate oldPath/newPath are strings (basic sanitisation)
+    if (typeof oldPath !== 'string' || typeof newPath !== 'string') {
+      return { error: 'Invalid arguments' };
+    }
+
+    // Re-check at handler entry: if oldPath came back, no remap is needed
+    if (fs.existsSync(oldPath)) {
+      return { error: 'Project path now exists — remap no longer needed' };
+    }
+
+    // Validate the new path exists and is a directory
+    let stat;
+    try { stat = fs.lstatSync(newPath); } catch { return { error: 'Path does not exist' }; }
+    if (!stat.isDirectory()) return { error: 'Path is not a directory' };
+
+    // Find the session folder for the old project path using the same encoding the CLI uses
+    const folder = encodeProjectPath(oldPath);
+    const folderPath = path.join(PROJECTS_DIR, folder);
+    if (!fs.existsSync(folderPath)) return { error: 'No session data found for this project' };
+
+    // Refuse if any active PTY session is running for this folder — rewriting
+    // files while a live claude process is appending them risks data loss
+    // (our snapshot + rename would silently drop lines appended between read
+    // and rename). The user must stop all sessions for this project first.
+    for (const [, session] of activeSessions) {
+      if (!session.exited && encodeProjectPath(session.projectPath) === folder) {
+        return { error: 'Active sessions for this project — stop them first' };
+      }
+    }
+
+    // Rewrite cwd in all session JSONL files (top-level + subagents) so
+    // `claude --resume` from CLI also picks up the new path.
+    const sessionFiles = enumerateSessionFiles(folderPath);
+    for (const { filePath } of sessionFiles) {
+      rewriteJsonlAtomic(filePath, oldPath, newPath);
+    }
+
+    // Refresh the folder cache so the new path takes effect in the UI
+    refreshFolder(folder);
+    notifyRendererProjectsChanged();
+    return { ok: true };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+// --- IPC: delete-worktree ---
+// Validated path pattern: <project>/.<segment>/[worktrees/]<name>
+// Matches .claude/worktrees/<n>, .claude-worktrees/<n>, .worktrees/<n>
+const WORKTREE_PATH_RE = /^(.+?)\/\.(?:claude\/worktrees|claude-worktrees|worktrees)\/([^/]+)\/?$/;
+
+ipcMain.handle('delete-worktree', (_event, worktreePath) => {
+  return new Promise((resolve) => {
+    // Normalize trailing slash
+    const normalizedPath = worktreePath.replace(/\/$/, '');
+
+    // Validate path matches a known worktree layout
+    const match = normalizedPath.match(WORKTREE_PATH_RE);
+    if (!match) {
+      return resolve({ ok: false, error: 'Path does not match a recognized worktree layout' });
+    }
+    const parentRepo = match[1];
+
+    // Helper: run git worktree remove, optionally double-force
+    function runRemove(doubleForce, callback) {
+      const args = ['-C', parentRepo, 'worktree', 'remove', '-f'];
+      if (doubleForce) args.push('-f');
+      args.push('--', normalizedPath);
+      execFile('git', args, (err, _stdout, stderr) => callback(err, stderr));
+    }
+
+    runRemove(false, (err, stderr) => {
+      if (err && /locked/i.test(stderr || err.message || '')) {
+        // Retry with double force for locked worktrees
+        runRemove(true, (err2, stderr2) => {
+          if (err2) return resolve({ ok: false, error: (stderr2 || err2.message || String(err2)).trim() });
+          afterRemove();
+        });
+      } else if (err) {
+        return resolve({ ok: false, error: (stderr || err.message || String(err)).trim() });
+      } else {
+        afterRemove();
+      }
+    });
+
+    function afterRemove() {
+      // Clean up DB cache: delete all sessions whose projectPath matches worktreePath
+      let removed = 0;
+      try {
+        const allRows = getAllCached();
+        for (const row of allRows) {
+          if (row.projectPath === normalizedPath) {
+            deleteCachedSession(row.sessionId);
+            deleteSearchSession(row.sessionId);
+            removed++;
+          }
+        }
+      } catch (dbErr) {
+        log.warn('[delete-worktree] DB cleanup error:', dbErr.message);
+      }
+
+      // Remove from hiddenProjects if present
+      try {
+        const global = getSetting('global') || {};
+        if (Array.isArray(global.hiddenProjects) && global.hiddenProjects.includes(normalizedPath)) {
+          global.hiddenProjects = global.hiddenProjects.filter(p => p !== normalizedPath);
+          setSetting('global', global);
+        }
+      } catch {}
+
+      // Also clean up folder meta
+      try {
+        const folder = encodeProjectPath(normalizedPath);
+        deleteCachedFolder(folder);
+        deleteSearchFolder(folder);
+      } catch {}
+
+      log.info(`[delete-worktree] removed=${normalizedPath} sessions=${removed}`);
+      notifyRendererProjectsChanged();
+      resolve({ ok: true, removed });
+    }
+  });
+});
+
+// --- IPC: worktree-status ---
+ipcMain.handle('worktree-status', (_event, worktreePath) => {
+  return new Promise((resolve) => {
+    const normalizedPath = worktreePath.replace(/\/$/, '');
+    const match = normalizedPath.match(WORKTREE_PATH_RE);
+    if (!match) {
+      return resolve({ ok: false, error: 'Path does not match a recognized worktree layout' });
+    }
+    const parentRepo = match[1];
+
+    execFile('git', ['-C', parentRepo, '-C', normalizedPath, 'status', '--porcelain'], (err, stdout, stderr) => {
+      if (err) {
+        return resolve({ ok: false, error: (stderr || err.message || String(err)).trim() });
+      }
+      const dirty = stdout.split('\n').map(l => l.trimEnd()).filter(Boolean);
+      resolve({ ok: true, dirty, total: dirty.length });
+    });
+  });
+});
+
 // --- IPC: get-projects ---
 ipcMain.handle('open-external', (_event, url) => {
   log.info('[open-external IPC]', url);
   if (/^https?:\/\//i.test(url)) return shell.openExternal(url);
+});
+
+// --- IPC: clipboard write ---
+// The renderer's navigator.clipboard.writeText is gated on focus/user-activation and
+// is flaky-to-dead on Linux/Wayland (Ozone). The main-process clipboard has no such
+// strings attached, so all terminal copies go through here.
+ipcMain.handle('clipboard-write-text', (_event, text) => {
+  if (typeof text === 'string') clipboard.writeText(text);
 });
 
 // --- IPC: MCP bridge ---
@@ -407,13 +617,40 @@ ipcMain.handle('unwatch-file', (_event, filePath) => {
   return { ok: true };
 });
 
-ipcMain.handle('get-projects', (_event, showArchived) => {
+// Full re-scan triggered from the UI. Re-reads every jsonl file in the worker
+// thread, which is the only path that rebuilds search_fts with the live tail
+// of active sessions (refreshFolder uses a header-only read by design — see
+// session-cache.js). Concurrent callers share the same in-flight worker via
+// populateCacheViaWorker's internal Promise.
+ipcMain.handle('rebuild-cache', async () => {
+  try {
+    await populateCacheViaWorker();
+    return { ok: true };
+  } catch (err) {
+    console.error('Error rebuilding cache:', err);
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('get-projects', async (_event, showArchived) => {
   try {
     const needsPopulate = !isCachePopulated() || !isSearchIndexPopulated();
 
     if (needsPopulate) {
-      populateCacheViaWorker();
-      return [];
+      // First call after a migration that clears session_cache (e.g. v4) finds
+      // an empty cache. Returning [] immediately makes the renderer paint an
+      // empty list and rely on `notifyRendererProjectsChanged` firing later —
+      // which only triggers a reload if the user is on the Sessions tab. To
+      // avoid that race, await the scan here so the response carries the
+      // freshly-populated cache. Concurrent callers share the same Promise.
+      await populateCacheViaWorker();
+    } else {
+      // Cache already populated: pick up folders changed while the app was
+      // closed, or never indexed by an older build, so sessions/worktrees don't
+      // silently go missing. Stat-gated, so it's cheap when nothing has changed.
+      // Synchronous (readdir/stat sweep) — completes before buildProjectsFromCache
+      // below; no await needed despite the await in the cold-start branch above.
+      reconcileCacheFromFilesystem();
     }
 
     return buildProjectsFromCache(showArchived);
@@ -499,108 +736,55 @@ ipcMain.handle('get-stats', () => {
   }
 });
 
-// --- IPC: refresh-stats (run /stats + /usage via PTY) ---
-ipcMain.handle('refresh-stats', async () => {
-  // For stats, use the configured shell profile
-  const globalSettings = getSetting('global') || {};
-  const statsProfileId = globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile;
-  const statsShellProfile = resolveShell(statsProfileId);
-  const statsShell = statsShellProfile.path;
-  const statsShellExtraArgs = statsShellProfile.args || [];
-  const ptyEnv = {
-    ...cleanPtyEnv,
-    TERM: 'xterm-256color',
-    COLORTERM: 'truecolor',
-    TERM_PROGRAM: 'iTerm.app',
-    TERM_PROGRAM_VERSION: '3.6.6',
-    FORCE_COLOR: '3',
-    ITERM_SESSION_ID: '1',
-  };
-
-  // Helper: spawn claude with args, collect output, auto-accept trust, kill when idle
-  // waitFor: optional regex tested against stripped output — finish only when matched
-  function runClaude(args, { timeoutMs = 15000, waitFor = null } = {}) {
-    return new Promise((resolve) => {
-      let output = '';
-      let settled = false;
-      let trustAccepted = false;
-      // Track idle: ✳ in OSC title means Claude is idle and waiting for input
-      let sawActivity = false;
-
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        try { p.kill(); } catch {}
-        resolve(output);
-      };
-
-      const claudeCmd = `claude ${args}`;
-      const p = pty.spawn(statsShell, shellArgs(statsShell, claudeCmd, statsShellExtraArgs), {
-        name: 'xterm-256color',
-        cols: 120,
-        rows: 40,
-        cwd: os.homedir(),
-        env: ptyEnv,
-      });
-
-      const strip = (s) => s
-        .replace(/\x1b\[[^@-~]*[@-~]/g, '')
-        .replace(/\x1b\][^\x07]*\x07/g, '')
-        .replace(/\x1b[^[\]].?/g, '');
-
-      p.onData((data) => {
-        output += data;
-
-        // Auto-accept trust directory prompt (Enter selects "1. Yes")
-        if (!trustAccepted) {
-          if (/trust\s*this\s*folder/i.test(strip(output))) {
-            trustAccepted = true;
-            try { p.write('\r'); } catch {}
-            return;
-          }
-        }
-
-        // If waitFor is set, finish when that pattern appears in stripped output
-        if (waitFor) {
-          if (waitFor.test(strip(output))) {
-            finish();
-          }
-          return;
-        }
-
-        // Default: detect busy→idle transition via OSC title containing ✳
-        if (!sawActivity) {
-          const oscTitle = data.match(/\x1b\]0;([^\x07\x1b]*)/);
-          if (oscTitle) {
-            const first = oscTitle[1].charAt(0);
-            if (first.charCodeAt(0) >= 0x2800 && first.charCodeAt(0) <= 0x28FF) {
-              sawActivity = true;
-            }
-          }
-        } else if (data.includes('\u2733')) {
-          finish();
-        }
-      });
-
-      p.onExit(() => finish());
-      setTimeout(finish, timeoutMs);
-    });
-  }
-
+// --- IPC: get-stats-from-db ---
+// Builds a stats object from session_cache so the heatmap reflects real usage
+// including subagent sessions (which claude /stats silently ignores) and
+// periods where Claude already rotated the parent JSONL files off disk.
+ipcMain.handle('get-stats-from-db', () => {
   try {
-    // Run /stats via PTY (for heatmap/chart data) and fetch usage via API in parallel
-    const [, usage] = await Promise.all([
-      runClaude('"/stats"', { waitFor: /streak/i, timeoutMs: 10000 }),
-      fetchAndTransformUsage().catch(() => ({})),
-    ]);
+    return buildStatsFromDb();
+  } catch (err) {
+    log.error('Error building stats from DB:', err);
+    return null;
+  }
+});
 
-    // Read refreshed stats cache
+// Build the full stats object the renderer consumes. Sourced from
+// session_metrics (per-(session,date,model) tokens/tool-calls/messages bucketed
+// by message timestamp) so tokens, tool calls, and per-model usage are all real
+// data — not the hardcoded {} the heatmap-only path used to return.
+function buildStatsFromDb() {
+  const daily = getDailyMetrics();       // [{date, messageCount, toolCallCount, tokens, sessionCount}]
+  const totals = getTotalCounts();
+  const lastComputedDate = new Date().toISOString().slice(0, 10);
+  return {
+    dailyActivity: daily,
+    dailyModelTokens: getDailyModelTokens(),
+    modelUsage: getModelUsage(),
+    totalMessages: totals.totalMessages,
+    totalSessions: totals.totalSessions,
+    totalToolCalls: totals.totalToolCalls,
+    totalTokens: totals.totalTokens,
+    firstSessionDate: daily[0]?.date || lastComputedDate,
+    lastComputedDate,
+  };
+}
+
+// --- IPC: refresh-stats (fetch /usage + build stats from DB; /stats PTY removed) ---
+ipcMain.handle('refresh-stats', async () => {
+  try {
+    // /stats PTY call removed — heatmap is now sourced from session_cache via
+    // get-stats-from-db. Only /usage is fetched here (rate-limits panel).
+    const usage = await fetchAndTransformUsage().catch(() => ({}));
+
+    // Build stats from DB (same as get-stats-from-db) so the caller gets both
+    // at once and the renderer can update heatmap + usage in a single round-trip.
     let stats = null;
     try {
-      if (fs.existsSync(STATS_CACHE_PATH)) {
-        stats = JSON.parse(fs.readFileSync(STATS_CACHE_PATH, 'utf8'));
-      }
-    } catch {}
+      stats = buildStatsFromDb();
+    } catch (dbErr) {
+      log.error('Error building stats from DB in refresh-stats:', dbErr);
+    }
 
     return { stats, usage: usage || {} };
   } catch (err) {
@@ -787,6 +971,155 @@ ipcMain.handle('save-memory', (_event, filePath, content) => {
   }
 });
 
+// --- IPC: get-work-files ---
+// Walks <projectPath>/.work-files/ recursively for all known projects.
+// Returns { projects: WorkFilesProject[] } — empty projects are skipped.
+// Caps at WORK_FILES_CAP files per project (most recent by mtime) to guard
+// against huge .work-files trees (e.g. tagpay has ~39k files).
+const WORK_FILES_CAP = 200;
+
+function walkWorkFiles(dir, baseDir, results) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of entries) {
+    const fullPath = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      walkWorkFiles(fullPath, baseDir, results);
+    } else if (e.isFile()) {
+      try {
+        const stat = fs.statSync(fullPath);
+        const relativePath = path.relative(baseDir, fullPath);
+        results.push({
+          filename: e.name,
+          filePath: fullPath,
+          relativePath,
+          modified: stat.mtime.toISOString(),
+          size: stat.size,
+        });
+      } catch {}
+    }
+  }
+}
+
+ipcMain.handle('get-work-files', () => {
+  const global = getSetting('global') || {};
+  const hiddenProjects = new Set(global.hiddenProjects || []);
+  // Dedupe by projectPath: multiple ~/.claude/projects/ folders (e.g. worktrees
+  // of the same repo) can derive to the same projectPath via
+  // resolveWorktreePath, which would otherwise produce N copies of the same
+  // header+file list in the UI.
+  const seen = new Set();
+  const projects = [];
+
+  try {
+    if (fs.existsSync(PROJECTS_DIR)) {
+      const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+        .filter(d => d.isDirectory() && d.name !== '.git')
+        .map(d => d.name);
+
+      for (const folder of folders) {
+        const folderPath = path.join(PROJECTS_DIR, folder);
+        const projectPath = deriveProjectPath(folderPath, folder);
+        if (!projectPath) continue;
+        if (hiddenProjects.has(projectPath)) continue;
+        if (seen.has(projectPath)) continue;
+        seen.add(projectPath);
+
+        const workFilesDir = path.join(projectPath, '.work-files');
+        if (!fs.existsSync(workFilesDir)) continue;
+
+        const shortName = projectPath.split('/').filter(Boolean).slice(-2).join('/');
+
+        const allFiles = [];
+        walkWorkFiles(workFilesDir, workFilesDir, allFiles);
+
+        // Sort by modified desc
+        allFiles.sort((a, b) => new Date(b.modified) - new Date(a.modified));
+
+        const totalCount = allFiles.length;
+        const files = allFiles.slice(0, WORK_FILES_CAP);
+
+        if (files.length > 0) {
+          projects.push({ projectPath, shortName, files, totalCount });
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error scanning work-files:', err);
+  }
+
+  // Sort projects by most recent file modified date
+  projects.sort((a, b) => {
+    const aMax = a.files.length > 0 ? new Date(a.files[0].modified).getTime() : 0;
+    const bMax = b.files.length > 0 ? new Date(b.files[0].modified).getTime() : 0;
+    return bMax - aMax;
+  });
+
+  // Index for FTS — text files ≤ 64KB, skip .jsonl
+  try {
+    deleteSearchType('work-file');
+    const TEXT_MAX = 64 * 1024;
+    const entries = projects.flatMap(proj =>
+      proj.files.map(f => {
+        let body = '';
+        if (!f.relativePath.endsWith('.jsonl') && f.size <= TEXT_MAX) {
+          try { body = fs.readFileSync(f.filePath, 'utf8'); } catch {}
+        }
+        return {
+          id: f.filePath, type: 'work-file', folder: null,
+          title: proj.shortName + ' ' + f.relativePath,
+          body,
+        };
+      })
+    );
+    upsertSearchEntries(entries);
+  } catch {}
+
+  return { projects };
+});
+
+// --- IPC: read-work-file ---
+ipcMain.handle('read-work-file', (_event, filePath) => {
+  try {
+    const resolved = path.resolve(filePath);
+    // Security: path must contain /.work-files/ segment
+    if (!resolved.includes('/.work-files/') && !resolved.includes('\\.work-files\\')) {
+      return '[access denied]';
+    }
+    if (!fs.existsSync(resolved)) return '';
+    const stat = fs.statSync(resolved);
+    if (stat.size > 2 * 1024 * 1024) return '[file too large to display]';
+    // Detect binary: try reading as utf8; if it fails or contains null bytes, treat as binary
+    const buf = fs.readFileSync(resolved);
+    if (buf.includes(0)) return '[binary file]';
+    return buf.toString('utf8');
+  } catch (err) {
+    console.error('Error reading work file:', err);
+    return '';
+  }
+});
+
+// --- IPC: delete-work-file ---
+ipcMain.handle('delete-work-file', (_event, filePath) => {
+  try {
+    const resolved = path.resolve(filePath);
+    if (!resolved.includes('/.work-files/') && !resolved.includes('\\.work-files\\')) {
+      return { ok: false, error: 'access denied' };
+    }
+    if (!fs.existsSync(resolved)) return { ok: false, error: 'not found' };
+    fs.unlinkSync(resolved);
+    // FTS entry is cleaned up on the next get-work-files call (full type rebuild)
+    return { ok: true };
+  } catch (err) {
+    console.error('Error deleting work file:', err);
+    return { ok: false, error: err.message };
+  }
+});
+
 // --- IPC: search ---
 ipcMain.handle('search', (_event, type, query, titleOnly) => {
   return searchByType(type, query, 50, !!titleOnly);
@@ -826,6 +1159,10 @@ const SETTING_DEFAULTS = {
 };
 
 ipcMain.handle('get-shell-profiles', () => {
+  // TODO(lint): `_shellProfiles` is scoped inside shell-profiles.js and not
+  // reachable from here — this line is a no-op left over from a refactor.
+  // Kept as-is for now; tracked separately. See tests/eslint-and-renderer-coverage.
+  // eslint-disable-next-line no-undef
   _shellProfiles = null; // refresh on each request
   return getShellProfiles();
 });
@@ -905,6 +1242,118 @@ ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
   } catch (err) {
     return { error: err.message };
   }
+});
+
+ipcMain.handle('read-subagent-jsonl', (_event, parentSessionId, agentId) => {
+  const row = getCachedSession('sub:' + parentSessionId + ':' + agentId);
+  if (!row) return { error: 'Subagent session not found in cache' };
+  const jsonlPath = resolveJsonlPath(PROJECTS_DIR, row);
+  try {
+    const content = fs.readFileSync(jsonlPath, 'utf-8');
+    const entries = [];
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue;
+      try { entries.push(JSON.parse(line)); } catch {}
+    }
+    return { entries };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('list-subagents', (_event, parentSessionId) => {
+  return getCachedByParent(parentSessionId).map(r => ({
+    sessionId: r.sessionId,
+    agentId: r.agentId,
+    subagentType: r.subagentType,
+    description: r.description,
+    modified: r.modified,
+    messageCount: r.messageCount,
+  }));
+});
+
+// ── Subagent live-tail watchers ──────────────────────────────────────────────
+
+ipcMain.handle('start-subagent-watch', (_event, parentSessionId, agentId) => {
+  const row = getCachedSession('sub:' + parentSessionId + ':' + agentId);
+  if (!row) return { error: 'Subagent not found in cache' };
+  const filePath = resolveJsonlPath(PROJECTS_DIR, row);
+
+  const watchId = ++subagentWatcherSeq;
+  let offset = 0;
+  // Seek to EOF so we only deliver *new* lines
+  try { offset = fs.statSync(filePath).size; } catch {}
+
+  function readNewEntries() {
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.size <= offset) return;
+      const buf = Buffer.alloc(stat.size - offset);
+      const fd = fs.openSync(filePath, 'r');
+      const bytesRead = fs.readSync(fd, buf, 0, buf.length, offset);
+      fs.closeSync(fd);
+      if (bytesRead <= 0) return;
+      offset += bytesRead;
+      const text = buf.toString('utf8', 0, bytesRead);
+      const entries = [];
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue;
+        try { entries.push(JSON.parse(line)); } catch {}
+      }
+      if (entries.length > 0 && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('subagent-watch-event', { parentSessionId, agentId, entries });
+      }
+    } catch {}
+  }
+
+  // Coalesce rapid JSONL appends into a single incremental read. Mirrors the
+  // debounce used by the projects watcher (see startProjectsWatcher) instead of
+  // polling stat() once per second per watcher, which pegged the main process at
+  // idle when watchers accumulated.
+  let debounceTimer = null;
+  function scheduleRead() {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      readNewEntries();
+    }, 300);
+  }
+
+  let watcher = null;
+  let pollInterval = null;
+  try {
+    watcher = fs.watch(filePath, { persistent: false }, (eventType) => {
+      if (eventType === 'rename') return; // file replaced/removed — ignore
+      scheduleRead();
+    });
+    watcher.on('error', (err) => {
+      log.warn(`[subagent-watch] fs.watch error watchId=${watchId}: ${err.message}`);
+    });
+  } catch (err) {
+    // Robustness fallback only when fs.watch can't attach: poll on a long
+    // interval (10s) so a failed inotify registration never busy-stats the file.
+    log.warn(`[subagent-watch] fs.watch failed watchId=${watchId}, polling fallback: ${err.message}`);
+    pollInterval = setInterval(readNewEntries, 10000);
+  }
+
+  function teardown() {
+    if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+    if (watcher) { try { watcher.close(); } catch {} watcher = null; }
+    if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+  }
+
+  subagentWatchers.set(watchId, { filePath, parentSessionId, agentId, teardown });
+  log.info(`[subagent-watch] start watchId=${watchId} parent=${parentSessionId} agentId=${agentId}`);
+  return { watchId };
+});
+
+ipcMain.handle('stop-subagent-watch', (_event, watchId) => {
+  const entry = subagentWatchers.get(watchId);
+  if (!entry) return { ok: false };
+  entry.teardown();
+  subagentWatchers.delete(watchId);
+  log.info(`[subagent-watch] stop watchId=${watchId}`);
+  return { ok: true };
 });
 
 ipcMain.handle('archive-session', (_event, sessionId, archived) => {
@@ -1052,7 +1501,13 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         } else if (sessionOptions.permissionMode) {
           claudeCmd += ` --permission-mode "${sessionOptions.permissionMode}"`;
         }
-        if (sessionOptions.worktree) {
+        // --worktree only applies when STARTING a session — it creates a fresh
+        // isolated git worktree. Resuming (isNew === false) must reuse the
+        // session's existing directory, so ignore the worktree option on resume
+        // regardless of which call site supplied it (sidebar click, schedule
+        // creator, fork, …). Otherwise a resume tries to spin up a new worktree
+        // and fails to attach.
+        if (isNew && sessionOptions.worktree) {
           claudeCmd += ' --worktree';
           if (sessionOptions.worktreeName) {
             claudeCmd += ` "${sessionOptions.worktreeName}"`;
@@ -1304,20 +1759,31 @@ let projectsWatcher = null;
 function startProjectsWatcher() {
   if (!fs.existsSync(PROJECTS_DIR)) return;
 
-  const pendingFolders = new Set();
+  // pendingChanges: folder → Set<relativePath> | true.
+  //   Set<string>  — only the listed files changed (targeted refresh, fast path)
+  //   true         — folder-level event or unknown scope, do a full walk
+  // The watcher reports the specific filename, so for the common case of a
+  // subagent appending JSONL we can stat one file instead of thousands.
+  const pendingChanges = new Map();
   let debounceTimer = null;
 
   function flushChanges() {
     debounceTimer = null;
-    const folders = new Set(pendingFolders);
-    pendingFolders.clear();
+    // Drain pendingChanges into a local copy so events arriving during the
+    // synchronous flush land in a fresh batch for the next tick.
+    const work = new Map(pendingChanges);
+    pendingChanges.clear();
 
     let changed = false;
-    for (const folder of folders) {
+    for (const [folder, scope] of work) {
       const folderPath = path.join(PROJECTS_DIR, folder);
       if (fs.existsSync(folderPath)) {
         detectSessionTransitions(folder);
-        refreshFolder(folder);
+        if (scope === true) {
+          refreshFolder(folder);
+        } else {
+          refreshFolder(folder, { files: scope });
+        }
       } else {
         deleteCachedFolder(folder);
       }
@@ -1326,6 +1792,20 @@ function startProjectsWatcher() {
 
     if (changed) {
       notifyRendererProjectsChanged();
+    }
+  }
+
+  function recordChange(folder, relPath) {
+    const existing = pendingChanges.get(folder);
+    if (existing === true) return;
+    if (relPath === null) {
+      pendingChanges.set(folder, true);
+      return;
+    }
+    if (existing instanceof Set) {
+      existing.add(relPath);
+    } else {
+      pendingChanges.set(folder, new Set([relPath]));
     }
   }
 
@@ -1338,12 +1818,14 @@ function startProjectsWatcher() {
       const folder = parts[0];
       if (!folder || folder === '.git') return;
 
-      // Only care about .jsonl changes or top-level folder add/remove
       const basename = parts[parts.length - 1];
       if (parts.length === 1) {
-        pendingFolders.add(folder);
+        // Top-level folder add/remove — must re-scan the whole folder
+        recordChange(folder, null);
       } else if (basename.endsWith('.jsonl')) {
-        pendingFolders.add(folder);
+        // Specific .jsonl changed — targeted refresh on just this file
+        const rel = parts.slice(1).join(path.sep);
+        recordChange(folder, rel);
       } else {
         return;
       }
@@ -1378,60 +1860,117 @@ ipcMain.handle('updater-install', () => {
 });
 
 // --- App lifecycle ---
-app.whenReady().then(() => {
-  buildMenu();
-  createWindow();
-  startProjectsWatcher();
-  scheduleIpc.ensureScheduleCreatorCommand();
+// Differentiate the dev build from the released binary in the OS task switcher,
+// dock, and About menu by suffixing the app name. No-op in packaged builds.
+if (!app.isPackaged) {
+  app.setName('Switchboard (dev)');
+}
 
-  // Shared runCommand for both cron scheduler and manual "run now"
-  const { spawn: cpSpawn } = require('child_process');
-  function runScheduleCommand(cmd, cwd, name, onDone) {
-    const globalSettings = getSetting('global') || {};
-    const profileId = globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile;
-    const profile = resolveShell(profileId);
-    const shell = profile.path;
-    const args = shellArgs(shell, cmd, profile.args || []);
-
-    log.info(`[schedule] Running: ${shell} ${args.join(' ')}`);
-    const child = cpSpawn(shell, args, {
-      cwd,
-      stdio: ['ignore', 'ignore', 'pipe'],
-      env: { ...cleanPtyEnv, FORCE_COLOR: '0' },
-    });
-
-    let stderr = '';
-    child.stderr.on('data', (data) => { stderr += data.toString(); });
-
-    child.on('exit', (code) => {
-      if (stderr.trim()) log.error(`[schedule] ${name} stderr:\n${stderr.trim()}`);
-      log.info(`[schedule] ${name} finished (exit ${code})`);
-      if (onDone) onDone();
-    });
-
-    child.on('error', (err) => {
-      log.error(`[schedule] ${name} error:`, err.message);
-      if (onDone) onDone();
-    });
-  }
-
-  scheduleIpc.init(log, runScheduleCommand);
-  startScheduler(log, runScheduleCommand);
-
-  // Re-index search if FTS table was recreated (e.g. tokenizer config change)
-  if (searchFtsRecreated) populateCacheViaWorker();
-
-  // Check for updates after launch
-  if (autoUpdater) {
-    setTimeout(() => autoUpdater.checkForUpdates().catch(e => log.error('[updater] check failed:', e?.message || String(e))), 5000);
-    // Re-check every 4 hours for long-running sessions
-    setInterval(() => autoUpdater.checkForUpdates().catch(e => log.error('[updater] check failed:', e?.message || String(e))), 4 * 60 * 60 * 1000);
-  }
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+// Prevent a second Electron instance from killing active PTY sessions.
+// This happens when the user replaces the AppImage while Switchboard is running:
+// the OS spawns the new binary, which would otherwise initialise a second process
+// and leave the first one's node-pty sessions orphaned or killed.
+// requestSingleInstanceLock ensures only one instance runs at a time. The second
+// launch quits immediately; the first brings its window to the front.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  // Focus the existing window when a second launch is attempted.
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
   });
-});
+
+  app.whenReady().then(() => {
+    buildMenu();
+    createWindow();
+    startProjectsWatcher();
+    scheduleIpc.ensureScheduleCreatorCommand();
+
+    // Shared runCommand for both cron scheduler and manual "run now"
+    const { spawn: cpSpawn } = require('child_process');
+    function runScheduleCommand(cmd, cwd, name, onDone) {
+      const globalSettings = getSetting('global') || {};
+      const profileId = globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile;
+      const profile = resolveShell(profileId);
+      const shell = profile.path;
+      const args = shellArgs(shell, cmd, profile.args || []);
+
+      log.info(`[schedule] Running: ${shell} ${args.join(' ')}`);
+      const child = cpSpawn(shell, args, {
+        cwd,
+        stdio: ['ignore', 'ignore', 'pipe'],
+        env: { ...cleanPtyEnv, FORCE_COLOR: '0' },
+      });
+
+      let stderr = '';
+      child.stderr.on('data', (data) => { stderr += data.toString(); });
+
+      child.on('exit', (code) => {
+        if (stderr.trim()) log.error(`[schedule] ${name} stderr:\n${stderr.trim()}`);
+        log.info(`[schedule] ${name} finished (exit ${code})`);
+        if (onDone) onDone();
+      });
+
+      child.on('error', (err) => {
+        log.error(`[schedule] ${name} error:`, err.message);
+        if (onDone) onDone();
+      });
+    }
+
+    scheduleIpc.init(log, runScheduleCommand);
+    startScheduler(log, runScheduleCommand);
+
+    // File-trigger watcher — allows harness scripts to inject input into open
+    // PTY sessions by dropping a JSON file in ~/.switchboard/triggers/.
+    // I3: wrapped in try/catch so a boot failure here doesn't abort
+    // app.whenReady (auto-updater, etc. would otherwise be silently lost).
+    try {
+      require('./trigger-watcher').start({
+        log,
+        getPtyForSession(sessionId) {
+          const session = activeSessions.get(sessionId);
+          if (!session || session.exited) return null;
+          return { ptyProcess: session.pty };
+        },
+        isSessionBusy(sessionId) {
+          const session = activeSessions.get(sessionId);
+          return session ? !!session._cliBusy : false;
+        },
+      });
+    } catch (err) {
+      log.error('[trigger-watcher] Failed to start trigger watcher:', err.message);
+    }
+
+    // Full cache rebuild on every startup — prunes stale rows for deleted
+    // transcripts (sub-agent/workflow runs cleaned up between sessions leave
+    // ghost rows in session_cache that show in the sidebar but are
+    // inaccessible on open). populateCacheViaWorker runs in a Worker thread
+    // and is non-blocking; concurrent callers share the same in-flight
+    // Promise so the FTS-recreated path below (if also triggered) is free.
+    populateCacheViaWorker();
+
+    // Re-index search if FTS table was recreated (e.g. tokenizer config change).
+    // populateCacheViaWorker is already running above; the guard inside it
+    // (populatePromise !== null) means this is a no-op on the same tick and
+    // returns the shared Promise — no double scan.
+    if (searchFtsRecreated) populateCacheViaWorker();
+
+    // Check for updates after launch
+    if (autoUpdater) {
+      setTimeout(() => autoUpdater.checkForUpdates().catch(e => log.error('[updater] check failed:', e?.message || String(e))), 5000);
+      // Re-check every 4 hours for long-running sessions
+      setInterval(() => autoUpdater.checkForUpdates().catch(e => log.error('[updater] check failed:', e?.message || String(e))), 4 * 60 * 60 * 1000);
+    }
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+  }); // end app.whenReady
+} // end gotSingleInstanceLock else-branch
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

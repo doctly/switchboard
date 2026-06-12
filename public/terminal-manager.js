@@ -63,7 +63,7 @@ function setupTerminalKeyBindings(terminal, container, getSessionId, { onFind } 
     if (!isMac && e.key === 'c' && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
       if (terminal.hasSelection()) {
         if (e.type === 'keydown') {
-          navigator.clipboard.writeText(terminal.getSelection()).catch(() => {});
+          window.api.writeClipboard(terminal.getSelection());
         }
         return false;
       }
@@ -189,6 +189,24 @@ function createTerminalEntry(session) {
       },
       allowNonHttpProtocols: true,
     },
+  });
+
+  // OSC 52 — let the program inside the terminal set the system clipboard (this is how
+  // Claude Code copies). xterm doesn't wire this up itself, so we do. Payload is
+  // "<selection>;<base64>" (or "<selection>;?" for a read-back query, which we ignore).
+  // Route through the main process — see writeClipboard — because the renderer clipboard
+  // is unreliable on Wayland.
+  terminal.parser.registerOscHandler(52, (payload) => {
+    const sep = payload.indexOf(';');
+    const b64 = sep === -1 ? payload : payload.slice(sep + 1);
+    if (!b64 || b64 === '?') return true;
+    try {
+      const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+      window.api.writeClipboard(new TextDecoder().decode(bytes));
+    } catch {
+      return false;
+    }
+    return true;
   });
 
   const fitAddon = new FitAddon.FitAddon();

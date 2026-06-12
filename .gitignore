@@ -9,3 +9,7 @@ public/codemirror-bundle.js
 .env
 .cache/
 dev-app-update.yml
+
+# Scratch space (Skaleet workspace convention)
+.work-files/
+

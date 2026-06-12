@@ -1,0 +1,51 @@
+{
+  "name": "switchboard",
+  "kind": "electron-app",
+  "runtime": {
+    "node": "20+",
+    "package_manager": "npm"
+  },
+  "scopes": {
+    "main": {
+      "description": "Electron main process — IPC handlers, native module bridges, schedule runner",
+      "paths": ["main.js", "preload.js", "db.js", "schedule-*.js", "session-cache.js", "read-session-file.js"]
+    },
+    "renderer": {
+      "description": "Browser-side UI — sidebar, terminal, viewer panels, tabs",
+      "paths": ["public/**/*.js", "public/**/*.html", "public/**/*.css"]
+    },
+    "tests": {
+      "description": "node:test + jsdom for renderer; native node:test for backend modules",
+      "paths": ["test/**/*.test.js", "test/dom-setup.js"]
+    },
+    "build": {
+      "description": "electron-builder targets + CodeMirror bundling",
+      "paths": ["scripts/**", "build/**", "package.json", "Taskfile.yaml"]
+    }
+  },
+  "verify": {
+    "test": "task test",
+    "lint": "task lint",
+    "check": "task check",
+    "build": "task build"
+  },
+  "constraints": {
+    "no_double_electron": "Don't spawn `npx electron .` while ~/Applications/Switchboard.AppImage is running — PR#13 single-instance-lock will quit your dev launch silently. Use SWITCHBOARD_DATA_DIR isolation or stay read-only.",
+    "worktree_required_for_parallel_agents": true,
+    "no_co_authored_by": true,
+    "test_in_primary_checkout": "Worktree node_modules can be incomplete; tests requiring native modules (morphdom etc.) may give false negatives. Run final test pass from ~/workspace/switchboard.",
+    "ai_config_location": ".ai/shared-guidelines.md"
+  },
+  "contexts": {
+    "session-cache": ".ai/contexts/session-cache.md",
+    "schedule-runner": ".ai/contexts/schedule-runner.md",
+    "subagent-observability": ".ai/contexts/subagent-observability.md",
+    "viewer-panel": ".ai/contexts/viewer-panel.md",
+    "ipc-bridge": ".ai/contexts/ipc-bridge.md"
+  },
+  "context_engineering_profile": "electron-flat",
+  "remotes": {
+    "origin": "https://github.com/JeanBaptisteRenard/switchboard.git",
+    "upstream": "https://github.com/doctly/switchboard.git"
+  }
+}

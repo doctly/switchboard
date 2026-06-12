@@ -36,6 +36,27 @@ const memoryPanel = new ViewerPanel(memoryViewer, {
   language: 'markdown', storageKey: 'markdownPreviewMode',
   onSave: (filePath, content) => window.api.saveMemory(filePath, content),
 });
+const workFilesContent = document.getElementById('work-files-content');
+const workFilesViewer = document.getElementById('work-files-viewer');
+const workFilesPanel = new ViewerPanel(workFilesViewer, {
+  copyPath: true, copyContent: true,
+  language: 'auto', storageKey: 'workFilesPreviewMode',
+  format: true,
+  onDelete: async (filePath) => {
+    const result = await window.api.deleteWorkFile(filePath);
+    if (result && result.ok) {
+      // Hide the panel and surgically remove the entry from the cached list.
+      // We avoid loadWorkFiles() because the full disk re-scan can freeze the
+      // UI on projects with large .work-files/ trees (e.g. tagpay = 39k files).
+      workFilesViewer.style.display = 'none';
+      if (typeof removeWorkFileFromCache === 'function') removeWorkFileFromCache(filePath);
+    }
+    return result;
+  },
+  onClose: () => {
+    workFilesViewer.style.display = 'none';
+  },
+});
 const terminalArea = document.getElementById('terminal-area');
 const settingsViewer = document.getElementById('settings-viewer');
 const globalSettingsBtn = document.getElementById('global-settings-btn');
@@ -453,6 +474,8 @@ function clearSearch() {
     renderPlans(cachedPlans);
   } else if (activeTab === 'memory') {
     renderMemories();
+  } else if (activeTab === 'work-files') {
+    renderWorkFiles();
   }
 }
 
@@ -461,55 +484,95 @@ searchClear.addEventListener('click', () => {
   searchInput.focus();
 });
 
-searchInput.addEventListener('input', () => {
-  // Toggle clear button visibility
-  searchBar.classList.toggle('has-query', searchInput.value.length > 0);
-
-  if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
-  searchDebounceTimer = setTimeout(async () => {
-    searchDebounceTimer = null;
-    const query = searchInput.value.trim();
-
-    if (!query) {
-      clearSearch();
-      return;
-    }
-
-    try {
-      if (activeTab === 'sessions') {
-        const results = await window.api.search('session', query, searchTitlesOnly);
-        searchMatchIds = new Set(results.map(r => r.id));
-        // When title-only, also match project names
-        searchMatchProjectPaths = null;
-        if (searchTitlesOnly) {
-          const lowerQ = query.toLowerCase();
-          for (const p of cachedAllProjects) {
-            const shortName = p.projectPath.split('/').filter(Boolean).slice(-2).join('/');
-            if (shortName.toLowerCase().includes(lowerQ)) {
-              if (!searchMatchProjectPaths) searchMatchProjectPaths = new Set();
-              searchMatchProjectPaths.add(p.projectPath);
-            }
+// Extracted so the rebuild-cache button and Enter handler can call it too.
+async function runSearchQuery() {
+  const query = searchInput.value.trim();
+  if (!query) {
+    clearSearch();
+    return;
+  }
+  try {
+    if (activeTab === 'sessions') {
+      const results = await window.api.search('session', query, searchTitlesOnly);
+      searchMatchIds = new Set(results.map(r => r.id));
+      searchMatchProjectPaths = null;
+      if (searchTitlesOnly) {
+        const lowerQ = query.toLowerCase();
+        for (const p of cachedAllProjects) {
+          const shortName = p.projectPath.split('/').filter(Boolean).slice(-2).join('/');
+          if (shortName.toLowerCase().includes(lowerQ)) {
+            if (!searchMatchProjectPaths) searchMatchProjectPaths = new Set();
+            searchMatchProjectPaths.add(p.projectPath);
           }
         }
-        refreshSidebar({ resort: true });
-      } else if (activeTab === 'plans') {
-        const results = await window.api.search('plan', query, searchTitlesOnly);
-        const matchIds = new Set(results.map(r => r.id));
-        renderPlans(cachedPlans.filter(p => matchIds.has(p.filename)));
-      } else if (activeTab === 'memory') {
-        const results = await window.api.search('memory', query, searchTitlesOnly);
-        const matchIds = new Set(results.map(r => r.id));
-        renderMemories(matchIds);
       }
-    } catch {
-      if (activeTab === 'sessions') {
-        searchMatchIds = null;
-        searchMatchProjectPaths = null;
-        refreshSidebar({ resort: true });
-      }
+      refreshSidebar({ resort: true });
+    } else if (activeTab === 'plans') {
+      const results = await window.api.search('plan', query, searchTitlesOnly);
+      const matchIds = new Set(results.map(r => r.id));
+      renderPlans(cachedPlans.filter(p => matchIds.has(p.filename)));
+    } else if (activeTab === 'memory') {
+      const results = await window.api.search('memory', query, searchTitlesOnly);
+      const matchIds = new Set(results.map(r => r.id));
+      renderMemories(matchIds);
+    } else if (activeTab === 'work-files') {
+      const results = await window.api.search('work-file', query, searchTitlesOnly);
+      const matchIds = new Set(results.map(r => r.id));
+      renderWorkFiles(matchIds);
     }
-  }, 200);
+  } catch {
+    if (activeTab === 'sessions') {
+      searchMatchIds = null;
+      searchMatchProjectPaths = null;
+      refreshSidebar({ resort: true });
+    }
+  }
+}
+
+// Debounced search-as-you-type. Bumped from 200ms to 350ms — gentler under
+// heavy workloads (many active subagents) and gives the user time to finish
+// a word before searching. Explicit triggers (Enter, refresh button) bypass
+// the debounce.
+searchInput.addEventListener('input', () => {
+  searchBar.classList.toggle('has-query', searchInput.value.length > 0);
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => {
+    searchDebounceTimer = null;
+    runSearchQuery();
+  }, 350);
 });
+
+// Enter in the search field = "I want fresh results": trigger a full worker
+// reindex (which rewrites search_fts with the live content of active session
+// JSONLs), then re-run the query. Pending debounce gets cancelled.
+searchInput.addEventListener('keydown', async (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); searchDebounceTimer = null; }
+  await triggerRebuildAndSearch();
+});
+
+// Refresh button in the search bar — same behavior as pressing Enter.
+const searchRefreshBtn = document.getElementById('search-refresh-btn');
+if (searchRefreshBtn) {
+  searchRefreshBtn.addEventListener('click', () => triggerRebuildAndSearch());
+}
+
+let rebuildInFlight = false;
+async function triggerRebuildAndSearch() {
+  if (rebuildInFlight) return;
+  rebuildInFlight = true;
+  if (searchRefreshBtn) searchRefreshBtn.classList.add('spinning');
+  try {
+    await window.api.rebuildCache();
+  } catch {}
+  finally {
+    rebuildInFlight = false;
+    if (searchRefreshBtn) searchRefreshBtn.classList.remove('spinning');
+  }
+  // After reindex, refire the current query so the user sees fresh hits.
+  await runSearchQuery();
+}
 
 // --- Stop session helper ---
 async function confirmAndStopSession(sessionId) {
@@ -531,6 +594,22 @@ terminalStopBtn.addEventListener('click', () => {
 
 
 // --- Poll for active PTY sessions ---
+// Adaptive cadence: poll fast (3s) only while PTYs are running; when idle, back
+// off to 30s. Every renderer path that starts a session (launchNewSession,
+// openSession, launchTerminalSession, onSessionDetected/Forked) calls
+// pollActiveSessions() explicitly, which re-arms the fast cadence immediately.
+// The 30s idle floor still catches sessions started outside the renderer
+// (scheduler-spawned PTYs, other windows) within at most 30s.
+const POLL_FAST_MS = 3000;
+const POLL_IDLE_MS = 30000;
+let pollTimer = null;
+
+function scheduleActiveSessionsPoll() {
+  if (pollTimer) clearTimeout(pollTimer);
+  const delay = activePtyIds.size > 0 ? POLL_FAST_MS : POLL_IDLE_MS;
+  pollTimer = setTimeout(pollActiveSessions, delay);
+}
+
 async function pollActiveSessions() {
   try {
     const ids = await window.api.getActiveSessions();
@@ -538,6 +617,7 @@ async function pollActiveSessions() {
     updateRunningIndicators();
     updateTerminalHeader();
   } catch {}
+  scheduleActiveSessionsPoll();
 }
 
 function updateRunningIndicators() {
@@ -592,10 +672,11 @@ function updatePtyTitle() {
   terminalHeaderPtyTitle.style.display = title ? '' : 'none';
 }
 
-setInterval(pollActiveSessions, 3000);
+scheduleActiveSessionsPoll();
 
 // Refresh sidebar timeago labels every 30s so "just now" ticks forward
 setInterval(() => {
+  if (lastActivityTime.size === 0) return;
   for (const [sessionId, time] of lastActivityTime) {
     const item = document.getElementById('si-' + sessionId);
     if (!item) continue;
@@ -731,6 +812,7 @@ async function launchNewSession(project, sessionOptions) {
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
     entry.closed = true;
+    showSession(sessionId);
     return;
   }
   if (typeof setSessionMcpActive === 'function') setSessionMcpActive(sessionId, !!result.mcpActive);
@@ -797,6 +879,7 @@ async function openSession(session, customOptions) {
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
     entry.closed = true;
+    showSession(sessionId);
     return;
   }
   if (typeof setSessionMcpActive === 'function') setSessionMcpActive(sessionId, !!result.mcpActive);
@@ -838,6 +921,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
     plansContent.style.display = 'none';
     statsContent.style.display = 'none';
     memoryContent.style.display = 'none';
+    workFilesContent.style.display = 'none';
     sessionFilters.style.display = 'none';
     searchBar.style.display = 'none';
 
@@ -886,6 +970,11 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
       searchInput.placeholder = 'Search agent files...';
       memoryContent.style.display = '';
       loadMemories();
+    } else if (tabName === 'work-files') {
+      searchBar.style.display = '';
+      searchInput.placeholder = 'Search work files...';
+      workFilesContent.style.display = '';
+      loadWorkFiles();
     }
   });
 });
@@ -1047,10 +1136,13 @@ window.api.onProjectsChanged(() => {
     projectsChangedWhileAway = true;
     return;
   }
+  // 300ms debounce was visibly flickering while live JSONLs trigger watcher
+  // flushes every ~500ms; with the main-side notify throttle (1.5s) too the
+  // sidebar redraws at most ~1×/sec.
   projectsChangedTimer = setTimeout(() => {
     projectsChangedTimer = null;
     loadProjects();
-  }, 300);
+  }, 900);
 });
 
 // Status bar

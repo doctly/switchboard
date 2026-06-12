@@ -2,6 +2,55 @@
 // Depends on globals: escapeHtml (utils.js), hideAllViewers, placeholder,
 // terminalArea, jsonlViewer, jsonlViewerTitle, jsonlViewerSessionId, jsonlViewerBody (app.js)
 
+// Current viewer session — set once per showJsonlViewer call, read by Agent renderer
+let currentViewerSessionId = null;
+// Counter for matching identical (description, subagentType) blocks in fanout scenarios
+// Reset on each showJsonlViewer call. Key: "<contextSessionId>|<desc>|<type>"
+let agentMatchCounters = {};
+
+// --- Live subagent tracking ---
+// Set of agentIds that are currently live (spawned but not yet completed).
+// Keyed as "<parentSessionId>:<agentId>" so it's globally unique.
+const liveSubagents = new Set();
+
+// Active subagent file watches for the currently-rendered viewer. Each entry
+// is a stopWatch closure created when an Agent block expands and starts a
+// live tail. Drained on viewer dismissal so we don't leak fs.watchFile polls.
+// Attached to `window` so the cross-file hideAllViewers() (in plans-memory-view.js)
+// can drain via the function declaration below — top-level `const` in classic
+// scripts isn't global.
+window.__activeViewerWatches = window.__activeViewerWatches || new Set();
+const activeViewerWatches = window.__activeViewerWatches;
+function drainViewerWatches() {
+  for (const stop of activeViewerWatches) {
+    try { stop(); } catch {}
+  }
+  activeViewerWatches.clear();
+}
+
+// Register IPC listeners for subagent lifecycle events (called once at module load).
+(function initSubagentListeners() {
+  if (!window.api) return; // guard for non-Electron contexts
+  window.api.onSubagentSpawned((payload) => {
+    const key = payload.parentSessionId + ':' + payload.agentId;
+    liveSubagents.add(key);
+  });
+  window.api.onSubagentCompleted((payload) => {
+    const key = payload.parentSessionId + ':' + payload.agentId;
+    liveSubagents.delete(key);
+    // Notify any active watch container so it can stop the watch and hide the indicator
+    document.querySelectorAll('[data-subagent-watch-key="' + key + '"]').forEach(el => {
+      el.dispatchEvent(new CustomEvent('subagent-completed-internal'));
+    });
+  });
+  window.api.onSubagentWatchEvent((payload) => {
+    const key = payload.parentSessionId + ':' + payload.agentId;
+    document.querySelectorAll('[data-subagent-watch-key="' + key + '"]').forEach(el => {
+      el.dispatchEvent(new CustomEvent('subagent-watch-data', { detail: payload }));
+    });
+  });
+})()
+
 function renderJsonlText(text) {
   if (window.marked) {
     // Escape XML/HTML-like tags so they render as visible text,
@@ -211,12 +260,145 @@ const toolRenderers = {
     return toolBlock('#c090e0', 'Glob', '<code>' + escapeHtml(pattern) + '</code>', null);
   },
 
-  Agent(input) {
+  Agent(input, block) {
     const desc = input.description || '';
     const type = input.subagent_type || '';
-    const summary = (type ? '<span class="jsonl-tool-detail">' + escapeHtml(type) + '</span> ' : '')
+    const caretSpan = '<span class="jsonl-agent-caret">&#9658;</span> ';
+    const summary = caretSpan
+      + (type ? '<span class="jsonl-tool-detail">' + escapeHtml(type) + '</span> ' : '')
       + escapeHtml(desc);
-    return toolBlock('#f0a050', 'Agent', summary, null);
+    const el = toolBlock('#f0a050', 'Agent', summary, null);
+    el.classList.add('jsonl-agent-expandable');
+    // Capture context at render time
+    const parentSessionId = currentViewerSessionId;
+    if (!parentSessionId) return el;
+
+    // Determine which Nth match this block is for fanout deduplication
+    const counterKey = JSON.stringify([parentSessionId, desc, type]);
+    if (agentMatchCounters[counterKey] === undefined) agentMatchCounters[counterKey] = 0;
+    const matchIndex = agentMatchCounters[counterKey]++;
+
+    let expanded = false;
+    let nestedContainer = null;
+    let activeWatchId = null;
+    let liveIndicator = null;
+
+    function stopWatch() {
+      if (activeWatchId !== null) {
+        window.api.stopSubagentWatch(activeWatchId).catch(() => {});
+        activeWatchId = null;
+      }
+      if (liveIndicator) {
+        liveIndicator.remove();
+        liveIndicator = null;
+      }
+      activeViewerWatches.delete(stopWatch);
+    }
+    activeViewerWatches.add(stopWatch);
+
+    el.addEventListener('click', async () => {
+      if (expanded && nestedContainer) {
+        // Collapse — stop live watch
+        stopWatch();
+        nestedContainer.remove();
+        nestedContainer = null;
+        expanded = false;
+        const caret = el.querySelector('.jsonl-agent-caret');
+        if (caret) caret.innerHTML = '&#9658;';
+        return;
+      }
+      // Fetch subagent list for this parent
+      const subagents = await window.api.listSubagents(parentSessionId);
+      const matches = subagents.filter(s =>
+        (s.description || '') === desc && (s.subagentType || '') === type
+      );
+      const match = matches[matchIndex] || matches[0];
+      if (!match) return;
+
+      const result = await window.api.readSubagentJsonl(parentSessionId, match.agentId);
+      if (result.error || !result.entries) return;
+
+      nestedContainer = document.createElement('div');
+      nestedContainer.className = 'jsonl-subagent-nested';
+
+      const subSessionId = match.sessionId;
+      const rawNested = result.entries;
+      const nestedEntries = mergeLocalCommandEntries(rawNested);
+
+      // Build tool result map for nested entries
+      const nestedResultMap = new Map();
+      for (const entry of nestedEntries) {
+        const blocks = entry.message?.content || entry.content;
+        if (!Array.isArray(blocks)) continue;
+        for (const b of blocks) {
+          if (b.type === 'tool_result' && b.tool_use_id) {
+            nestedResultMap.set(b.tool_use_id, b.content || b.output || '');
+          }
+        }
+      }
+
+      const prevSessionId = currentViewerSessionId;
+      currentViewerSessionId = subSessionId;
+      for (const entry of nestedEntries) {
+        const entryEl = renderJsonlEntry(entry, nestedResultMap);
+        if (entryEl) nestedContainer.appendChild(entryEl);
+      }
+      currentViewerSessionId = prevSessionId;
+
+      el.after(nestedContainer);
+      expanded = true;
+      const caret = el.querySelector('.jsonl-agent-caret');
+      if (caret) caret.innerHTML = '&#9660;';
+
+      // Start live watch if this subagent is still running
+      const watchKey = parentSessionId + ':' + match.agentId;
+      if (liveSubagents.has(watchKey)) {
+        // Attach the watch key to nestedContainer for event routing
+        nestedContainer.dataset.subagentWatchKey = watchKey;
+
+        const watchResult = await window.api.startSubagentWatch(parentSessionId, match.agentId);
+        if (watchResult && watchResult.watchId) {
+          activeWatchId = watchResult.watchId;
+
+          // Show "● live" indicator in the block header
+          liveIndicator = document.createElement('span');
+          liveIndicator.className = 'jsonl-agent-live';
+          liveIndicator.textContent = '● live';
+          const toolHeader = el.querySelector('.jsonl-tool-header');
+          if (toolHeader) toolHeader.appendChild(liveIndicator);
+
+          // Stream new entries into nestedContainer
+          nestedContainer.addEventListener('subagent-watch-data', (evt) => {
+            const { entries: newEntries } = evt.detail;
+            const merged = mergeLocalCommandEntries(newEntries);
+            const appendResultMap = new Map();
+            for (const entry of merged) {
+              const blocks2 = entry.message?.content || entry.content;
+              if (!Array.isArray(blocks2)) continue;
+              for (const b of blocks2) {
+                if (b.type === 'tool_result' && b.tool_use_id) {
+                  appendResultMap.set(b.tool_use_id, b.content || b.output || '');
+                }
+              }
+            }
+            const savedId = currentViewerSessionId;
+            currentViewerSessionId = subSessionId;
+            for (const entry of merged) {
+              const entryEl = renderJsonlEntry(entry, appendResultMap);
+              if (entryEl) nestedContainer.appendChild(entryEl);
+            }
+            currentViewerSessionId = savedId;
+          });
+
+          // Stop watch when subagent completes
+          nestedContainer.addEventListener('subagent-completed-internal', () => {
+            stopWatch();
+          });
+        }
+      }
+    });
+
+    return el;
   },
 };
 
@@ -553,11 +735,19 @@ function renderJsonlEntry(entry, toolResultMap) {
 }
 
 async function showJsonlViewer(session) {
+  // Drain any watches from the previously-rendered viewer first — the new
+  // render replaces the DOM and we'd otherwise keep polling files for blocks
+  // the user no longer sees.
+  drainViewerWatches();
   const result = await window.api.readSessionJsonl(session.sessionId);
   hideAllViewers();
   placeholder.style.display = 'none';
   terminalArea.style.display = 'none';
   jsonlViewer.style.display = 'flex';
+
+  // Set viewer context for Agent block expansion
+  currentViewerSessionId = session.sessionId;
+  agentMatchCounters = {};
 
   const displayName = session.name || session.aiTitle || session.summary || session.sessionId;
   jsonlViewerTitle.textContent = displayName;
@@ -613,5 +803,95 @@ async function showJsonlViewer(session) {
   });
 
   // Scroll to the bottom so the most recent messages are visible
+  jsonlViewerBody.scrollTop = jsonlViewerBody.scrollHeight;
+}
+
+// --- Subagent transcript view ---
+// Renders a read-only transcript for a subagent session.
+// Routing decision: the click handler in sidebar.js discriminates on
+// session.parentSessionId (present only on subagent rows) and calls this
+// function instead of openSession(). Doing the branch at the click-handler
+// layer — where we already have the full session object — avoids an extra
+// IPC round-trip and keeps the IPC layer ignorant of UI routing concerns.
+async function showSubagentTranscript(session) {
+  const result = await window.api.readSubagentJsonl(session.parentSessionId, session.agentId);
+  hideAllViewers();
+  placeholder.style.display = 'none';
+  terminalArea.style.display = 'none';
+  jsonlViewer.style.display = 'flex';
+
+  // Set viewer context for nested Agent block expansion
+  currentViewerSessionId = session.sessionId;
+  agentMatchCounters = {};
+
+  const displayName = session.description || session.summary || session.aiTitle || session.sessionId;
+  const subagentLabel = session.subagentType ? '[' + session.subagentType + '] ' : '[subagent] ';
+  jsonlViewerTitle.textContent = subagentLabel + displayName;
+  jsonlViewerSessionId.textContent = session.sessionId;
+  jsonlViewerBody.innerHTML = '';
+
+  // Escape hatch: let the user resume this session in a terminal tab if needed
+  const escapeBanner = document.createElement('div');
+  escapeBanner.className = 'jsonl-subagent-escape-banner';
+  escapeBanner.innerHTML = '<span class="jsonl-subagent-escape-label">Read-only transcript — subagents cannot be re-entered.</span>';
+  const resumeBtn = document.createElement('button');
+  resumeBtn.className = 'jsonl-subagent-resume-btn';
+  resumeBtn.textContent = 'Resume in terminal anyway';
+  resumeBtn.addEventListener('click', () => openSession(session));
+  escapeBanner.appendChild(resumeBtn);
+  jsonlViewerBody.appendChild(escapeBanner);
+
+  if (result.error) {
+    const errEl = document.createElement('div');
+    errEl.className = 'plans-empty';
+    errEl.textContent = 'Error loading transcript: ' + result.error;
+    jsonlViewerBody.appendChild(errEl);
+    return;
+  }
+
+  const rawEntries = result.entries || [];
+  const entries = mergeLocalCommandEntries(rawEntries);
+
+  // Build tool_use_id → result content map
+  const toolResultMap = new Map();
+  for (const entry of entries) {
+    const blocks = entry.message?.content || entry.content;
+    if (!Array.isArray(blocks)) continue;
+    for (const block of blocks) {
+      if (block.type === 'tool_result' && block.tool_use_id) {
+        toolResultMap.set(block.tool_use_id, block.content || block.output || '');
+      }
+    }
+  }
+
+  let rendered = 0;
+  for (const entry of entries) {
+    const el = renderJsonlEntry(entry, toolResultMap);
+    if (el) {
+      jsonlViewerBody.appendChild(el);
+      rendered++;
+    }
+  }
+
+  if (rendered === 0) {
+    const emptyEl = document.createElement('div');
+    emptyEl.className = 'plans-empty';
+    emptyEl.textContent = 'No messages found in this subagent transcript.';
+    jsonlViewerBody.appendChild(emptyEl);
+  }
+
+  // Click-to-fullscreen for inline images
+  jsonlViewerBody.querySelectorAll('.jsonl-clickable-img').forEach(img => {
+    img.onclick = () => {
+      const overlay = document.createElement('div');
+      overlay.className = 'jsonl-screenshot-fullscreen';
+      const fullImg = document.createElement('img');
+      fullImg.src = img.src;
+      overlay.appendChild(fullImg);
+      overlay.onclick = () => overlay.remove();
+      document.body.appendChild(overlay);
+    };
+  });
+
   jsonlViewerBody.scrollTop = jsonlViewerBody.scrollHeight;
 }

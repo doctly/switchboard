@@ -45,6 +45,8 @@ class ViewerPanel {
       preview: true,
       wrap: true,
       gotoLine: true,
+      format: !!opts.format,
+      delete: !!opts.onDelete,
       save: !!opts.onSave,
       close: !!opts.onClose,
     });
@@ -122,6 +124,57 @@ class ViewerPanel {
         toolbar.flashCopyContent();
       });
     }
+
+    if (toolbar.formatBtn) {
+      toolbar.formatBtn.addEventListener('click', () => this._format());
+    }
+
+    if (toolbar.deleteBtn && opts.onDelete) {
+      toolbar.deleteBtn.addEventListener('click', () => this._delete());
+    }
+  }
+
+  _format() {
+    if (!this.editorView || !this.filePath) return;
+    const ext = this.filePath.split('.').pop()?.toLowerCase();
+    const raw = this.getContent();
+    let formatted = null;
+    try {
+      if (ext === 'jsonl') {
+        // Pretty-print each JSON line, separate with --- to preserve line semantics
+        const lines = raw.split('\n').filter(l => l.trim().length > 0);
+        formatted = lines.map(l => JSON.stringify(JSON.parse(l), null, 2)).join('\n---\n');
+      } else {
+        // Default: treat as JSON
+        formatted = JSON.stringify(JSON.parse(raw), null, 2);
+      }
+    } catch (err) {
+      window.flashButtonText?.(this.toolbar.formatBtn, '!', 1200);
+      return;
+    }
+    if (formatted === raw) return;
+    this.editorView.dispatch({
+      changes: { from: 0, to: this.editorView.state.doc.length, insert: formatted },
+    });
+    window.flashButtonText?.(this.toolbar.formatBtn, '✓', 800);
+  }
+
+  async _delete() {
+    if (!this.opts.onDelete || !this.filePath) return;
+    // Confirm via native-ish browser confirm
+    const name = this.filePath.split('/').pop();
+    if (!window.confirm(`Delete "${name}"?\n\nThis cannot be undone.`)) return;
+    try {
+      const result = await this.opts.onDelete(this.filePath);
+      if (result && result.ok !== false) {
+        // Close panel and trigger refresh through onClose
+        if (this.opts.onClose) this.opts.onClose();
+      } else {
+        window.alert(`Delete failed: ${result?.error || 'unknown error'}`);
+      }
+    } catch (err) {
+      window.alert(`Delete failed: ${err.message}`);
+    }
   }
 
   /**
@@ -135,10 +188,15 @@ class ViewerPanel {
     this.toolbar.setPath(filePath);
 
     const isMd = this._isMarkdown(filePath);
+    const isJsonish = this._isJsonish(filePath);
 
     // Show/hide preview button based on file type
     if (this.toolbar.previewBtn) {
       this.toolbar.previewBtn.style.display = isMd ? '' : 'none';
+    }
+    // Format button: only for .json / .jsonl
+    if (this.toolbar.formatBtn) {
+      this.toolbar.formatBtn.style.display = isJsonish ? '' : 'none';
     }
 
     // Save preview preference before resetting
@@ -294,6 +352,12 @@ class ViewerPanel {
     if (!filePath) return this.opts.language === 'markdown';
     const ext = filePath.split('.').pop()?.toLowerCase();
     return ext === 'md' || ext === 'mdx';
+  }
+
+  _isJsonish(filePath) {
+    if (!filePath) return false;
+    const ext = filePath.split('.').pop()?.toLowerCase();
+    return ext === 'json' || ext === 'jsonl';
   }
 }
 

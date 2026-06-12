@@ -33,7 +33,7 @@ function deriveProjectPath(folderPath) {
     for (const e of entries) {
       if (e.isFile() && e.name.endsWith('.jsonl')) {
         const cwd = extractCwdFromJsonl(path.join(folderPath, e.name));
-        if (cwd) return cwd;
+        if (cwd) return resolveWorktreePath(cwd);
       }
     }
     // Check session subdirectories (UUID folders with subagent .jsonl files)
@@ -52,7 +52,7 @@ function deriveProjectPath(folderPath) {
           }
           if (jsonlPath) {
             const cwd = extractCwdFromJsonl(jsonlPath);
-            if (cwd) return cwd;
+            if (cwd) return resolveWorktreePath(cwd);
           }
         }
       } catch {}
@@ -61,4 +61,4 @@ function deriveProjectPath(folderPath) {
   return null;
 }
 
-module.exports = { deriveProjectPath };
+module.exports = { deriveProjectPath, resolveWorktreePath };

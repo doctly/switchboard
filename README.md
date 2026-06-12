@@ -78,14 +78,38 @@ Grab the latest release for your platform:
   - **Linux**: `build-essential`, `python3` (`sudo apt install build-essential python3`)
   - **Windows**: Visual Studio Build Tools or `npm install -g windows-build-tools`
 
+## Tooling
+
+[task](https://taskfile.dev) is the preferred entrypoint for all dev operations. Install it once (`brew install go-task` / `snap install task --classic` / see taskfile.dev for other platforms), then:
+
+```bash
+task install       # npm install
+task dev           # launch Electron (--no-sandbox, required on Linux)
+task test          # node --test  (24 tests)
+task lint          # eslint .
+task check         # test + lint  — pre-commit / pre-push gate
+task ci            # same as check but sequential, verbose
+task build         # npm run build:linux
+task clean         # wipe dist/, codemirror bundle, local DB (asks for confirmation)
+task db:reset      # wipe ~/.switchboard/switchboard.db only
+```
+
+Run `task` (no args) to list all tasks with descriptions.
+
+The npm scripts are still present and work as before; `task` just wraps them as a consistent entrypoint.
+
 ## Development Setup
 
 ```bash
-# Install dependencies (runs postinstall automatically)
-npm install
+task install   # install dependencies (runs postinstall automatically)
+task dev       # launch Electron
+```
 
-# Start the app
-npm start
+Or with npm directly:
+
+```bash
+npm install
+npm start      # bundles CodeMirror then launches Electron
 ```
 
 `npm start` bundles CodeMirror and launches Electron. For faster iteration after the first run:
@@ -94,15 +118,26 @@ npm start
 npm run electron
 ```
 
+### Working alongside a running AppImage
+
+If your `~/Applications/Switchboard.AppImage` is open while you develop:
+
+- **Dev DB isolation** — `task dev` sets `SWITCHBOARD_DATA_DIR=~/.switchboard-dev` automatically so the dev electron uses its own SQLite database. The AppImage keeps using `~/.switchboard/switchboard.db`. They never collide.
+- **Single-instance lock** — if you double-click `Switchboard.AppImage` while it's already open, the second launch quits immediately and focuses the existing window instead of spawning a duplicate process. This was a real data-loss bug (PTYs orphaned) before the fix landed.
+- **Rebuilding is risky, replacing is safe** — `task build` invokes `electron-builder`, which rebuilds native modules (`better-sqlite3`, `node-pty`) by default. Those `.node` files are loaded by your running AppImage; replacing them mid-run can kill the process (witnessed 2026-05-31). **Quit Switchboard before running `task build`** unless you've confirmed `--config.npmRebuild=false` is in effect. **However**, replacing `~/Applications/Switchboard.AppImage` via `cp` AFTER the build is safe — the live process is fully extracted to `/tmp/.mount_*/` and doesn't need the on-disk file. The new code takes effect only on next launch.
+
+### For AI agents
+
+If you're an AI working in this repo, read [CLAUDE.md](CLAUDE.md) at the project root — it documents the fork-specific features, invariants (no double Electron, no `Co-Authored-By`, worktree isolation pattern), and the helpers worth reusing (`enumerateSessionFiles`, `encodeProjectPath`, `ViewerPanel`).
+
 ## Building
 
 All build commands bundle CodeMirror first, then invoke electron-builder.
 
 ```bash
-# Current platform
-npm run build
+task build            # AppImage + deb (Linux)
 
-# Platform-specific
+# npm equivalents:
 npm run build:mac     # DMG + zip (arm64 + x64)
 npm run build:win     # NSIS installer (x64 + arm64)
 npm run build:linux   # AppImage + deb (x64 + arm64)
