@@ -2,6 +2,40 @@
 // Depends on globals: escapeHtml (utils.js), hideAllViewers, placeholder,
 // terminalArea, jsonlViewer, jsonlViewerTitle, jsonlViewerSessionId, jsonlViewerBody (app.js)
 
+// Current viewer session — set once per showJsonlViewer call, read by Agent renderer
+let currentViewerSessionId = null;
+// Counter for matching identical (description, subagentType) blocks in fanout scenarios
+// Reset on each showJsonlViewer call. Key: "<contextSessionId>|<desc>|<type>"
+let agentMatchCounters = {};
+
+// --- Live subagent tracking ---
+// Set of agentIds that are currently live (spawned but not yet completed).
+// Keyed as "<parentSessionId>:<agentId>" so it's globally unique.
+const liveSubagents = new Set();
+
+// Register IPC listeners for subagent lifecycle events (called once at module load).
+(function initSubagentListeners() {
+  if (!window.api) return; // guard for non-Electron contexts
+  window.api.onSubagentSpawned((payload) => {
+    const key = payload.parentSessionId + ':' + payload.agentId;
+    liveSubagents.add(key);
+  });
+  window.api.onSubagentCompleted((payload) => {
+    const key = payload.parentSessionId + ':' + payload.agentId;
+    liveSubagents.delete(key);
+    // Notify any active watch container so it can stop the watch and hide the indicator
+    document.querySelectorAll('[data-subagent-watch-key="' + key + '"]').forEach(el => {
+      el.dispatchEvent(new CustomEvent('subagent-completed-internal'));
+    });
+  });
+  window.api.onSubagentWatchEvent((payload) => {
+    const key = payload.parentSessionId + ':' + payload.agentId;
+    document.querySelectorAll('[data-subagent-watch-key="' + key + '"]').forEach(el => {
+      el.dispatchEvent(new CustomEvent('subagent-watch-data', { detail: payload }));
+    });
+  });
+})()
+
 function renderJsonlText(text) {
   if (window.marked) {
     // Escape XML/HTML-like tags so they render as visible text,
@@ -211,12 +245,143 @@ const toolRenderers = {
     return toolBlock('#c090e0', 'Glob', '<code>' + escapeHtml(pattern) + '</code>', null);
   },
 
-  Agent(input) {
+  Agent(input, block) {
     const desc = input.description || '';
     const type = input.subagent_type || '';
-    const summary = (type ? '<span class="jsonl-tool-detail">' + escapeHtml(type) + '</span> ' : '')
+    const caretSpan = '<span class="jsonl-agent-caret">&#9658;</span> ';
+    const summary = caretSpan
+      + (type ? '<span class="jsonl-tool-detail">' + escapeHtml(type) + '</span> ' : '')
       + escapeHtml(desc);
-    return toolBlock('#f0a050', 'Agent', summary, null);
+    const el = toolBlock('#f0a050', 'Agent', summary, null);
+    el.classList.add('jsonl-agent-expandable');
+    // Capture context at render time
+    const parentSessionId = currentViewerSessionId;
+    if (!parentSessionId) return el;
+
+    // Determine which Nth match this block is for fanout deduplication
+    const counterKey = parentSessionId + '|' + desc + '|' + type;
+    if (agentMatchCounters[counterKey] === undefined) agentMatchCounters[counterKey] = 0;
+    const matchIndex = agentMatchCounters[counterKey]++;
+
+    let expanded = false;
+    let nestedContainer = null;
+    let activeWatchId = null;
+    let liveIndicator = null;
+
+    function stopWatch() {
+      if (activeWatchId !== null) {
+        window.api.stopSubagentWatch(activeWatchId).catch(() => {});
+        activeWatchId = null;
+      }
+      if (liveIndicator) {
+        liveIndicator.remove();
+        liveIndicator = null;
+      }
+    }
+
+    el.addEventListener('click', async () => {
+      if (expanded && nestedContainer) {
+        // Collapse — stop live watch
+        stopWatch();
+        nestedContainer.remove();
+        nestedContainer = null;
+        expanded = false;
+        const caret = el.querySelector('.jsonl-agent-caret');
+        if (caret) caret.innerHTML = '&#9658;';
+        return;
+      }
+      // Fetch subagent list for this parent
+      const subagents = await window.api.listSubagents(parentSessionId);
+      const matches = subagents.filter(s =>
+        (s.description || '') === desc && (s.subagentType || '') === type
+      );
+      const match = matches[matchIndex] || matches[0];
+      if (!match) return;
+
+      const result = await window.api.readSubagentJsonl(parentSessionId, match.agentId);
+      if (result.error || !result.entries) return;
+
+      nestedContainer = document.createElement('div');
+      nestedContainer.className = 'jsonl-subagent-nested';
+
+      const subSessionId = match.sessionId;
+      const rawNested = result.entries;
+      const nestedEntries = mergeLocalCommandEntries(rawNested);
+
+      // Build tool result map for nested entries
+      const nestedResultMap = new Map();
+      for (const entry of nestedEntries) {
+        const blocks = entry.message?.content || entry.content;
+        if (!Array.isArray(blocks)) continue;
+        for (const b of blocks) {
+          if (b.type === 'tool_result' && b.tool_use_id) {
+            nestedResultMap.set(b.tool_use_id, b.content || b.output || '');
+          }
+        }
+      }
+
+      const prevSessionId = currentViewerSessionId;
+      currentViewerSessionId = subSessionId;
+      for (const entry of nestedEntries) {
+        const entryEl = renderJsonlEntry(entry, nestedResultMap);
+        if (entryEl) nestedContainer.appendChild(entryEl);
+      }
+      currentViewerSessionId = prevSessionId;
+
+      el.after(nestedContainer);
+      expanded = true;
+      const caret = el.querySelector('.jsonl-agent-caret');
+      if (caret) caret.innerHTML = '&#9660;';
+
+      // Start live watch if this subagent is still running
+      const watchKey = parentSessionId + ':' + match.agentId;
+      if (liveSubagents.has(watchKey)) {
+        // Attach the watch key to nestedContainer for event routing
+        nestedContainer.dataset.subagentWatchKey = watchKey;
+
+        const watchResult = await window.api.startSubagentWatch(parentSessionId, match.agentId);
+        if (watchResult && watchResult.watchId) {
+          activeWatchId = watchResult.watchId;
+
+          // Show "● live" indicator in the block header
+          liveIndicator = document.createElement('span');
+          liveIndicator.className = 'jsonl-agent-live';
+          liveIndicator.textContent = '● live';
+          const toolHeader = el.querySelector('.jsonl-tool-header');
+          if (toolHeader) toolHeader.appendChild(liveIndicator);
+
+          // Stream new entries into nestedContainer
+          nestedContainer.addEventListener('subagent-watch-data', (evt) => {
+            const { entries: newEntries } = evt.detail;
+            const merged = mergeLocalCommandEntries(newEntries);
+            const appendResultMap = new Map();
+            for (const entry of merged) {
+              const blocks2 = entry.message?.content || entry.content;
+              if (!Array.isArray(blocks2)) continue;
+              for (const b of blocks2) {
+                if (b.type === 'tool_result' && b.tool_use_id) {
+                  appendResultMap.set(b.tool_use_id, b.content || b.output || '');
+                }
+              }
+            }
+            const savedId = currentViewerSessionId;
+            currentViewerSessionId = subSessionId;
+            for (const entry of merged) {
+              const entryEl = renderJsonlEntry(entry, appendResultMap);
+              if (entryEl) nestedContainer.appendChild(entryEl);
+            }
+            currentViewerSessionId = savedId;
+          });
+
+          // Stop watch when subagent completes
+          nestedContainer.addEventListener('subagent-completed-internal', () => {
+            stopWatch();
+          });
+        }
+      }
+    });
+
+    return el;
   },
 };
 
@@ -558,6 +723,10 @@ async function showJsonlViewer(session) {
   placeholder.style.display = 'none';
   terminalArea.style.display = 'none';
   jsonlViewer.style.display = 'flex';
+
+  // Set viewer context for Agent block expansion
+  currentViewerSessionId = session.sessionId;
+  agentMatchCounters = {};
 
   const displayName = session.name || session.aiTitle || session.summary || session.sessionId;
   jsonlViewerTitle.textContent = displayName;

@@ -2,7 +2,13 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const os = require('os');
 
-const DATA_DIR = path.join(os.homedir(), '.switchboard');
+// SWITCHBOARD_DATA_DIR lets dev/agent runs use a separate DB from the
+// installed AppImage so they don't race on session_cache. Default stays
+// ~/.switchboard so existing installs keep working. Resolve env var at
+// require-time (any later mutation would be ignored).
+const DATA_DIR = process.env.SWITCHBOARD_DATA_DIR
+  ? path.resolve(process.env.SWITCHBOARD_DATA_DIR.replace(/^~(?=$|\/)/, os.homedir()))
+  : path.join(os.homedir(), '.switchboard');
 const fs = require('fs');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -14,7 +20,11 @@ const OLD_LOCATIONS = [
   path.join(os.homedir(), '.claude', 'browser', 'session-browser.db'),
   path.join(os.homedir(), '.claude', 'session-browser.db'),
 ];
-if (!fs.existsSync(DB_PATH)) {
+// Skip the legacy ~/.claude/browser/ migration when running with a custom
+// DATA_DIR (typical dev/agent setup) — otherwise a fresh dev DB would steal
+// the AppImage's old data on first launch.
+const IS_DEFAULT_DATA_DIR = !process.env.SWITCHBOARD_DATA_DIR;
+if (IS_DEFAULT_DATA_DIR && !fs.existsSync(DB_PATH)) {
   for (const oldPath of OLD_LOCATIONS) {
     if (fs.existsSync(oldPath)) {
       fs.renameSync(oldPath, DB_PATH);
@@ -49,7 +59,11 @@ db.exec(`
     modified TEXT,
     messageCount INTEGER DEFAULT 0,
     slug TEXT,
-    aiTitle TEXT
+    aiTitle TEXT,
+    parentSessionId TEXT,
+    agentId TEXT,
+    subagentType TEXT,
+    description TEXT
   )
 `);
 
@@ -96,6 +110,20 @@ const migrations = [
   // remains until the user renames manually, and only future indexes are clean.
   (db) => {
     try { db.exec('ALTER TABLE session_cache ADD COLUMN aiTitle TEXT'); } catch {}
+    try { db.exec('DELETE FROM session_cache'); } catch {}
+    try { db.exec('DELETE FROM cache_meta'); } catch {}
+  },
+  // v4: Add subagent columns. Subagent transcripts live under
+  // <folder>/<parentSessionId>/subagents/agent-<agentId>.jsonl alongside a
+  // .meta.json sidecar holding { agentType, description }. We surface them as
+  // first-class rows in session_cache, keyed by sessionId = "sub:<parent>:<agentId>".
+  // Clear cache so subagent rows get picked up on first re-index.
+  (db) => {
+    try { db.exec('ALTER TABLE session_cache ADD COLUMN parentSessionId TEXT'); } catch {}
+    try { db.exec('ALTER TABLE session_cache ADD COLUMN agentId TEXT'); } catch {}
+    try { db.exec('ALTER TABLE session_cache ADD COLUMN subagentType TEXT'); } catch {}
+    try { db.exec('ALTER TABLE session_cache ADD COLUMN description TEXT'); } catch {}
+    try { db.exec('CREATE INDEX IF NOT EXISTS idx_session_cache_parent ON session_cache(parentSessionId)'); } catch {}
     try { db.exec('DELETE FROM session_cache'); } catch {}
     try { db.exec('DELETE FROM cache_meta'); } catch {}
   },
@@ -152,20 +180,24 @@ const stmts = {
   cacheCount: db.prepare('SELECT COUNT(*) as cnt FROM session_cache'),
   cacheGetAll: db.prepare('SELECT * FROM session_cache'),
   cacheUpsert: db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, parentSessionId, agentId, subagentType, description)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
       folder = excluded.folder, projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
       created = excluded.created, modified = excluded.modified,
       messageCount = excluded.messageCount, slug = excluded.slug,
-      aiTitle = excluded.aiTitle
+      aiTitle = excluded.aiTitle,
+      parentSessionId = excluded.parentSessionId, agentId = excluded.agentId,
+      subagentType = excluded.subagentType, description = excluded.description
   `),
-  cacheGetByFolder: db.prepare('SELECT sessionId, modified FROM session_cache WHERE folder = ?'),
+  cacheGetByParent: db.prepare('SELECT * FROM session_cache WHERE parentSessionId = ? ORDER BY created ASC'),
+  cacheGetByFolder: db.prepare('SELECT * FROM session_cache WHERE folder = ?'),
   cacheGetFolder: db.prepare('SELECT folder FROM session_cache WHERE sessionId = ?'),
   cacheGetSession: db.prepare('SELECT * FROM session_cache WHERE sessionId = ?'),
   cacheDeleteSession: db.prepare('DELETE FROM session_cache WHERE sessionId = ?'),
   cacheDeleteFolder: db.prepare('DELETE FROM session_cache WHERE folder = ?'),
+  cacheTouchModified: db.prepare('UPDATE session_cache SET modified = ? WHERE sessionId = ?'),
   // Cache meta statements
   metaGet: db.prepare('SELECT * FROM cache_meta WHERE folder = ?'),
   metaGetAll: db.prepare('SELECT * FROM cache_meta'),
@@ -246,10 +278,16 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
     stmts.cacheUpsert.run(
       s.sessionId, s.folder, s.projectPath, s.summary,
       s.firstPrompt, s.created, s.modified, s.messageCount || 0,
-      s.slug || null, s.aiTitle || null
+      s.slug || null, s.aiTitle || null,
+      s.parentSessionId || null, s.agentId || null,
+      s.subagentType || null, s.description || null
     );
   }
 });
+
+function getCachedByParent(parentSessionId) {
+  return stmts.cacheGetByParent.all(parentSessionId);
+}
 
 function upsertCachedSessions(sessions) {
   upsertCachedSessionsBatch(sessions);
@@ -370,17 +408,39 @@ function deleteSetting(key) {
   stmts.settingsDelete.run(key);
 }
 
+// --- Daily activity aggregate (for stats heatmap) ---
+
+// Returns [{date: 'YYYY-MM-DD', messageCount, sessionCount}, ...] sorted ASC.
+// Aggregates ALL rows in session_cache (parent sessions + subagents) so the
+// heatmap reflects real usage regardless of whether Claude rotated the parent
+// JSONL files.
+function getDailyActivity() {
+  return db.prepare(`
+    SELECT
+      substr(modified, 1, 10) AS date,
+      SUM(messageCount)       AS messageCount,
+      COUNT(*)                AS sessionCount
+    FROM session_cache
+    WHERE modified IS NOT NULL
+      AND length(modified) >= 10
+    GROUP BY date
+    ORDER BY date ASC
+  `).all();
+}
+
 function closeDb() {
   try { db.close(); } catch {}
 }
 
 module.exports = {
   getMeta, getAllMeta, setName, toggleStar, setArchived,
-  isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, upsertCachedSessions,
+  isCachePopulated, getAllCached, getCachedByFolder, getCachedByParent, getCachedFolder, getCachedSession, upsertCachedSessions,
+  touchCachedModified: (sessionId, modified) => stmts.cacheTouchModified.run(modified, sessionId),
   deleteCachedSession, deleteCachedFolder,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting,
+  getDailyActivity,
   closeDb,
 };

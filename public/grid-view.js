@@ -11,6 +11,111 @@
 let gridCards = new Map(); // sessionId → card wrapper element
 let gridFocusedSessionId = null;
 
+// Active subagents tracked via IPC events (subagent-spawned / subagent-completed).
+// parentSessionId → Set of { agentId, subagentType, spawnedAt }
+const activeSubagents = new Map();
+
+// Subagent type → pill color (matches sidebar palette)
+const GRID_SUBAGENT_TYPE_COLORS = {
+  explore:   '#3ecf82',
+  plan:      '#8088ff',
+  implement: '#ffaa40',
+  review:    '#60bef0',
+  test:      '#ff6464',
+  default:   '#a0a0b4',
+};
+
+function gridSubagentColor(type) {
+  return GRID_SUBAGENT_TYPE_COLORS[(type || '').toLowerCase()] || GRID_SUBAGENT_TYPE_COLORS.default;
+}
+
+// Wire IPC listeners (guarded — bindings may not exist yet)
+(function initSubagentListeners() {
+  if (typeof window.api === 'undefined') return;
+
+  if (typeof window.api.onSubagentSpawned === 'function') {
+    window.api.onSubagentSpawned((event, data) => {
+      const { parentSessionId, agentId, subagentType } = data || {};
+      if (!parentSessionId || !agentId) return;
+      if (!activeSubagents.has(parentSessionId)) activeSubagents.set(parentSessionId, new Map());
+      activeSubagents.get(parentSessionId).set(agentId, { agentId, subagentType, spawnedAt: Date.now() });
+      updateGridSubagentPills(parentSessionId);
+    });
+  }
+
+  if (typeof window.api.onSubagentCompleted === 'function') {
+    window.api.onSubagentCompleted((event, data) => {
+      const { parentSessionId, agentId } = data || {};
+      if (!parentSessionId || !agentId) return;
+      const map = activeSubagents.get(parentSessionId);
+      if (map) {
+        map.delete(agentId);
+        if (map.size === 0) activeSubagents.delete(parentSessionId);
+      }
+      updateGridSubagentPills(parentSessionId);
+    });
+  }
+})();
+
+// Prune subagents that have been running for more than 60 s without a completion event.
+// Called on each grid render cycle.
+function pruneStaleSubagents() {
+  const cutoff = Date.now() - 60000;
+  for (const [parentId, map] of activeSubagents) {
+    for (const [agentId, info] of map) {
+      if (info.spawnedAt < cutoff) map.delete(agentId);
+    }
+    if (map.size === 0) activeSubagents.delete(parentId);
+  }
+}
+
+// Re-render the pill row for a single card (if it exists in the grid).
+function updateGridSubagentPills(parentSessionId) {
+  const card = gridCards.get(parentSessionId);
+  if (!card) return;
+
+  let pillRow = card.querySelector('.grid-subagent-pills');
+
+  const map = activeSubagents.get(parentSessionId);
+  if (!map || map.size === 0) {
+    if (pillRow) pillRow.remove();
+    return;
+  }
+
+  if (!pillRow) {
+    pillRow = document.createElement('div');
+    pillRow.className = 'grid-subagent-pills';
+    // Insert before the footer
+    const footer = card.querySelector('.grid-card-footer');
+    if (footer) {
+      card.insertBefore(pillRow, footer);
+    } else {
+      card.appendChild(pillRow);
+    }
+  }
+
+  pillRow.innerHTML = '';
+  const entries = [...map.values()];
+  const MAX_PILLS = 5;
+  const shown = entries.slice(0, MAX_PILLS);
+  const overflow = entries.length - shown.length;
+
+  for (const info of shown) {
+    const pill = document.createElement('span');
+    pill.className = 'grid-subagent-pill';
+    pill.title = info.subagentType || 'subagent';
+    pill.style.background = gridSubagentColor(info.subagentType);
+    pillRow.appendChild(pill);
+  }
+
+  if (overflow > 0) {
+    const more = document.createElement('span');
+    more.className = 'grid-subagent-pill-overflow';
+    more.textContent = `+${overflow} more`;
+    pillRow.appendChild(more);
+  }
+}
+
 function wrapInGridCard(sessionId) {
   const entry = openSessions.get(sessionId);
   const session = sessionMap.get(sessionId) || (entry && entry.session);
@@ -132,6 +237,10 @@ function wrapInGridCard(sessionId) {
   gridCards.set(sessionId, card);
   // Set initial status from the single source of truth
   updateRunningIndicators();
+
+  // Render subagent pills for any already-tracked children
+  pruneStaleSubagents();
+  updateGridSubagentPills(sessionId);
 }
 
 function unwrapGridCards() {

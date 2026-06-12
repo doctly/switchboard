@@ -7,6 +7,8 @@
   "main": "main.js",
   "scripts": {
     "start": "npm run bundle:codemirror && electron .",
+    "lint": "eslint .",
+    "pretest": "npm run lint",
     "test": "node --test",
     "electron": "electron .",
     "bundle:codemirror": "esbuild public/codemirror-setup.js --bundle --outfile=public/codemirror-bundle.js --format=iife --platform=browser --minify",
@@ -17,7 +19,8 @@
     "build:win": "npm run bundle:codemirror && electron-builder --win",
     "build:linux": "npm run bundle:codemirror && electron-builder --linux",
     "release": "npm run bundle:codemirror && electron-builder --publish always",
-    "postinstall": "node scripts/postinstall.js"
+    "postinstall": "node scripts/postinstall.js",
+    "prepare": "husky"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
@@ -49,6 +52,10 @@
     "electron-builder": "^26.0.0",
     "electron-reloader": "^1.2.3",
     "esbuild": "^0.27.3",
+    "eslint": "^9.39.4",
+    "globals": "^17.6.0",
+    "husky": "^9.1.7",
+    "jsdom": "^29.1.1",
     "png2icons": "^2.0.1"
   },
   "build": {

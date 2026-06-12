@@ -6,13 +6,14 @@ let cachedUsage = null;
 async function loadStats() {
   statsViewerBody.innerHTML = '';
 
-  // Show spinner while refreshing
+  // Show spinner while fetching usage via PTY
   const spinner = document.createElement('div');
   spinner.className = 'stats-spinner';
   spinner.innerHTML = `<div class="stats-spinner-icon"></div><span>Updating stats\u2026</span>`;
   statsViewerBody.appendChild(spinner);
 
-  // Refresh stats cache via PTY (/stats + /usage)
+  // Fetch stats from DB (instant) and usage from API (PTY) in parallel via
+  // refresh-stats, which now skips the slow /stats PTY call entirely.
   let stats, usage;
   try {
     const result = await window.api.refreshStats();
@@ -20,8 +21,8 @@ async function loadStats() {
     usage = result?.usage || {};
     cachedUsage = usage;
   } catch {
-    // Fallback to cached stats
-    stats = await window.api.getStats();
+    // Fallback: read DB directly for heatmap, use last cached usage
+    stats = await window.api.getStatsFromDb();
     usage = cachedUsage || {};
   }
 
@@ -33,9 +34,9 @@ async function loadStats() {
   }
 
   if (stats) {
-    // dailyActivity may be an array of {date, messageCount, ...} or an object
-    const rawDaily = stats.dailyActivity || {};
-    let dailyMap = {};
+    // dailyActivity is an array of {date, messageCount, sessionCount}
+    const rawDaily = stats.dailyActivity || [];
+    const dailyMap = {};
     if (Array.isArray(rawDaily)) {
       for (const entry of rawDaily) {
         dailyMap[entry.date] = entry.messageCount || 0;
@@ -59,7 +60,7 @@ async function loadStats() {
     const notice = document.createElement('div');
     notice.className = 'stats-notice';
     const lastDate = stats.lastComputedDate || 'unknown';
-    notice.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align:-2px;margin-right:6px;flex-shrink:0"><circle cx="8" cy="8" r="7"/><line x1="8" y1="5" x2="8" y2="9"/><circle cx="8" cy="11.5" r="0.5" fill="currentColor" stroke="none"/></svg>Data sourced from Claude\u2019s stats cache (last updated ${escapeHtml(lastDate)}).`;
+    notice.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align:-2px;margin-right:6px;flex-shrink:0"><circle cx="8" cy="8" r="7"/><line x1="8" y1="5" x2="8" y2="9"/><circle cx="8" cy="11.5" r="0.5" fill="currentColor" stroke="none"/></svg>Data sourced from Switchboard session cache (last updated ${escapeHtml(lastDate)}).`;
     statsViewerBody.appendChild(notice);
   }
 }

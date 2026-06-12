@@ -461,55 +461,91 @@ searchClear.addEventListener('click', () => {
   searchInput.focus();
 });
 
-searchInput.addEventListener('input', () => {
-  // Toggle clear button visibility
-  searchBar.classList.toggle('has-query', searchInput.value.length > 0);
-
-  if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
-  searchDebounceTimer = setTimeout(async () => {
-    searchDebounceTimer = null;
-    const query = searchInput.value.trim();
-
-    if (!query) {
-      clearSearch();
-      return;
-    }
-
-    try {
-      if (activeTab === 'sessions') {
-        const results = await window.api.search('session', query, searchTitlesOnly);
-        searchMatchIds = new Set(results.map(r => r.id));
-        // When title-only, also match project names
-        searchMatchProjectPaths = null;
-        if (searchTitlesOnly) {
-          const lowerQ = query.toLowerCase();
-          for (const p of cachedAllProjects) {
-            const shortName = p.projectPath.split('/').filter(Boolean).slice(-2).join('/');
-            if (shortName.toLowerCase().includes(lowerQ)) {
-              if (!searchMatchProjectPaths) searchMatchProjectPaths = new Set();
-              searchMatchProjectPaths.add(p.projectPath);
-            }
+// Extracted so the rebuild-cache button and Enter handler can call it too.
+async function runSearchQuery() {
+  const query = searchInput.value.trim();
+  if (!query) {
+    clearSearch();
+    return;
+  }
+  try {
+    if (activeTab === 'sessions') {
+      const results = await window.api.search('session', query, searchTitlesOnly);
+      searchMatchIds = new Set(results.map(r => r.id));
+      searchMatchProjectPaths = null;
+      if (searchTitlesOnly) {
+        const lowerQ = query.toLowerCase();
+        for (const p of cachedAllProjects) {
+          const shortName = p.projectPath.split('/').filter(Boolean).slice(-2).join('/');
+          if (shortName.toLowerCase().includes(lowerQ)) {
+            if (!searchMatchProjectPaths) searchMatchProjectPaths = new Set();
+            searchMatchProjectPaths.add(p.projectPath);
           }
         }
-        refreshSidebar({ resort: true });
-      } else if (activeTab === 'plans') {
-        const results = await window.api.search('plan', query, searchTitlesOnly);
-        const matchIds = new Set(results.map(r => r.id));
-        renderPlans(cachedPlans.filter(p => matchIds.has(p.filename)));
-      } else if (activeTab === 'memory') {
-        const results = await window.api.search('memory', query, searchTitlesOnly);
-        const matchIds = new Set(results.map(r => r.id));
-        renderMemories(matchIds);
       }
-    } catch {
-      if (activeTab === 'sessions') {
-        searchMatchIds = null;
-        searchMatchProjectPaths = null;
-        refreshSidebar({ resort: true });
-      }
+      refreshSidebar({ resort: true });
+    } else if (activeTab === 'plans') {
+      const results = await window.api.search('plan', query, searchTitlesOnly);
+      const matchIds = new Set(results.map(r => r.id));
+      renderPlans(cachedPlans.filter(p => matchIds.has(p.filename)));
+    } else if (activeTab === 'memory') {
+      const results = await window.api.search('memory', query, searchTitlesOnly);
+      const matchIds = new Set(results.map(r => r.id));
+      renderMemories(matchIds);
     }
-  }, 200);
+  } catch {
+    if (activeTab === 'sessions') {
+      searchMatchIds = null;
+      searchMatchProjectPaths = null;
+      refreshSidebar({ resort: true });
+    }
+  }
+}
+
+// Debounced search-as-you-type. Bumped from 200ms to 350ms — gentler under
+// heavy workloads (many active subagents) and gives the user time to finish
+// a word before searching. Explicit triggers (Enter, refresh button) bypass
+// the debounce.
+searchInput.addEventListener('input', () => {
+  searchBar.classList.toggle('has-query', searchInput.value.length > 0);
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => {
+    searchDebounceTimer = null;
+    runSearchQuery();
+  }, 350);
 });
+
+// Enter in the search field = "I want fresh results": trigger a full worker
+// reindex (which rewrites search_fts with the live content of active session
+// JSONLs), then re-run the query. Pending debounce gets cancelled.
+searchInput.addEventListener('keydown', async (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); searchDebounceTimer = null; }
+  await triggerRebuildAndSearch();
+});
+
+// Refresh button in the search bar — same behavior as pressing Enter.
+const searchRefreshBtn = document.getElementById('search-refresh-btn');
+if (searchRefreshBtn) {
+  searchRefreshBtn.addEventListener('click', () => triggerRebuildAndSearch());
+}
+
+let rebuildInFlight = false;
+async function triggerRebuildAndSearch() {
+  if (rebuildInFlight) return;
+  rebuildInFlight = true;
+  if (searchRefreshBtn) searchRefreshBtn.classList.add('spinning');
+  try {
+    await window.api.rebuildCache();
+  } catch {}
+  finally {
+    rebuildInFlight = false;
+    if (searchRefreshBtn) searchRefreshBtn.classList.remove('spinning');
+  }
+  // After reindex, refire the current query so the user sees fresh hits.
+  await runSearchQuery();
+}
 
 // --- Stop session helper ---
 async function confirmAndStopSession(sessionId) {
@@ -1047,10 +1083,13 @@ window.api.onProjectsChanged(() => {
     projectsChangedWhileAway = true;
     return;
   }
+  // 300ms debounce was visibly flickering while live JSONLs trigger watcher
+  // flushes every ~500ms; with the main-side notify throttle (1.5s) too the
+  // sidebar redraws at most ~1×/sec.
   projectsChangedTimer = setTimeout(() => {
     projectsChangedTimer = null;
     loadProjects();
-  }, 300);
+  }, 900);
 });
 
 // Status bar

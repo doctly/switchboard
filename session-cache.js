@@ -3,7 +3,7 @@ const fs = require('fs');
 const { Worker } = require('worker_threads');
 const { getFolderIndexMtimeMs } = require('./folder-index-state');
 const { deriveProjectPath } = require('./derive-project-path');
-const { readSessionFile } = require('./read-session-file');
+const { readSessionFile, readSessionDisplayHeader, enumerateSessionFiles, resolveJsonlPath } = require('./read-session-file');
 const { encodeProjectPath } = require('./encode-project-path');
 
 /**
@@ -11,7 +11,7 @@ const { encodeProjectPath } = require('./encode-project-path');
  * Call init(ctx) once with the shared context object.
  */
 let PROJECTS_DIR, activeSessions, getMainWindow, log;
-let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession;
+let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession, touchCachedModified;
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
 let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName;
 
@@ -24,6 +24,7 @@ function init(ctx) {
   deleteCachedFolder = ctx.db.deleteCachedFolder;
   getCachedByFolder = ctx.db.getCachedByFolder;
   upsertCachedSessions = ctx.db.upsertCachedSessions;
+  touchCachedModified = ctx.db.touchCachedModified;
   deleteCachedSession = ctx.db.deleteCachedSession;
   deleteSearchFolder = ctx.db.deleteSearchFolder;
   deleteSearchSession = ctx.db.deleteSearchSession;
@@ -46,19 +47,25 @@ function readFolderFromFilesystem(folder) {
   if (!projectPath) return { projectPath: null, sessions: [] };
   const sessions = [];
 
-  try {
-    const jsonlFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
-    for (const file of jsonlFiles) {
-      const s = readSessionFile(path.join(folderPath, file), folder, projectPath);
-      if (s) sessions.push(s);
-    }
-  } catch {}
+  for (const { filePath, parentSessionId } of enumerateSessionFiles(folderPath)) {
+    const s = readSessionFile(filePath, folder, projectPath, { parentSessionId });
+    if (s) sessions.push(s);
+  }
 
   return { projectPath, sessions };
 }
 
-/** Refresh a single folder incrementally: only re-read changed/new .jsonl files */
-function refreshFolder(folder) {
+/** Refresh a single folder incrementally: only re-read changed/new .jsonl files.
+ *
+ * @param {string} folder    folder name relative to PROJECTS_DIR
+ * @param {object} [opts]
+ * @param {Set<string>|null} [opts.files]  if provided, ONLY scan these on-disk
+ *   relative paths within the folder instead of walking everything. Used by the
+ *   fs.watch flush to avoid statSync'ing thousands of files when only a handful
+ *   of subagent transcripts were appended. When null/undefined, walk the whole
+ *   folder (used for bootstrap and folder-level events).
+ */
+function refreshFolder(folder, opts = {}) {
   const folderPath = path.join(PROJECTS_DIR, folder);
   if (!fs.existsSync(folderPath)) {
     deleteCachedFolder(folder);
@@ -71,18 +78,50 @@ function refreshFolder(folder) {
     return;
   }
 
-  // Get what's currently cached for this folder
+  // Get what's currently cached for this folder.
+  // cachedMap: DB sessionId → { modified, filePath } so we can do mtime comparison
+  // even for subagents whose DB sessionId differs from the on-disk filename.
+  // filePathToDbId: inverted index so the per-file lookup is O(1) — without it,
+  // refreshing a folder with N cached sessions costs O(N²) per flush (the watcher
+  // fires frequently while live Claude sessions append JSONL, freezing the main
+  // process for folders with thousands of subagents).
   const cachedSessions = getCachedByFolder(folder);
-  const cachedMap = new Map(); // sessionId → modified ISO string
+  const cachedMap = new Map();
+  const filePathToDbId = new Map();
   for (const row of cachedSessions) {
-    cachedMap.set(row.sessionId, row.modified);
+    const filePath = resolveJsonlPath(PROJECTS_DIR, row);
+    // Keep the full row so refresh can merge display-only header updates with
+    // unchanged fields (created, messageCount, textContent) without re-reading
+    // the file body.
+    cachedMap.set(row.sessionId, { ...row, filePath });
+    filePathToDbId.set(filePath, row.sessionId);
   }
 
-  // Scan current .jsonl files
-  let jsonlFiles;
-  try {
-    jsonlFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
-  } catch { return; }
+  // Targeted refresh: walk only the files the watcher said changed, not the
+  // entire folder. Skips enumerateSessionFiles (which does many readdirSyncs on
+  // every subagent subdir) and only stats the dirty files. Falls back to full
+  // walk when opts.files is omitted (bootstrap / folder-level events / cold
+  // delete-detection).
+  const targeted = opts.files instanceof Set && opts.files.size > 0;
+  let filesToScan;
+  if (targeted) {
+    filesToScan = [];
+    for (const rel of opts.files) {
+      const filePath = path.join(folderPath, rel);
+      // Derive parentSessionId for subagent paths: <folder>/<parent>/subagents/agent-X.jsonl
+      const parts = rel.split(path.sep);
+      let parentSessionId = null;
+      if (parts.length === 3 && parts[1] === 'subagents') {
+        parentSessionId = parts[0];
+      } else if (parts.length === 2) {
+        // legacy <folder>/<parent>/agent-X.jsonl layout (no subagents/ subdir)
+        parentSessionId = parts[0];
+      }
+      filesToScan.push({ filePath, parentSessionId });
+    }
+  } else {
+    filesToScan = enumerateSessionFiles(folderPath);
+  }
 
   const currentIds = new Set();
   let changed = false;
@@ -93,22 +132,66 @@ function refreshFolder(folder) {
   const namesToSet = [];
   const sessionsToDelete = [];
 
-  for (const file of jsonlFiles) {
-    const filePath = path.join(folderPath, file);
-    const sessionId = path.basename(file, '.jsonl');
-    currentIds.add(sessionId);
+  // Refresh strategy:
+  //   - NEW file (no cache row): full readSessionFile — small at first turn,
+  //     seeds session_cache + FTS body in one shot.
+  //   - EXISTING file (already cached): header-only read (~256 KB / 500 lines).
+  //     Updates display fields (summary, slug, titles, mtime) without reading
+  //     the full body. Avoids re-reading 200+ MB live host-session JSONLs on
+  //     every watcher flush. Side-effect: FTS body for live sessions goes
+  //     stale until the next cold-start (acceptable trade-off).
+  //   - Header read failing (truncated chunk, partial JSON): fall back to a
+  //     mtime-only DB touch so the sidebar still reflects activity.
 
-    // Check if file mtime changed
-    let fileMtime;
-    try { fileMtime = fs.statSync(filePath).mtime.toISOString(); } catch { continue; }
+  for (const { filePath, parentSessionId } of filesToScan) {
+    let stat;
+    try { stat = fs.statSync(filePath); } catch { continue; }
+    const fileMtime = stat.mtime.toISOString();
 
-    if (cachedMap.has(sessionId) && cachedMap.get(sessionId) === fileMtime) {
+    const cachedDbId = filePathToDbId.get(filePath) || null;
+    const cachedEntry = cachedDbId ? cachedMap.get(cachedDbId) : null;
+
+    if (cachedDbId !== null) currentIds.add(cachedDbId);
+
+    if (cachedEntry && cachedEntry.modified === fileMtime) {
       continue; // unchanged, skip
     }
 
-    // File is new or modified — re-read it
-    const s = readSessionFile(filePath, folder, projectPath);
+    if (cachedEntry) {
+      // EXISTING — header-only refresh.
+      const h = readSessionDisplayHeader(filePath, { parentSessionId });
+      if (h) {
+        // Merge: keep cached body/messageCount/created, overlay fresh display fields.
+        const merged = {
+          ...cachedEntry,
+          folder, projectPath,
+          summary: h.summary || cachedEntry.summary,
+          firstPrompt: h.firstPrompt || cachedEntry.firstPrompt,
+          modified: fileMtime,
+          slug: h.slug || cachedEntry.slug,
+          aiTitle: h.aiTitle || cachedEntry.aiTitle,
+          parentSessionId: h.parentSessionId || cachedEntry.parentSessionId,
+          agentId: h.agentId || cachedEntry.agentId,
+          subagentType: h.subagentType || cachedEntry.subagentType,
+          description: h.description || cachedEntry.description,
+        };
+        sessionsToUpsert.push(merged);
+        if (h.customTitle && h.customTitle !== cachedEntry.customTitle) {
+          namesToSet.push({ id: merged.sessionId, name: h.customTitle });
+        }
+      } else {
+        // Header read couldn't extract signal — just bump mtime so sort order stays current.
+        touchCachedModified(cachedDbId, fileMtime);
+        cachedEntry.modified = fileMtime;
+      }
+      changed = true;
+      continue;
+    }
+
+    // NEW file — full readSessionFile so the FTS index gets seeded.
+    const s = readSessionFile(filePath, folder, projectPath, { parentSessionId });
     if (s) {
+      currentIds.add(s.sessionId);
       sessionsToUpsert.push(s);
       // Title precedence: user rename (session_meta.name) > JSONL custom-title > JSONL ai-title.
       // Only customTitle (Claude /title) promotes to session_meta.name — AI titles must NEVER
@@ -123,11 +206,29 @@ function refreshFolder(folder) {
     changed = true;
   }
 
-  // Remove sessions whose .jsonl files were deleted
-  for (const sessionId of cachedMap.keys()) {
-    if (!currentIds.has(sessionId)) {
-      sessionsToDelete.push(sessionId);
-      changed = true;
+  // Remove sessions whose .jsonl files were deleted. Skip in targeted mode —
+  // we only stat'd the dirty files, so cachedMap entries not in currentIds
+  // weren't checked and may still exist on disk. Targeted-mode deletions are
+  // handled by the watcher path-stat: missing files surface via statSync's
+  // ENOENT in the loop above and produce no upsert. A full walk picks up any
+  // drift on the next folder-level event.
+  if (!targeted) {
+    for (const sessionId of cachedMap.keys()) {
+      if (!currentIds.has(sessionId)) {
+        sessionsToDelete.push(sessionId);
+        changed = true;
+      }
+    }
+  } else {
+    // Targeted mode still needs to delete entries for files explicitly deleted
+    // in this flush — detected by statSync failing on a path we tried to scan.
+    for (const { filePath } of filesToScan) {
+      const dbId = filePathToDbId.get(filePath);
+      if (!dbId) continue;
+      try { fs.statSync(filePath); } catch {
+        sessionsToDelete.push(dbId);
+        changed = true;
+      }
     }
   }
 
@@ -197,6 +298,10 @@ function buildProjectsFromCache(showArchived) {
       projectPath: row.projectPath,
       slug: row.slug || null,
       aiTitle: row.aiTitle || null,
+      parentSessionId: row.parentSessionId || null,
+      agentId: row.agentId || null,
+      subagentType: row.subagentType || null,
+      description: row.description || null,
       name: meta?.name || null,
       starred: meta?.starred || 0,
       archived: meta?.archived || 0,
@@ -282,11 +387,27 @@ function buildProjectsFromCache(showArchived) {
 }
 
 
+// Throttle projects-changed IPC: live sessions appending JSONL trigger a flush
+// every ~500ms; without throttling the renderer re-runs getProjects + morphdom
+// over 100+ items at that cadence, producing visible flicker. Leading-edge fire
+// + trailing flush so the first change is instant but subsequent bursts coalesce.
+const NOTIFY_THROTTLE_MS = 1500;
+let _notifyCooldown = false;
+let _notifyPending = false;
 function notifyRendererProjectsChanged() {
+  if (_notifyCooldown) { _notifyPending = true; return; }
   const mainWindow = getMainWindow();
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('projects-changed');
   }
+  _notifyCooldown = true;
+  setTimeout(() => {
+    _notifyCooldown = false;
+    if (_notifyPending) {
+      _notifyPending = false;
+      notifyRendererProjectsChanged();
+    }
+  }, NOTIFY_THROTTLE_MS);
 }
 
 function sendStatus(text, type) {
@@ -297,13 +418,24 @@ function sendStatus(text, type) {
   }
 }
 
-// --- Worker-based cache population (non-blocking) ---
-let populatingCache = false;
+// --- Worker-based cache population ---
+// Returns a Promise that resolves when the in-flight scan finishes. Concurrent
+// callers share the same Promise so the first get-projects after a migration
+// can await it instead of seeing an empty list.
+let populatePromise = null;
 
 function populateCacheViaWorker() {
-  if (populatingCache) return;
-  populatingCache = true;
+  if (populatePromise) return populatePromise;
   sendStatus('Scanning projects\u2026', 'active');
+
+  populatePromise = new Promise((resolve) => {
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      populatePromise = null;
+      resolve();
+    };
 
   const worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
     workerData: { projectsDir: PROJECTS_DIR },
@@ -319,7 +451,7 @@ function populateCacheViaWorker() {
     if (!msg.ok) {
       console.error('Worker scan error:', msg.error);
       sendStatus('Scan failed: ' + msg.error, 'error');
-      populatingCache = false;
+      settle();
       return;
     }
 
@@ -351,30 +483,28 @@ function populateCacheViaWorker() {
       setFolderMeta(folder, projectPath, indexMtimeMs);
     }
 
-    populatingCache = false;
     sendStatus(`Indexed ${sessionCount} sessions across ${msg.results.length} projects`, 'done');
     // Clear status after a few seconds
     setTimeout(() => sendStatus(''), 5000);
     notifyRendererProjectsChanged();
+    settle();
   });
 
   worker.on('error', (err) => {
     console.error('Worker error:', err);
     sendStatus('Worker error: ' + err.message, 'error');
-    populatingCache = false;
+    settle();
   });
 
   // If the worker exits abnormally (SIGSEGV, OOM, uncaught exception) without
   // sending a message, neither the 'message' nor 'error' handler will fire.
-  // Reset the flag here to prevent a permanent lockout where the session list
-  // stays empty because populateCacheViaWorker() returns immediately.
+  // Resolve here so awaiters aren't stuck forever and the next call can retry.
   worker.on('exit', (code) => {
-    if (populatingCache) {
-      populatingCache = false;
-      if (code !== 0) {
-        sendStatus('Scan worker exited unexpectedly', 'error');
-      }
+    if (!settled && code !== 0) {
+      sendStatus('Scan worker exited unexpectedly', 'error');
     }
+    settle();
+  });
   });
 }
 

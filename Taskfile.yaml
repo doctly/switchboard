@@ -1,0 +1,100 @@
+# https://taskfile.dev
+
+version: "3"
+
+set: [pipefail]
+
+vars:
+  SWITCHBOARD_DB: "{{.HOME}}/.switchboard/switchboard.db"
+  SWITCHBOARD_DEV_DATA_DIR: "{{.HOME}}/.switchboard-dev"
+
+tasks:
+  default:
+    desc: List all available tasks
+    silent: true
+    cmds:
+      - task --list
+
+  install:
+    desc: Install npm dependencies
+    cmds:
+      - npm install
+
+  dev:
+    desc: Launch Switchboard in development mode (Electron, no-sandbox, isolated DB)
+    silent: true
+    env:
+      # Force a separate SQLite DB so a running AppImage isn't disturbed by the
+      # dev electron sharing session_cache. Override per-run with
+      # `SWITCHBOARD_DATA_DIR=/some/other/dir task dev`.
+      SWITCHBOARD_DATA_DIR: "{{.SWITCHBOARD_DEV_DATA_DIR}}"
+    cmds:
+      - npx electron . --no-sandbox
+
+  "db:reset:dev":
+    desc: Wipe just the dev SQLite database
+    cmds:
+      - rm -f "{{.SWITCHBOARD_DEV_DATA_DIR}}/switchboard.db" "{{.SWITCHBOARD_DEV_DATA_DIR}}/switchboard.db-wal" "{{.SWITCHBOARD_DEV_DATA_DIR}}/switchboard.db-shm"
+      - echo "Removed {{.SWITCHBOARD_DEV_DATA_DIR}}/switchboard.db"
+
+  build:
+    desc: Build Linux distribution packages (AppImage + deb)
+    silent: true
+    cmds:
+      - npm run build:linux
+
+  test:
+    desc: Run the node:test suite (24 tests)
+    cmds:
+      - npm test
+
+  lint:
+    desc: Run ESLint across the codebase
+    cmds:
+      - |
+        if [ ! -f eslint.config.js ] && [ ! -f .eslintrc.js ] && [ ! -f .eslintrc.json ] && [ ! -f .eslintrc.yaml ] && [ ! -f .eslintrc.yml ]; then
+          echo "ESLint not yet configured; run \`task install:lint\` first"
+          exit 1
+        fi
+        npx eslint .
+
+  "install:lint":
+    desc: Install ESLint + jsdom dev deps (idempotent)
+    cmds:
+      - |
+        MISSING=""
+        node -e "require('eslint')" 2>/dev/null || MISSING="$MISSING eslint"
+        node -e "require('jsdom')" 2>/dev/null || MISSING="$MISSING jsdom"
+        if [ -n "$MISSING" ]; then
+          npm install --save-dev $MISSING
+        else
+          echo "ESLint and jsdom already installed — nothing to do."
+        fi
+
+  check:
+    desc: Run tests + lint (pre-commit / pre-push gate)
+    deps: [test, lint]
+
+  ci:
+    desc: CI gate — runs test then lint, verbose, exits on first failure
+    cmds:
+      - npm test
+      - npx eslint .
+
+  clean:
+    desc: Remove dist/, codemirror bundle, and local DB (asks for confirmation)
+    interactive: true
+    cmds:
+      - |
+        read -p "This will delete dist/, public/codemirror-bundle.js, and {{.SWITCHBOARD_DB}}. Type YES to confirm: " ans
+        [ "$ans" = "YES" ]
+      - rm -rf dist/
+      - rm -f public/codemirror-bundle.js
+      - rm -f "{{.SWITCHBOARD_DB}}"
+      - echo "Clean complete."
+
+  "db:reset":
+    desc: Wipe the local Switchboard SQLite database (no confirmation)
+    cmds:
+      - rm -f "{{.SWITCHBOARD_DB}}"
+      - echo "Removed {{.SWITCHBOARD_DB}}"

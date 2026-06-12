@@ -1,0 +1,13 @@
+# Lint + tests before allowing commit — same gate as `task check`.
+# Set SKIP_TESTS=1 to skip the heavier test suite (lint still runs).
+
+set -e
+
+if command -v task >/dev/null 2>&1; then
+  task check
+else
+  npm run lint
+  if [ -z "$SKIP_TESTS" ]; then
+    npm test
+  fi
+fi

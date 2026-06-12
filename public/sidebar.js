@@ -17,6 +17,82 @@ function folderId(projectPath) {
   return 'project-' + projectPath.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
+// --- Subagent localStorage helpers ---
+function getExpandedSubagents() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem('expandedSubagents') || '[]'));
+  } catch (e) { return new Set(); }
+}
+
+function saveExpandedSubagents(set) {
+  try {
+    localStorage.setItem('expandedSubagents', JSON.stringify([...set]));
+  } catch (e) {}
+}
+
+// Subagent type → accent color (background / border)
+const SUBAGENT_TYPE_COLORS = {
+  explore:   { bg: 'rgba(62,207,130,0.18)',  border: '#3ecf82' },
+  plan:      { bg: 'rgba(128,136,255,0.20)', border: '#8088ff' },
+  implement: { bg: 'rgba(255,170,64,0.18)',  border: '#ffaa40' },
+  review:    { bg: 'rgba(96,190,240,0.18)',  border: '#60bef0' },
+  test:      { bg: 'rgba(255,100,100,0.18)', border: '#ff6464' },
+  default:   { bg: 'rgba(160,160,180,0.15)', border: '#a0a0b4' },
+};
+
+function subagentTypeColor(type) {
+  const key = (type || '').toLowerCase();
+  return SUBAGENT_TYPE_COLORS[key] || SUBAGENT_TYPE_COLORS.default;
+}
+
+function buildSubagentItem(session) {
+  const item = document.createElement('div');
+  item.className = 'sidebar-subagent session-item';
+  item.id = 'si-' + session.sessionId;
+  if (activePtyIds.has(session.sessionId)) item.classList.add('has-running-pty');
+  if (attentionSessions.has(session.sessionId)) item.classList.add('needs-attention');
+  if (responseReadySessions.has(session.sessionId)) item.classList.add('response-ready');
+  if (sessionBusyState.get(session.sessionId)) item.classList.add('cli-busy');
+  item.dataset.sessionId = session.sessionId;
+  item.dataset.subagent = '1';
+
+  const { bg, border } = subagentTypeColor(session.subagentType);
+  item.style.borderLeftColor = border;
+
+  const row = document.createElement('div');
+  row.className = 'session-row';
+
+  const typePill = document.createElement('span');
+  typePill.className = 'sidebar-subagent-type';
+  typePill.textContent = session.subagentType || 'sub';
+  typePill.style.background = bg;
+  typePill.style.borderColor = border;
+
+  const dot = document.createElement('span');
+  dot.className = 'session-status-dot' + (activePtyIds.has(session.sessionId) ? ' running' : '');
+
+  const info = document.createElement('div');
+  info.className = 'session-info';
+
+  const summaryEl = document.createElement('div');
+  summaryEl.className = 'session-summary';
+  summaryEl.textContent = session.description || session.summary || session.aiTitle || session.sessionId;
+
+  const metaEl = document.createElement('div');
+  metaEl.className = 'session-meta';
+  metaEl.textContent = session.messageCount ? session.messageCount + ' msgs' : '';
+
+  info.appendChild(summaryEl);
+  info.appendChild(metaEl);
+
+  row.appendChild(typePill);
+  row.appendChild(dot);
+  row.appendChild(info);
+  item.appendChild(row);
+
+  return item;
+}
+
 function buildSlugGroup(slug, sessions) {
   const group = document.createElement('div');
   const id = slugId(slug);
@@ -146,10 +222,25 @@ function renderProjects(projects, resort) {
 
   const newSortedOrder = [];
 
+  // Build subagent child index from all sessions in this project: parentSessionId → [sessions]
+  function buildSubagentIndex(sessions) {
+    const index = new Map();
+    for (const s of sessions) {
+      if (s.parentSessionId) {
+        if (!index.has(s.parentSessionId)) index.set(s.parentSessionId, []);
+        index.get(s.parentSessionId).push(s);
+      }
+    }
+    return index;
+  }
+
   // Process a project's sessions: filter, sort, slug-group, order, and truncate.
   // Returns { filtered, visible, older, sortOrderEntry } or null if project should be skipped.
   function processProjectSessions(project, resort) {
-    let filtered = project.sessions;
+    // Separate subagents from top-level sessions
+    const allSessions = project.sessions;
+    const subagentIndex = buildSubagentIndex(allSessions);
+    let filtered = allSessions.filter(s => !s.parentSessionId);
     if (showStarredOnly) filtered = filtered.filter(s => s.starred);
     if (showRunningOnly) filtered = filtered.filter(s => activePtyIds.has(s.sessionId));
     if (showTodayOnly) {
@@ -239,17 +330,61 @@ function renderProjects(projects, resort) {
     }
 
     return {
-      filtered, visible, older,
+      filtered, visible, older, subagentIndex,
       sortOrderEntry: { projectPath: project.projectPath, itemIds: allItems.map(item => item.element.id) },
     };
   }
 
+  // Append subagent children beneath a session item element.
+  function appendSubagentChildren(parentEl, parentSessionId, subagentIndex) {
+    const children = subagentIndex && subagentIndex.get(parentSessionId);
+    if (!children || children.length === 0) return;
+
+    const expandedSet = getExpandedSubagents();
+    const caretId = 'sub-caret-' + parentSessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const isExpanded = expandedSet.has(parentSessionId);
+
+    // Caret/toggle row attached to parent item
+    const caret = document.createElement('div');
+    caret.className = 'sidebar-children-caret';
+    caret.id = caretId;
+    if (isExpanded) caret.classList.add('expanded');
+    caret.innerHTML = `<span class="caret-arrow">&#9654;</span> ${children.length} subagent${children.length !== 1 ? 's' : ''}`;
+
+    const childrenContainer = document.createElement('div');
+    childrenContainer.className = 'sidebar-subagents-container';
+    childrenContainer.id = 'subc-' + parentSessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    childrenContainer.style.display = isExpanded ? '' : 'none';
+
+    for (const child of children) {
+      childrenContainer.appendChild(buildSubagentItem(child));
+    }
+
+    caret.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = childrenContainer.style.display !== 'none';
+      childrenContainer.style.display = open ? 'none' : '';
+      caret.classList.toggle('expanded', !open);
+      const set = getExpandedSubagents();
+      if (open) { set.delete(parentSessionId); } else { set.add(parentSessionId); }
+      saveExpandedSubagents(set);
+    });
+
+    parentEl.after(caret);
+    caret.after(childrenContainer);
+  }
+
   // Build the sessions list DOM (shared between projects and worktrees)
-  function buildSessionsList(fId, visible, older) {
+  function buildSessionsList(fId, visible, older, subagentIndex, projectPath) {
     const sessionsList = document.createElement('div');
     sessionsList.className = 'project-sessions';
     sessionsList.id = 'sessions-' + fId;
-    for (const item of visible) sessionsList.appendChild(item.element);
+    for (const item of visible) {
+      sessionsList.appendChild(item.element);
+      // Attach subagent children for top-level sessions
+      const sid = item.element.dataset && item.element.dataset.sessionId;
+      if (sid) appendSubagentChildren(item.element, sid, subagentIndex);
+    }
     if (older.length > 0) {
       const moreBtn = document.createElement('div');
       moreBtn.className = 'sessions-more-toggle';
@@ -259,10 +394,50 @@ function renderProjects(projects, resort) {
       olderList.className = 'sessions-older';
       olderList.id = 'older-list-' + fId;
       olderList.style.display = 'none';
-      for (const item of older) olderList.appendChild(item.element);
+      for (const item of older) {
+        olderList.appendChild(item.element);
+        const sid = item.element.dataset && item.element.dataset.sessionId;
+        if (sid) appendSubagentChildren(item.element, sid, subagentIndex);
+      }
       sessionsList.appendChild(moreBtn);
       sessionsList.appendChild(olderList);
     }
+
+    // Orphan subagents: children whose parentSessionId has no top-level session in this project
+    if (subagentIndex) {
+      const allTopLevelIds = new Set([...visible, ...older].map(i => i.element.dataset && i.element.dataset.sessionId).filter(Boolean));
+      const orphans = [];
+      for (const [parentId, kids] of subagentIndex) {
+        if (!allTopLevelIds.has(parentId)) {
+          for (const k of kids) orphans.push(k);
+        }
+      }
+      if (orphans.length > 0) {
+        // Persist expand/collapse per project. Default = collapsed: this
+        // section is rarely the user's focus and can grow long on long-lived
+        // projects (this very session has 1300+ orphan subagents).
+        const orphanStateKey = 'orphanExpanded:' + projectPath;
+        const expanded = localStorage.getItem(orphanStateKey) === '1';
+
+        const orphanGroup = document.createElement('div');
+        orphanGroup.className = 'sidebar-orphan-subagents' + (expanded ? '' : ' collapsed');
+
+        const orphanLabel = document.createElement('div');
+        orphanLabel.className = 'sidebar-orphan-label';
+        orphanLabel.innerHTML = `<span class="orphan-caret">&#9656;</span> Orphan subagents <span class="orphan-count">${orphans.length}</span>`;
+        orphanLabel.addEventListener('click', () => {
+          const isCollapsed = orphanGroup.classList.toggle('collapsed');
+          localStorage.setItem(orphanStateKey, isCollapsed ? '0' : '1');
+        });
+        orphanGroup.appendChild(orphanLabel);
+
+        for (const orphan of orphans) {
+          orphanGroup.appendChild(buildSubagentItem(orphan));
+        }
+        sessionsList.appendChild(orphanGroup);
+      }
+    }
+
     return sessionsList;
   }
 
@@ -272,7 +447,7 @@ function renderProjects(projects, resort) {
 
     const result = processProjectSessions(project, resort);
     if (!result) continue;
-    const { filtered, visible, older, sortOrderEntry } = result;
+    const { filtered, visible, older, subagentIndex, sortOrderEntry } = result;
     newSortedOrder.push(sortOrderEntry);
     const fId = folderId(project.projectPath);
 
@@ -311,7 +486,7 @@ function renderProjects(projects, resort) {
     newBtn.title = 'New session';
     header.appendChild(newBtn);
 
-    const sessionsList = buildSessionsList(fId, visible, older);
+    const sessionsList = buildSessionsList(fId, visible, older, subagentIndex, project.projectPath);
 
     // Auto-collapse if most recent session is older than threshold, or project matched with no sessions
     if (project._projectMatchedOnly) {
@@ -351,13 +526,19 @@ function renderProjects(projects, resort) {
       wtHideBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
       wtHeader.appendChild(wtHideBtn);
 
+      const wtDeleteBtn = document.createElement('button');
+      wtDeleteBtn.className = 'worktree-delete-btn';
+      wtDeleteBtn.title = 'Delete worktree from disk';
+      wtDeleteBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>';
+      wtHeader.appendChild(wtDeleteBtn);
+
       const wtNewBtn = document.createElement('button');
       wtNewBtn.className = 'project-new-btn worktree-new-btn';
       wtNewBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="6" y1="2" x2="6" y2="10"/><line x1="2" y1="6" x2="10" y2="6"/></svg>';
       wtNewBtn.title = 'New session in worktree';
       wtHeader.appendChild(wtNewBtn);
 
-      const wtSessionsList = buildSessionsList(wtFId, wtResult.visible, wtResult.older);
+      const wtSessionsList = buildSessionsList(wtFId, wtResult.visible, wtResult.older, wtResult.subagentIndex, wt.projectPath);
       wtSessionsList.className = 'worktree-sessions';
 
       // Auto-collapse worktree if stale
@@ -401,6 +582,20 @@ function renderProjects(projects, resort) {
           toEl.classList.add('collapsed');
         } else {
           toEl.classList.remove('collapsed');
+        }
+      }
+      if (fromEl.classList.contains('sidebar-children-caret')) {
+        if (fromEl.classList.contains('expanded')) {
+          toEl.classList.add('expanded');
+        } else {
+          toEl.classList.remove('expanded');
+        }
+      }
+      if (fromEl.classList.contains('sidebar-subagents-container')) {
+        if (fromEl.style.display !== 'none') {
+          toEl.style.display = '';
+        } else {
+          toEl.style.display = 'none';
         }
       }
       if (fromEl.classList.contains('sessions-older') && fromEl.style.display !== 'none') {
@@ -499,8 +694,23 @@ function rebindSidebarEvents(projects) {
         loadProjects();
       };
     }
+    const wtDeleteBtn = wtHeader.querySelector('.worktree-delete-btn');
+    if (wtDeleteBtn) {
+      wtDeleteBtn.onclick = async (e) => {
+        e.stopPropagation();
+        const name = wtProject.projectPath.split('/').pop();
+        if (!confirm(`Delete worktree "${name}" from disk?\n\nThis runs "git worktree remove -f" and permanently removes the working tree. This cannot be undone.`)) return;
+        const result = await window.api.deleteWorktree(wtProject.projectPath);
+        if (result && result.ok) {
+          loadProjects();
+        } else {
+          const msg = (result && result.error) ? result.error : 'Unknown error';
+          alert(`Failed to delete worktree: ${msg}`);
+        }
+      };
+    }
     wtHeader.onclick = (e) => {
-      if (e.target.closest('.worktree-new-btn') || e.target.closest('.worktree-hide-btn')) return;
+      if (e.target.closest('.worktree-new-btn') || e.target.closest('.worktree-hide-btn') || e.target.closest('.worktree-delete-btn')) return;
       wtHeader.classList.toggle('collapsed');
     };
   });
@@ -559,6 +769,9 @@ function rebindSidebarEvents(projects) {
     if (!session) return;
 
     item.onclick = () => openSession(session);
+
+    // Subagent items are read-only: skip pin, rename, stop, fork, archive, jsonl, launchConfig
+    if (item.dataset.subagent) return;
 
     const pin = item.querySelector('.session-pin');
     if (pin) {

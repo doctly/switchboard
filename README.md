@@ -78,14 +78,38 @@ Grab the latest release for your platform:
   - **Linux**: `build-essential`, `python3` (`sudo apt install build-essential python3`)
   - **Windows**: Visual Studio Build Tools or `npm install -g windows-build-tools`
 
+## Tooling
+
+[task](https://taskfile.dev) is the preferred entrypoint for all dev operations. Install it once (`brew install go-task` / `snap install task --classic` / see taskfile.dev for other platforms), then:
+
+```bash
+task install       # npm install
+task dev           # launch Electron (--no-sandbox, required on Linux)
+task test          # node --test  (24 tests)
+task lint          # eslint .
+task check         # test + lint  — pre-commit / pre-push gate
+task ci            # same as check but sequential, verbose
+task build         # npm run build:linux
+task clean         # wipe dist/, codemirror bundle, local DB (asks for confirmation)
+task db:reset      # wipe ~/.switchboard/switchboard.db only
+```
+
+Run `task` (no args) to list all tasks with descriptions.
+
+The npm scripts are still present and work as before; `task` just wraps them as a consistent entrypoint.
+
 ## Development Setup
 
 ```bash
-# Install dependencies (runs postinstall automatically)
-npm install
+task install   # install dependencies (runs postinstall automatically)
+task dev       # launch Electron
+```
 
-# Start the app
-npm start
+Or with npm directly:
+
+```bash
+npm install
+npm start      # bundles CodeMirror then launches Electron
 ```
 
 `npm start` bundles CodeMirror and launches Electron. For faster iteration after the first run:
@@ -99,10 +123,9 @@ npm run electron
 All build commands bundle CodeMirror first, then invoke electron-builder.
 
 ```bash
-# Current platform
-npm run build
+task build            # AppImage + deb (Linux)
 
-# Platform-specific
+# npm equivalents:
 npm run build:mac     # DMG + zip (arm64 + x64)
 npm run build:win     # NSIS installer (x64 + arm64)
 npm run build:linux   # AppImage + deb (x64 + arm64)
