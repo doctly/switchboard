@@ -178,14 +178,25 @@ async function handleToolCall(entry, rpcId, params, log) {
   }
 }
 
+// Read the "current" file backing a diff / openFile. For local sessions this is a
+// plain disk read; remote sessions inject entry.readOldFile (an ssh cat over the
+// shared control socket) so the diff's old side reflects the file on the remote
+// host. Any failure (missing file, ssh error) yields '' — treated as a new file.
+function readOldContent(entry, filePath) {
+  const reader = (entry && entry.readOldFile) || ((p) => fs.readFileSync(p, 'utf8'));
+  try {
+    return reader(filePath) || '';
+  } catch {
+    return '';
+  }
+}
+
 async function handleOpenDiff(entry, rpcId, args, log) {
   const { old_file_path, new_file_contents, tab_name } = args;
 
-  // Read the current file from disk
-  let oldContent = '';
-  try {
-    oldContent = fs.readFileSync(old_file_path, 'utf8');
-  } catch {
+  // Read the current file (local disk, or remote host for remote sessions)
+  const oldContent = readOldContent(entry, old_file_path);
+  if (!oldContent) {
     log.debug(`[mcp] Could not read ${old_file_path} — treating as new file`);
   }
 
@@ -234,11 +245,9 @@ async function handleOpenDiff(entry, rpcId, args, log) {
 async function handleOpenFile(entry, rpcId, args, log) {
   const { filePath, preview, startText, endText } = args;
 
-  let content = '';
-  try {
-    content = fs.readFileSync(filePath, 'utf8');
-  } catch (err) {
-    log.debug(`[mcp] Could not read ${filePath}: ${err.message}`);
+  const content = readOldContent(entry, filePath);
+  if (!content) {
+    log.debug(`[mcp] Could not read ${filePath}`);
   }
 
   if (entry.mainWindow && !entry.mainWindow.isDestroyed()) {
@@ -309,7 +318,7 @@ async function handleGetDiagnostics(entry, rpcId) {
  * Start an MCP WebSocket server for a session.
  * @returns {{ port: number, authToken: string }}
  */
-async function startMcpServer(sessionId, workspaceFolders, mainWindow, log) {
+async function startMcpServer(sessionId, workspaceFolders, mainWindow, log, opts = {}) {
   ensureIdeDir();
 
   const port = await findFreePort();
@@ -344,6 +353,9 @@ async function startMcpServer(sessionId, workspaceFolders, mainWindow, log) {
     mainWindow,
     ws: null,
     pendingDiffs: new Map(),
+    // Remote sessions inject a reader that cats the file on the remote host, so
+    // openDiff/openFile show the real remote content. Undefined → local fs read.
+    readOldFile: opts.readOldFile || null,
   };
 
   wss.on('connection', (ws, req) => {
@@ -484,4 +496,5 @@ module.exports = {
   resolvePendingDiff,
   rekeyMcpServer,
   cleanStaleLockFiles,
+  readOldContent,
 };

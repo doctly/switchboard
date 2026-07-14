@@ -788,11 +788,32 @@ async function openSession(session, customOptions) {
     }
   }
 
+  // Remote past session: resume it in a terminal on the host — same UI and
+  // behavior as clicking a local session (which auto-resumes via `claude --resume`).
+  let remoteResumeOptions = null;
+  if (session.remote && session.remoteMode !== 'shell') {
+    // Derive the remote dir from the ssh://<label>/<dir> projectPath (always
+    // present) so resume lands in the session's own directory even if the
+    // session object is missing remotePath.
+    let remoteDir = session.remotePath;
+    if (!remoteDir && typeof projectPath === 'string' && projectPath.startsWith('ssh://')) {
+      const rest = projectPath.slice('ssh://'.length);
+      const slash = rest.indexOf('/');
+      remoteDir = slash === -1 ? '~' : (rest.slice(slash + 1) || '~');
+    }
+    remoteResumeOptions = {
+      remoteHostId: session.hostId || session.source,
+      remoteMode: 'claude',
+      remoteDir: remoteDir || '~',
+      resume: sessionId,
+    };
+  }
+
   // Create new terminal entry (hidden until showSession)
   const entry = createTerminalEntry(session);
 
   // Open terminal in main process
-  const resumeOptions = customOptions || await resolveDefaultSessionOptions({ projectPath });
+  const resumeOptions = customOptions || remoteResumeOptions || await resolveDefaultSessionOptions({ projectPath });
   const result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions);
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);

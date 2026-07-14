@@ -5,6 +5,7 @@ const { getFolderIndexMtimeMs } = require('./folder-index-state');
 const { deriveProjectPath } = require('./derive-project-path');
 const { readSessionFile } = require('./read-session-file');
 const { encodeProjectPath } = require('./encode-project-path');
+const { parseRemoteProjectPath } = require('./remote-hosts');
 
 /**
  * Session cache module.
@@ -187,6 +188,10 @@ function buildProjectsFromCache(showArchived) {
     if (!row.projectPath) continue;
     if (hiddenProjects.has(row.projectPath)) continue;
     const meta = metaMap.get(row.sessionId);
+    // Phase 2: remote rows (source != null) carry a synthetic ssh://<label>/<dir>
+    // projectPath. Derive the host/dir straight from it so a whole host's sessions
+    // auto-group by directory even when the dir was never explicitly registered.
+    const parsedRemote = row.source ? parseRemoteProjectPath(row.projectPath) : null;
     const s = {
       sessionId: row.sessionId,
       summary: row.summary,
@@ -200,14 +205,29 @@ function buildProjectsFromCache(showArchived) {
       name: meta?.name || null,
       starred: meta?.starred || 0,
       archived: meta?.archived || 0,
+      // Past remote sessions render with the SSH badge + Claude logo, like live ones.
+      source: row.source || null,
+      remote: !!row.source,
+      remoteLabel: parsedRemote ? parsedRemote.hostLabel : null,
+      remoteMode: row.source ? 'claude' : null,
+      // Enough context for click-to-resume on the remote host (parity with local).
+      hostId: row.source || null,
+      remotePath: parsedRemote ? parsedRemote.remotePath : null,
     };
     if (!showArchived && s.archived) continue;
     if (!projectMap.has(row.projectPath)) {
-      projectMap.set(row.projectPath, {
+      const grp = {
         folder: encodeProjectPath(row.projectPath),
         projectPath: row.projectPath,
         sessions: [],
-      });
+      };
+      if (parsedRemote) {
+        grp.remote = true;
+        grp.hostId = row.source;
+        grp.hostLabel = parsedRemote.hostLabel;
+        grp.remotePath = parsedRemote.remotePath;
+      }
+      projectMap.set(row.projectPath, grp);
     }
     projectMap.get(row.projectPath).sessions.push(s);
   }
@@ -239,6 +259,24 @@ function buildProjectsFromCache(showArchived) {
     }
   } catch {}
 
+  // Inject persisted remote projects (Model A: a project can be local or remote).
+  // A group may already exist here — created above by cached remote sessions (Phase 2
+  // indexing). In that case decorate it with the remote metadata rather than skipping,
+  // otherwise it would render as a local project.
+  for (const rp of (global.remoteProjects || [])) {
+    if (!rp || !rp.projectPath) continue;
+    if (hiddenProjects.has(rp.projectPath)) continue;
+    let proj = projectMap.get(rp.projectPath);
+    if (!proj) {
+      proj = { folder: encodeProjectPath(rp.projectPath), projectPath: rp.projectPath, sessions: [] };
+      projectMap.set(rp.projectPath, proj);
+    }
+    proj.remote = true;
+    proj.hostId = rp.hostId;
+    proj.hostLabel = rp.hostLabel;
+    proj.remotePath = rp.remotePath;
+  }
+
   // Inject active plain terminal sessions so they participate in sorting
   for (const [sessionId, session] of activeSessions) {
     if (session.exited || !session.isPlainTerminal) continue;
@@ -253,12 +291,17 @@ function buildProjectsFromCache(showArchived) {
     }
     const proj = projectMap.get(session.projectPath);
     if (!proj.sessions.some(s => s.sessionId === sessionId)) {
+      const remoteLabel = session.remoteHost ? session.remoteHost.label : null;
+      const summary = session.remote
+        ? ((session.remoteMode === 'shell' ? 'Shell @ ' : 'Claude @ ') + remoteLabel)
+        : 'Terminal';
       proj.sessions.push({
-        sessionId, summary: 'Terminal', firstPrompt: '', projectPath: session.projectPath,
+        sessionId, summary, firstPrompt: '', projectPath: session.projectPath,
         name: null, starred: 0, archived: 0, messageCount: 0,
         modified: new Date(session._openedAt).toISOString(),
         created: new Date(session._openedAt).toISOString(),
         type: 'terminal',
+        remote: !!session.remote, remoteLabel, remoteMode: session.remoteMode || null,
       });
     }
   }

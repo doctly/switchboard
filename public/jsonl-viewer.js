@@ -564,6 +564,10 @@ async function showJsonlViewer(session) {
   jsonlViewerSessionId.textContent = session.sessionId;
   jsonlViewerBody.innerHTML = '';
 
+  if (result.needsConnect) {
+    jsonlViewerBody.innerHTML = '<div class="plans-empty">Connect to <b>' + escapeHtml(result.hostLabel || 'the remote host') + '</b> to view this session.</div>';
+    return;
+  }
   if (result.error) {
     jsonlViewerBody.innerHTML = '<div class="plans-empty">Error loading messages: ' + escapeHtml(result.error) + '</div>';
     return;

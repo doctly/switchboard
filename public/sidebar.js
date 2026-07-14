@@ -284,8 +284,14 @@ function renderProjects(projects, resort) {
     const header = document.createElement('div');
     header.className = 'project-header';
     header.id = 'ph-' + fId;
-    const shortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
-    header.innerHTML = `<span class="arrow">&#9660;</span> <span class="project-name">${shortName}</span>`;
+    let shortName, remotePrefix = '';
+    if (project.remote) {
+      shortName = `${project.hostLabel} : ${project.remotePath || '~'}`;
+      remotePrefix = '<span class="remote-badge" title="Remote SSH host">SSH</span> ';
+    } else {
+      shortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
+    }
+    header.innerHTML = `<span class="arrow">&#9660;</span> ${remotePrefix}<span class="project-name">${shortName}</span>`;
 
     const scheduleBtn = document.createElement('button');
     scheduleBtn.className = 'project-schedule-btn';
@@ -298,6 +304,15 @@ function renderProjects(projects, resort) {
     settingsBtn.title = 'Project settings';
     settingsBtn.innerHTML = ICONS.gear(16);
     header.appendChild(settingsBtn);
+
+    // Remote projects: refresh past sessions from the host (Phase 2 indexing).
+    if (project.remote) {
+      const refreshBtn = document.createElement('button');
+      refreshBtn.className = 'project-refresh-btn';
+      refreshBtn.title = 'Refresh remote sessions';
+      refreshBtn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>';
+      header.appendChild(refreshBtn);
+    }
 
     const archiveGroupBtn = document.createElement('button');
     archiveGroupBtn.className = 'project-archive-btn';
@@ -454,6 +469,17 @@ function rebindSidebarEvents(projects) {
     if (settingsBtn) {
       settingsBtn.onclick = (e) => { e.stopPropagation(); openSettingsViewer('project', project.projectPath); };
     }
+    const refreshBtn = header.querySelector('.project-refresh-btn');
+    if (refreshBtn) {
+      refreshBtn.onclick = async (e) => {
+        e.stopPropagation();
+        if (!project.hostId || !window.api.syncRemoteHost) return;
+        refreshBtn.classList.add('spinning');
+        try { await window.api.syncRemoteHost(project.hostId); } catch {}
+        refreshBtn.classList.remove('spinning');
+        loadProjects();
+      };
+    }
     const archiveGroupBtn = header.querySelector('.project-archive-btn');
     if (archiveGroupBtn) {
       archiveGroupBtn.onclick = async (e) => {
@@ -474,7 +500,7 @@ function rebindSidebarEvents(projects) {
       };
     }
     header.onclick = (e) => {
-      if (e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn') || e.target.closest('.project-schedule-btn')) return;
+      if (e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn') || e.target.closest('.project-schedule-btn') || e.target.closest('.project-refresh-btn')) return;
       header.classList.toggle('collapsed');
     };
   }
@@ -644,7 +670,10 @@ function buildSessionItem(session) {
   const item = document.createElement('div');
   item.className = 'session-item';
   item.id = 'si-' + session.sessionId;
-  if (session.type === 'terminal') item.classList.add('is-terminal');
+  // A remote Claude session runs `claude` (not a plain shell), so it should read
+  // like a Claude session — no terminal badge/styling, just the SSH badge.
+  const isRemoteClaude = session.remote && session.remoteMode !== 'shell';
+  if (session.type === 'terminal' && !isRemoteClaude) item.classList.add('is-terminal');
   if (session.archived) item.classList.add('archived-item');
   if (activePtyIds.has(session.sessionId)) item.classList.add('has-running-pty');
   if (attentionSessions.has(session.sessionId)) item.classList.add('needs-attention');
@@ -686,11 +715,18 @@ function buildSessionItem(session) {
   metaEl.className = 'session-meta';
   metaEl.textContent = timeStr + (session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '');
 
-  if (session.type === 'terminal') {
+  if (session.type === 'terminal' && !isRemoteClaude) {
     const badge = document.createElement('span');
     badge.className = 'terminal-badge';
     badge.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>';
     summaryEl.prepend(badge);
+  }
+  if (session.remote) {
+    const rbadge = document.createElement('span');
+    rbadge.className = 'remote-badge';
+    rbadge.textContent = 'SSH';
+    if (session.remoteLabel) rbadge.title = 'Remote: ' + session.remoteLabel;
+    summaryEl.prepend(rbadge);
   }
   info.appendChild(summaryEl);
   info.appendChild(idEl);

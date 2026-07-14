@@ -2695,8 +2695,20 @@ body { display: flex; flex-direction: column; }
   align-items: center;
 }
 
+.add-project-dialog .folder-input-row select {
+  flex: 1;
+  min-width: 0; /* allow the select to shrink so it never overlaps the adjacent button */
+}
+
+/* Remote tab rows: fixed-width label + flexible control, so a widening button
+   (Connect -> Connecting… -> ✓ Connected) can never reflow into the label. */
+#add-project-remote .settings-field-info { flex: 0 0 130px; }
+#add-project-remote .settings-field-control { flex: 1 1 auto; min-width: 0; }
+#add-remote-connect { min-width: 116px; text-align: center; justify-content: center; flex: 0 0 auto; }
+
 .add-project-dialog .folder-input-row input {
   flex: 1;
+  min-width: 0;
   background: rgba(255,255,255,0.05);
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 6px;
@@ -2866,6 +2878,42 @@ body { display: flex; flex-direction: column; }
   background: rgba(255,255,255,0.04);
   border-color: rgba(255,255,255,0.12);
   color: #888;
+}
+
+/* Project header refresh button (remote projects — re-index past sessions) */
+.project-refresh-btn {
+  background: transparent;
+  border: none;
+  color: #7a7a90;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 0;
+  transition: all 0.15s;
+  opacity: 0.7;
+}
+
+.project-refresh-btn svg { display: block; }
+
+.project-header:hover .project-refresh-btn { opacity: 1; }
+
+.project-refresh-btn:hover {
+  background: rgba(90,160,255,0.12);
+  color: #6aa0e0;
+}
+
+.project-refresh-btn.spinning svg {
+  animation: spin-refresh 0.8s linear infinite;
+}
+
+@keyframes spin-refresh {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 /* ========== SETTINGS VIEWER ========== */
@@ -3464,11 +3512,203 @@ body { display: flex; flex-direction: column; }
   top: -1px;
 }
 
+.remote-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  line-height: 1;
+  padding: 2px 4px;
+  margin-right: 5px;
+  border-radius: 3px;
+  color: #6cb6ff;
+  background: rgba(108, 182, 255, 0.14);
+  border: 1px solid rgba(108, 182, 255, 0.35);
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
+}
+
 /* Terminal sessions: green status dot */
 .session-item.is-terminal .session-status-dot.running {
   background: #3ecf5a;
   box-shadow: 0 0 6px rgba(62,207,90,0.5);
 }
+
+/* Remote hosts settings section */
+.remote-config-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  opacity: 0.6;
+  margin: 4px 0 6px;
+  padding-left: 2px;
+}
+/* Imported host list: styled as a settings-style table (matches the rows in the
+   Application section — rounded group, dividers, label left / controls right). */
+.remote-config-list {
+  margin-bottom: 12px;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.remote-config-list .remote-config-title {
+  margin: 0;
+  padding: 8px 18px;
+  background: rgba(255,255,255,0.02);
+}
+.remote-host-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+}
+.remote-config-list .remote-host-row {
+  padding: 12px 18px;
+  min-height: 48px;
+  background: rgba(255,255,255,0.02);
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+.remote-host-name { font-size: 13.5px; font-weight: 600; letter-spacing: -0.01em; min-width: 130px; color: #e0e0f0; }
+.remote-host-detail { opacity: 0.65; flex: 1; font-size: 12.5px; }
+.remote-hosts-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.remote-test-btn, .remote-remove-btn, .remote-connect-btn, .remote-writecfg-btn {
+  background: rgba(127,127,127,0.12);
+  border: 1px solid rgba(127,127,127,0.3);
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 8px;
+}
+.remote-remove-btn { padding: 3px 7px; }
+.remote-connect-btn {
+  color: #6cb6ff;
+  border-color: rgba(108,182,255,0.45);
+  background: rgba(108,182,255,0.12);
+}
+.remote-test-btn:hover, .remote-remove-btn:hover, .remote-connect-btn:hover, .remote-writecfg-btn:hover { background: rgba(127,127,127,0.22); }
+.remote-connect-btn:hover { background: rgba(108,182,255,0.22); }
+
+/* Connected state for Connect buttons */
+.remote-connect-btn.connected,
+.add-project-browse-btn.connected {
+  color: #3ecf5a;
+  border-color: rgba(62,207,90,0.5);
+  background: rgba(62,207,90,0.12);
+}
+
+/* Add-host example-option chips */
+.ah-opt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+.ah-chip {
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 2px 6px;
+  border-radius: 10px;
+  border: 1px solid rgba(108,182,255,0.35);
+  background: rgba(108,182,255,0.10);
+  color: #6cb6ff;
+  cursor: pointer;
+}
+.ah-chip:hover { background: rgba(108,182,255,0.20); }
+
+/* Host-key fingerprint block in the Connect verify popup */
+.auth-fingerprint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: rgba(127,127,127,0.10);
+  border: 1px solid rgba(127,127,127,0.25);
+  border-radius: 6px;
+  padding: 10px;
+  margin: 10px 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+/* Interactive Connect popup (embedded auth terminal) */
+.remote-connect-dialog { width: 640px; max-width: 92vw; }
+.remote-connect-hint { font-size: 12px; opacity: 0.75; margin-bottom: 10px; }
+.remote-connect-term {
+  height: 260px;
+  background: #000;
+  border-radius: 6px;
+  padding: 6px;
+  overflow: hidden;
+}
+.remote-connect-msg { margin-top: 8px; font-size: 12px; min-height: 14px; }
+.remote-connect-msg.ok { color: #3ecf5a; }
+.remote-connect-msg.err { color: #ff6b6b; }
+
+/* Manual host card (multi-field editor) */
+.remote-host-card {
+  border: 1px solid rgba(127,127,127,0.22);
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+.remote-host-card .remote-host-row { flex-wrap: wrap; }
+.remote-host-actions { gap: 6px; }
+.remote-hosts-status {
+  margin-top: 8px;
+  font-size: 12px;
+  min-height: 16px;
+  word-break: break-word;
+}
+.remote-hosts-status.ok { color: #3ecf5a; }
+.remote-hosts-status.err { color: #ff6b6b; }
+
+/* Add-project Local | Remote tabs */
+.add-project-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.add-project-tab {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid rgba(127,127,127,0.3);
+  background: transparent;
+  color: inherit;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.add-project-tab.selected {
+  background: rgba(108,182,255,0.16);
+  border-color: rgba(108,182,255,0.5);
+}
+
+/* Remote directory browser — must stack above the Add Project overlay (z 9999)
+   since Browse can be opened from within it. */
+.remote-browser-overlay { z-index: 10001; }
+.remote-browser-list {
+  margin-top: 10px;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid rgba(127,127,127,0.25);
+  border-radius: 6px;
+}
+.remote-browser-item {
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(127,127,127,0.12);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.remote-browser-item:hover { background: rgba(108,182,255,0.14); }
+.remote-browser-up { opacity: 0.8; }
+.remote-browser-status { padding: 10px; opacity: 0.6; font-size: 12px; }
+.remote-browser-msg { margin-top: 8px; font-size: 12px; color: #e0a54a; min-height: 14px; }
 
 /* ========== FILE PANEL (MCP Bridge) ========== */
 

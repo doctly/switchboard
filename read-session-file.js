@@ -1,12 +1,18 @@
 const path = require('path');
 const fs = require('fs');
 
-/** Parse a single .jsonl file into a session object (or null if invalid) */
-function readSessionFile(filePath, folder, projectPath) {
-  const sessionId = path.basename(filePath, '.jsonl');
+/**
+ * Parse raw JSONL content into a session object (or null if invalid).
+ * Pure — no filesystem access. Shared by local indexing (readSessionFile) and
+ * remote indexing (which streams content over SSH without touching local disk).
+ *
+ * meta: { sessionId, folder, projectPath, created?, modified? }
+ *   created/modified are used verbatim when supplied (local passes file stat times).
+ *   When omitted (remote), they fall back to the first/last entry timestamps.
+ */
+function parseSessionContent(content, meta) {
+  const { sessionId, folder, projectPath } = meta;
   try {
-    const stat = fs.statSync(filePath);
-    const content = fs.readFileSync(filePath, 'utf8');
     const lines = content.split('\n').filter(Boolean);
     let summary = '';
     let messageCount = 0;
@@ -14,8 +20,14 @@ function readSessionFile(filePath, folder, projectPath) {
     let slug = null;
     let customTitle = null;
     let aiTitle = null;
+    let firstTimestamp = null;
+    let lastTimestamp = null;
     for (const line of lines) {
       const entry = JSON.parse(line);
+      if (entry.timestamp) {
+        if (!firstTimestamp) firstTimestamp = entry.timestamp;
+        lastTimestamp = entry.timestamp;
+      }
       if (entry.slug && !slug) slug = entry.slug;
       if (entry.type === 'custom-title' && entry.customTitle) {
         customTitle = entry.customTitle;
@@ -44,11 +56,12 @@ function readSessionFile(filePath, folder, projectPath) {
       }
     }
     if (!summary || messageCount < 1) return null;
+    const created = meta.created != null ? meta.created : (firstTimestamp || '');
+    const modified = meta.modified != null ? meta.modified : (lastTimestamp || firstTimestamp || '');
     return {
       sessionId, folder, projectPath,
       summary, firstPrompt: summary,
-      created: stat.birthtime.toISOString(),
-      modified: stat.mtime.toISOString(),
+      created, modified,
       messageCount, textContent, slug, customTitle, aiTitle,
     };
   } catch {
@@ -56,4 +69,20 @@ function readSessionFile(filePath, folder, projectPath) {
   }
 }
 
-module.exports = { readSessionFile };
+/** Parse a single .jsonl file into a session object (or null if invalid) */
+function readSessionFile(filePath, folder, projectPath) {
+  const sessionId = path.basename(filePath, '.jsonl');
+  try {
+    const stat = fs.statSync(filePath);
+    const content = fs.readFileSync(filePath, 'utf8');
+    return parseSessionContent(content, {
+      sessionId, folder, projectPath,
+      created: stat.birthtime.toISOString(),
+      modified: stat.mtime.toISOString(),
+    });
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { readSessionFile, parseSessionContent };

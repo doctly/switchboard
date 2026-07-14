@@ -112,7 +112,7 @@ function resolveShell(profileId) {
   if (profileId && profileId !== 'auto') {
     const profiles = getShellProfiles();
     const profile = profiles.find(p => p.id === profileId);
-    if (profile && (profile.path === 'wsl.exe' || fs.existsSync(profile.path))) {
+    if (profile && (profile.path === 'wsl.exe' || isSshProfile(profile.path) || fs.existsSync(profile.path))) {
       return profile;
     }
   }
@@ -160,6 +160,18 @@ function isWslShell(shellPath) {
   return base === 'wsl.exe' || base === 'wsl';
 }
 
+// An SSH profile wraps the `ssh` command (path: 'ssh'). Detected by basename
+// so it works whether the caller passes 'ssh' or an absolute '/usr/bin/ssh'.
+function isSshProfile(shellPath) {
+  const base = path.basename(String(shellPath || '')).toLowerCase().replace(/\.exe$/, '');
+  return base === 'ssh';
+}
+
+// Single-quote a string for a POSIX shell (escaping embedded single quotes).
+function sshSingleQuote(s) {
+  return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
+
 // Returns spawn args appropriate for the resolved shell
 function shellArgs(shellPath, cmd, extraArgs) {
   const base = path.basename(shellPath).toLowerCase();
@@ -172,6 +184,16 @@ function shellArgs(shellPath, cmd, extraArgs) {
   if (isWslShell(shellPath)) {
     if (cmd) return [...(extraArgs || []), '--', 'bash', '-l', '-i', '-c', cmd];
     return [...(extraArgs || []), '--', 'bash', '-l', '-i'];
+  }
+
+  // SSH: run the command on the remote inside a login+interactive bash so the
+  // remote PATH is set up (mirrors WSL). ssh concatenates the argv after the
+  // hostname with spaces and the remote shell re-parses it, so the payload must
+  // be single-quoted to survive as one argument. extraArgs carries the ssh
+  // options and target (e.g. ['-t', 'user@host']).
+  if (isSshProfile(shellPath)) {
+    const remote = cmd || 'exec "${SHELL:-bash}" -l';
+    return [...(extraArgs || []), 'bash', '-l', '-i', '-c', sshSingleQuote(remote)];
   }
 
   if (cmd) {
@@ -188,4 +210,4 @@ function shellArgs(shellPath, cmd, extraArgs) {
   return [];
 }
 
-module.exports = { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs };
+module.exports = { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, isSshProfile };

@@ -32,6 +32,20 @@ contextBridge.exposeInMainWorld('api', {
   runScheduleNow: (filePath) => ipcRenderer.invoke('run-schedule-now', filePath),
   getShellProfiles: () => ipcRenderer.invoke('get-shell-profiles'),
 
+  // Remote SSH hosts + projects
+  getRemoteTargets: () => ipcRenderer.invoke('get-remote-targets'),
+  saveRemoteHosts: (hosts) => ipcRenderer.invoke('save-remote-hosts', hosts),
+  testRemoteHost: (hostId) => ipcRenderer.invoke('test-remote-host', hostId),
+  addRemoteProject: (opts) => ipcRenderer.invoke('add-remote-project', opts),
+  syncRemoteHost: (hostId) => ipcRenderer.invoke('sync-remote-host', hostId),
+  remoteBrowse: (opts) => ipcRenderer.invoke('remote-browse', opts),
+  writeSshConfig: (host) => ipcRenderer.invoke('write-ssh-config', host),
+  remoteConnectStart: (hostId) => ipcRenderer.invoke('remote-connect-start', hostId),
+  remoteConnectInput: (connectId, data) => ipcRenderer.send('remote-connect-input', connectId, data),
+  remoteConnectCancel: (connectId) => ipcRenderer.invoke('remote-connect-cancel', connectId),
+  onRemoteConnectData: (callback) => ipcRenderer.on('remote-connect-data', (_e, id, data) => callback(id, data)),
+  onRemoteConnectExit: (callback) => ipcRenderer.on('remote-connect-exit', (_e, id, code) => callback(id, code)),
+
   browseFolder: () => ipcRenderer.invoke('browse-folder'),
   addProject: (projectPath) => ipcRenderer.invoke('add-project', projectPath),
   removeProject: (projectPath) => ipcRenderer.invoke('remove-project', projectPath),

@@ -2,19 +2,22 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const os = require('os');
 
-const DATA_DIR = path.join(os.homedir(), '.switchboard');
+// DB location is overridable via env (used by tests to point at a temp file so
+// they never touch the real ~/.switchboard/switchboard.db).
+const DATA_DIR = process.env.SWITCHBOARD_DATA_DIR || path.join(os.homedir(), '.switchboard');
 const fs = require('fs');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const DB_PATH = path.join(DATA_DIR, 'switchboard.db');
+const DB_PATH = process.env.SWITCHBOARD_DB_PATH || path.join(DATA_DIR, 'switchboard.db');
 
-// Migrate from old locations if needed
+// Migrate from old locations if needed (skipped when an explicit DB path is set,
+// so tests don't move the user's real data into a temp file).
 const OLD_LOCATIONS = [
   path.join(os.homedir(), '.claude', 'browser', 'switchboard.db'),
   path.join(os.homedir(), '.claude', 'browser', 'session-browser.db'),
   path.join(os.homedir(), '.claude', 'session-browser.db'),
 ];
-if (!fs.existsSync(DB_PATH)) {
+if (!process.env.SWITCHBOARD_DB_PATH && !fs.existsSync(DB_PATH)) {
   for (const oldPath of OLD_LOCATIONS) {
     if (fs.existsSync(oldPath)) {
       fs.renameSync(oldPath, DB_PATH);
@@ -49,7 +52,8 @@ db.exec(`
     modified TEXT,
     messageCount INTEGER DEFAULT 0,
     slug TEXT,
-    aiTitle TEXT
+    aiTitle TEXT,
+    source TEXT
   )
 `);
 
@@ -99,6 +103,12 @@ const migrations = [
     try { db.exec('DELETE FROM session_cache'); } catch {}
     try { db.exec('DELETE FROM cache_meta'); } catch {}
   },
+  // v4: Add source column (NULL = local, hostId = remote host) for Phase 2 remote
+  // session indexing. No cache wipe — existing rows are local, and NULL means local.
+  (db) => {
+    try { db.exec('ALTER TABLE session_cache ADD COLUMN source TEXT'); } catch {}
+    try { db.exec('ALTER TABLE search_map ADD COLUMN source TEXT'); } catch {}
+  },
 ];
 
 const currentDbVersion = (() => {
@@ -127,7 +137,8 @@ db.exec(`
     rowid INTEGER PRIMARY KEY,
     id TEXT NOT NULL,
     type TEXT NOT NULL,
-    folder TEXT
+    folder TEXT,
+    source TEXT
   )
 `);
 
@@ -152,20 +163,27 @@ const stmts = {
   cacheCount: db.prepare('SELECT COUNT(*) as cnt FROM session_cache'),
   cacheGetAll: db.prepare('SELECT * FROM session_cache'),
   cacheUpsert: db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, source)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
       folder = excluded.folder, projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
       created = excluded.created, modified = excluded.modified,
       messageCount = excluded.messageCount, slug = excluded.slug,
-      aiTitle = excluded.aiTitle
+      aiTitle = excluded.aiTitle, source = excluded.source
   `),
-  cacheGetByFolder: db.prepare('SELECT sessionId, modified FROM session_cache WHERE folder = ?'),
+  // Local incremental refresh must not see remote rows (a remote encoded-folder
+  // name could collide with a local folder name), so scope to source IS NULL.
+  cacheGetByFolder: db.prepare('SELECT sessionId, modified FROM session_cache WHERE folder = ? AND source IS NULL'),
+  cacheGetBySource: db.prepare('SELECT sessionId, modified FROM session_cache WHERE source = ?'),
+  cacheGetIdsBySourceProject: db.prepare('SELECT sessionId FROM session_cache WHERE source = ? AND projectPath = ?'),
+  cacheDeleteBySourceProject: db.prepare('DELETE FROM session_cache WHERE source = ? AND projectPath = ?'),
+  cacheGetIdsByProjectRemote: db.prepare('SELECT sessionId FROM session_cache WHERE projectPath = ? AND source IS NOT NULL'),
+  cacheDeleteByProjectRemote: db.prepare('DELETE FROM session_cache WHERE projectPath = ? AND source IS NOT NULL'),
   cacheGetFolder: db.prepare('SELECT folder FROM session_cache WHERE sessionId = ?'),
   cacheGetSession: db.prepare('SELECT * FROM session_cache WHERE sessionId = ?'),
   cacheDeleteSession: db.prepare('DELETE FROM session_cache WHERE sessionId = ?'),
-  cacheDeleteFolder: db.prepare('DELETE FROM session_cache WHERE folder = ?'),
+  cacheDeleteFolder: db.prepare('DELETE FROM session_cache WHERE folder = ? AND source IS NULL'),
   // Cache meta statements
   metaGet: db.prepare('SELECT * FROM cache_meta WHERE folder = ?'),
   metaGetAll: db.prepare('SELECT * FROM cache_meta'),
@@ -179,12 +197,12 @@ const stmts = {
   // FTS search statements
   searchDeleteBySession: db.prepare('DELETE FROM search_fts WHERE rowid IN (SELECT rowid FROM search_map WHERE type = \'session\' AND id = ?)'),
   searchMapDeleteBySession: db.prepare('DELETE FROM search_map WHERE type = \'session\' AND id = ?'),
-  searchDeleteByFolder: db.prepare('DELETE FROM search_fts WHERE rowid IN (SELECT rowid FROM search_map WHERE type = \'session\' AND folder = ?)'),
-  searchMapDeleteByFolder: db.prepare('DELETE FROM search_map WHERE type = \'session\' AND folder = ?'),
+  searchDeleteByFolder: db.prepare('DELETE FROM search_fts WHERE rowid IN (SELECT rowid FROM search_map WHERE type = \'session\' AND folder = ? AND source IS NULL)'),
+  searchMapDeleteByFolder: db.prepare('DELETE FROM search_map WHERE type = \'session\' AND folder = ? AND source IS NULL'),
   searchDeleteByType: db.prepare('DELETE FROM search_fts WHERE rowid IN (SELECT rowid FROM search_map WHERE type = ?)'),
   searchMapDeleteByType: db.prepare('DELETE FROM search_map WHERE type = ?'),
   searchInsertFts: db.prepare('INSERT OR REPLACE INTO search_fts(rowid, title, body) VALUES (?, ?, ?)'),
-  searchInsertMap: db.prepare('INSERT OR REPLACE INTO search_map(id, type, folder) VALUES (?, ?, ?)'),
+  searchInsertMap: db.prepare('INSERT OR REPLACE INTO search_map(id, type, folder, source) VALUES (?, ?, ?, ?)'),
   searchMapLookup: db.prepare('SELECT rowid FROM search_map WHERE id = ? AND type = ?'),
   searchUpdateTitle: db.prepare('UPDATE search_fts SET title = ? WHERE rowid = (SELECT rowid FROM search_map WHERE id = ? AND type = ?)'),
   searchDeleteByRowid: db.prepare('DELETE FROM search_fts WHERE rowid = ?'),
@@ -246,7 +264,7 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
     stmts.cacheUpsert.run(
       s.sessionId, s.folder, s.projectPath, s.summary,
       s.firstPrompt, s.created, s.modified, s.messageCount || 0,
-      s.slug || null, s.aiTitle || null
+      s.slug || null, s.aiTitle || null, s.source || null
     );
   }
 });
@@ -257,6 +275,39 @@ function upsertCachedSessions(sessions) {
 
 function getCachedByFolder(folder) {
   return stmts.cacheGetByFolder.all(folder);
+}
+
+function getCachedBySource(source) {
+  return stmts.cacheGetBySource.all(source);
+}
+
+/** Remove all cached + indexed sessions for one remote project (host + projectPath). */
+const deleteRemoteProjectCacheTx = db.transaction((source, projectPath) => {
+  const ids = stmts.cacheGetIdsBySourceProject.all(source, projectPath).map(r => r.sessionId);
+  for (const id of ids) {
+    stmts.searchDeleteBySession.run(id);
+    stmts.searchMapDeleteBySession.run(id);
+  }
+  stmts.cacheDeleteBySourceProject.run(source, projectPath);
+});
+
+function deleteRemoteProjectCache(source, projectPath) {
+  deleteRemoteProjectCacheTx(source, projectPath);
+}
+
+// Same, but keyed only by projectPath (any remote source). Used to remove an
+// auto-discovered remote project group that was never explicitly registered.
+const deleteRemoteProjectCacheByPathTx = db.transaction((projectPath) => {
+  const ids = stmts.cacheGetIdsByProjectRemote.all(projectPath).map(r => r.sessionId);
+  for (const id of ids) {
+    stmts.searchDeleteBySession.run(id);
+    stmts.searchMapDeleteBySession.run(id);
+  }
+  stmts.cacheDeleteByProjectRemote.run(projectPath);
+});
+
+function deleteRemoteProjectCacheByPath(projectPath) {
+  deleteRemoteProjectCacheByPathTx(projectPath);
 }
 
 function getCachedFolder(sessionId) {
@@ -306,7 +357,7 @@ const upsertSearchEntriesBatch = db.transaction((entries) => {
       stmts.searchDeleteByRowid.run(existing.rowid);
       stmts.searchMapDeleteByRowid.run(existing.rowid);
     }
-    const result = stmts.searchInsertMap.run(e.id, e.type, e.folder || null);
+    const result = stmts.searchInsertMap.run(e.id, e.type, e.folder || null, e.source || null);
     stmts.searchInsertFts.run(result.lastInsertRowid, e.title || '', e.body || '');
   }
 });
@@ -376,8 +427,8 @@ function closeDb() {
 
 module.exports = {
   getMeta, getAllMeta, setName, toggleStar, setArchived,
-  isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, upsertCachedSessions,
-  deleteCachedSession, deleteCachedFolder,
+  isCachePopulated, getAllCached, getCachedByFolder, getCachedBySource, getCachedFolder, getCachedSession, upsertCachedSessions,
+  deleteCachedSession, deleteCachedFolder, deleteRemoteProjectCache, deleteRemoteProjectCacheByPath,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
