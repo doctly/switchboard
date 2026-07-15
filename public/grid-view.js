@@ -27,9 +27,16 @@ function wrapInGridCard(sessionId) {
   // Header
   const header = document.createElement('div');
   header.className = 'grid-card-header';
-  const dot = document.createElement('span');
-  dot.className = 'grid-card-dot';
-  header.appendChild(dot);
+
+  const { initials: gI, color: gC } = getProjectAvatar(session.projectPath || '');
+  const avatarEl = document.createElement('span');
+  const running0 = activePtyIds.has(sessionId);
+  const busy0 = sessionBusyState.get(sessionId) || false;
+  avatarEl.className = 'grid-card-avatar ' + (busy0 ? 'busy' : (running0 ? 'running' : 'stopped'));
+  avatarEl.textContent = gI;
+  avatarEl.style.background = gC;
+  header.appendChild(avatarEl);
+
   const name = document.createElement('span');
   name.className = 'grid-card-name';
   name.textContent = displayName;
@@ -41,7 +48,7 @@ function wrapInGridCard(sessionId) {
 
   const stopBtn = document.createElement('button');
   stopBtn.className = 'grid-card-stop-btn';
-  stopBtn.title = 'Stop session';
+  stopBtn.dataset.tooltip = 'Stop session';
   stopBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>';
   stopBtn.style.display = activePtyIds.has(sessionId) ? '' : 'none';
   stopBtn.onclick = (e) => {

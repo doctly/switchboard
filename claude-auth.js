@@ -47,9 +47,40 @@ function readFromFile() {
   }
 }
 
-function getOAuthToken() {
-  const creds = readFromKeychain() || readFromFile();
-  return creds?.claudeAiOauth || null;
+const DEFAULT_CONFIG_DIR = path.join(os.homedir(), '.claude');
+
+function getOAuthToken(configDir) {
+  // Default account uses non-hashed keychain service name "Claude Code-credentials"
+  if (!configDir || configDir === DEFAULT_CONFIG_DIR) {
+    return (readFromKeychain() || readFromFile())?.claudeAiOauth || null;
+  }
+  return (readFromKeychainForDir(configDir) || readFromFileForDir(configDir))?.claudeAiOauth || null;
+}
+
+function readFromKeychainForDir(configDir) {
+  if (process.platform !== 'darwin') return null;
+  try {
+    const crypto = require('crypto');
+    const hash = crypto.createHash('sha256').update(configDir).digest('hex').substring(0, 8);
+    const service = `Claude Code-credentials-${hash}`;
+    const user = process.env.USER || os.userInfo().username;
+    const json = execSync(
+      `security find-generic-password -a "${user}" -w -s "${service}"`,
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+    ).trim();
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+function readFromFileForDir(configDir) {
+  try {
+    const credPath = path.join(configDir, '.credentials.json');
+    return JSON.parse(fs.readFileSync(credPath, 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
 function formatResetTime(value) {
@@ -83,12 +114,32 @@ function formatResetTime(value) {
   return `${month} ${day} at ${timeStr} (${tz})`;
 }
 
+function formatResetIn(value) {
+  if (!value) return null;
+  let resetDate;
+  if (typeof value === 'string') resetDate = new Date(value);
+  else if (value > 1e12) resetDate = new Date(value);
+  else resetDate = new Date(value * 1000);
+  if (isNaN(resetDate.getTime())) return null;
+  const diffMs = resetDate - Date.now();
+  if (diffMs <= 0) return 'soon';
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 60) return `${diffMin}min`;
+  const diffH = Math.floor(diffMs / 3600000);
+  if (diffH < 24) return `${diffH}h`;
+  const diffD = Math.round(diffMs / 86400000);
+  return `${diffD} day${diffD !== 1 ? 's' : ''}`;
+}
+
 function mapBucket(apiUsage, apiKey, usageKey, usage) {
   try {
     const u = apiUsage[apiKey];
     if (!u || u.utilization === null || u.utilization === undefined) return;
     usage[usageKey] = Math.floor(u.utilization);
-    if (u.resets_at) usage[usageKey + 'Reset'] = formatResetTime(u.resets_at);
+    if (u.resets_at) {
+      usage[usageKey + 'Reset'] = formatResetTime(u.resets_at);
+      usage[usageKey + 'ResetIn'] = formatResetIn(u.resets_at);
+    }
   } catch (err) {
     console.error('[claude-auth] Error mapping bucket', apiKey, err.message);
   }
@@ -104,8 +155,8 @@ function transformUsageResponse(apiUsage) {
   return usage;
 }
 
-async function fetchUsage() {
-  const oauth = getOAuthToken();
+async function fetchUsage(configDir) {
+  const oauth = getOAuthToken(configDir);
   if (!oauth?.accessToken) return null;
 
   const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
@@ -130,9 +181,9 @@ async function fetchUsage() {
   return await res.json();
 }
 
-async function fetchAndTransformUsage() {
+async function fetchAndTransformUsage(configDir) {
   try {
-    const raw = await fetchUsage();
+    const raw = await fetchUsage(configDir);
     if (raw === null) {
       return { _error: true, message: 'Could not fetch usage (no token or API error)' };
     }

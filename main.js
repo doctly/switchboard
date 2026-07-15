@@ -70,11 +70,67 @@ const {
   closeDb,
 } = require('./db');
 
-const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
-const PLANS_DIR = path.join(os.homedir(), '.claude', 'plans');
-const CLAUDE_DIR = path.join(os.homedir(), '.claude');
+const DEFAULT_CLAUDE_DIR = path.join(os.homedir(), '.claude');
+const PLANS_DIR = path.join(DEFAULT_CLAUDE_DIR, 'plans');
+const CLAUDE_DIR = DEFAULT_CLAUDE_DIR;
 const STATS_CACHE_PATH = path.join(CLAUDE_DIR, 'stats-cache.json');
 const MAX_BUFFER_SIZE = 256 * 1024;
+
+// --- Multi-account helpers ---
+
+const DEFAULT_ACCOUNT = { id: 'default', name: 'Default', configDir: DEFAULT_CLAUDE_DIR };
+
+function getAccounts() {
+  const stored = getSetting('accounts');
+  if (!Array.isArray(stored) || stored.length === 0) return [DEFAULT_ACCOUNT];
+  // Always ensure default account is present
+  if (!stored.find(a => a.id === 'default')) return [DEFAULT_ACCOUNT, ...stored];
+  return stored;
+}
+
+function getActiveAccount() {
+  const global = getSetting('global') || {};
+  const activeId = global.activeAccountId || 'default';
+  return getAccounts().find(a => a.id === activeId) || DEFAULT_ACCOUNT;
+}
+
+function getProjectsDir(account) {
+  return path.join(account.configDir, 'projects');
+}
+
+// Convenience: current active projects dir
+function activeProjectsDir() {
+  return getProjectsDir(getActiveAccount());
+}
+
+function activeConfigDir() {
+  return getActiveAccount().configDir;
+}
+
+// Build stats in the same format as stats-cache.json using Switchboard's own DB.
+// This ensures all accounts see charts even before running `claude /stats`.
+function computeStatsFromDb(accountId) {
+  const sessions = getAllCached(accountId);
+  const dailyMap = {};
+  let totalMessages = 0;
+  for (const s of sessions) {
+    const date = (s.modified || s.created || '').slice(0, 10);
+    if (!date || date < '2020-01-01') continue;
+    if (!dailyMap[date]) dailyMap[date] = { date, messageCount: 0, toolCallCount: 0 };
+    const mc = s.messageCount || 0;
+    dailyMap[date].messageCount += mc;
+    totalMessages += mc;
+  }
+  const dailyActivity = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
+  return {
+    dailyActivity,
+    dailyModelTokens: [],
+    totalSessions: sessions.length,
+    totalMessages,
+    modelUsage: {},
+    lastComputedDate: new Date().toISOString().slice(0, 10),
+  };
+}
 
 // Active PTY sessions
 const activeSessions = new Map();
@@ -254,17 +310,24 @@ const { deriveProjectPath } = require('./derive-project-path');
 
 // Session cache → session-cache.js
 const sessionCache = require('./session-cache');
-sessionCache.init({
-  PROJECTS_DIR,
-  activeSessions,
-  getMainWindow: () => mainWindow,
-  log,
-  db: {
-    deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession,
-    deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
-    setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName,
-  },
-});
+
+function initSessionCache() {
+  const account = getActiveAccount();
+  sessionCache.init({
+    PROJECTS_DIR: getProjectsDir(account),
+    accountId: account.id,
+    activeSessions,
+    getMainWindow: () => mainWindow,
+    log,
+    db: {
+      deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession,
+      deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
+      setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName,
+    },
+  });
+}
+
+initSessionCache();
 const { readSessionFile, readFolderFromFilesystem, refreshFolder, populateCacheFromFilesystem,
         buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker } = sessionCache;
 
@@ -295,7 +358,7 @@ ipcMain.handle('add-project', (_event, projectPath) => {
 
     // Create the corresponding folder in ~/.claude/projects/ so it persists
     const folder = encodeProjectPath(projectPath);
-    const folderPath = path.join(PROJECTS_DIR, folder);
+    const folderPath = path.join(activeProjectsDir(), folder);
     if (!fs.existsSync(folderPath)) {
       fs.mkdirSync(folderPath, { recursive: true });
     }
@@ -409,7 +472,7 @@ ipcMain.handle('unwatch-file', (_event, filePath) => {
 
 ipcMain.handle('get-projects', (_event, showArchived) => {
   try {
-    const needsPopulate = !isCachePopulated() || !isSearchIndexPopulated();
+    const needsPopulate = !isCachePopulated(getActiveAccount().id) || !isSearchIndexPopulated();
 
     if (needsPopulate) {
       populateCacheViaWorker();
@@ -489,14 +552,25 @@ ipcMain.handle('save-plan', (_event, filePath, content) => {
 
 // --- IPC: get-stats ---
 ipcMain.handle('get-stats', () => {
+  const activeAccount = getActiveAccount();
+  const dbStats = computeStatsFromDb(activeAccount.id);
   try {
-    if (!fs.existsSync(STATS_CACHE_PATH)) return null;
-    const raw = fs.readFileSync(STATS_CACHE_PATH, 'utf8');
-    return JSON.parse(raw);
+    const statsPath = path.join(activeConfigDir(), 'stats-cache.json');
+    if (fs.existsSync(statsPath)) {
+      const fileStats = JSON.parse(fs.readFileSync(statsPath, 'utf8'));
+      // Prefer file stats (has rich token data) but fall back to DB for activity data
+      if (!fileStats.dailyActivity?.length && dbStats.dailyActivity.length) {
+        fileStats.dailyActivity = dbStats.dailyActivity;
+      }
+      if (!fileStats.totalSessions) fileStats.totalSessions = dbStats.totalSessions;
+      if (!fileStats.totalMessages) fileStats.totalMessages = dbStats.totalMessages;
+      return fileStats;
+    }
   } catch (err) {
     console.error('Error reading stats cache:', err);
-    return null;
   }
+  // No file cache — return DB-computed stats so charts always render
+  return dbStats;
 });
 
 // --- IPC: refresh-stats (run /stats + /usage via PTY) ---
@@ -507,6 +581,7 @@ ipcMain.handle('refresh-stats', async () => {
   const statsShellProfile = resolveShell(statsProfileId);
   const statsShell = statsShellProfile.path;
   const statsShellExtraArgs = statsShellProfile.args || [];
+  const configDir = activeConfigDir();
   const ptyEnv = {
     ...cleanPtyEnv,
     TERM: 'xterm-256color',
@@ -515,6 +590,7 @@ ipcMain.handle('refresh-stats', async () => {
     TERM_PROGRAM_VERSION: '3.6.6',
     FORCE_COLOR: '3',
     ITERM_SESSION_ID: '1',
+    ...(configDir !== DEFAULT_CLAUDE_DIR ? { CLAUDE_CONFIG_DIR: configDir } : {}),
   };
 
   // Helper: spawn claude with args, collect output, auto-accept trust, kill when idle
@@ -591,14 +667,23 @@ ipcMain.handle('refresh-stats', async () => {
     // Run /stats via PTY (for heatmap/chart data) and fetch usage via API in parallel
     const [, usage] = await Promise.all([
       runClaude('"/stats"', { waitFor: /streak/i, timeoutMs: 10000 }),
-      fetchAndTransformUsage().catch(() => ({})),
+      fetchAndTransformUsage(configDir).catch(() => ({})),
     ]);
 
-    // Read refreshed stats cache
-    let stats = null;
+    // Read refreshed stats cache (written to active account's config dir)
+    const activeAccount = getActiveAccount();
+    const dbStats = computeStatsFromDb(activeAccount.id);
+    let stats = dbStats;
     try {
-      if (fs.existsSync(STATS_CACHE_PATH)) {
-        stats = JSON.parse(fs.readFileSync(STATS_CACHE_PATH, 'utf8'));
+      const statsPath = path.join(configDir, 'stats-cache.json');
+      if (fs.existsSync(statsPath)) {
+        const fileStats = JSON.parse(fs.readFileSync(statsPath, 'utf8'));
+        if (!fileStats.dailyActivity?.length && dbStats.dailyActivity.length) {
+          fileStats.dailyActivity = dbStats.dailyActivity;
+        }
+        if (!fileStats.totalSessions) fileStats.totalSessions = dbStats.totalSessions;
+        if (!fileStats.totalMessages) fileStats.totalMessages = dbStats.totalMessages;
+        stats = fileStats;
       }
     } catch {}
 
@@ -611,11 +696,19 @@ ipcMain.handle('refresh-stats', async () => {
 
 // --- IPC: get-usage (lightweight, API-only, no PTY) ---
 ipcMain.handle('get-usage', async () => {
+  const cacheKey = 'usage:' + ((getSetting('global') || {}).activeAccountId || 'default');
   try {
-    return await fetchAndTransformUsage() || {};
+    const usage = await fetchAndTransformUsage(activeConfigDir()) || {};
+    if (!usage._error && !usage._rateLimited && Object.keys(usage).length) {
+      setSetting(cacheKey, usage);
+      return usage;
+    }
+    const cached = getSetting(cacheKey);
+    return cached ? { ...cached, _cached: true } : usage;
   } catch (err) {
     log.error('Error fetching usage:', err);
-    return {};
+    const cached = getSetting(cacheKey);
+    return cached ? { ...cached, _cached: true } : {};
   }
 });
 
@@ -657,13 +750,14 @@ ipcMain.handle('get-memories', () => {
   // --- Per-project files ---
   const projects = [];
   try {
-    if (fs.existsSync(PROJECTS_DIR)) {
-      const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+    const memoriesProjectsDir = activeProjectsDir();
+    if (fs.existsSync(memoriesProjectsDir)) {
+      const folders = fs.readdirSync(memoriesProjectsDir, { withFileTypes: true })
         .filter(d => d.isDirectory() && d.name !== '.git')
         .map(d => d.name);
 
       for (const folder of folders) {
-        const folderPath = path.join(PROJECTS_DIR, folder);
+        const folderPath = path.join(memoriesProjectsDir, folder);
         const projectPath = deriveProjectPath(folderPath, folder);
         if (projectPath && hiddenProjects.has(projectPath)) continue;
 
@@ -807,6 +901,82 @@ ipcMain.handle('delete-setting', (_event, key) => {
   return { ok: true };
 });
 
+// --- Multi-account IPCs ---
+
+ipcMain.handle('get-accounts', () => getAccounts());
+
+ipcMain.handle('save-accounts', (_event, accounts) => {
+  const withDefault = accounts.find(a => a.id === 'default')
+    ? accounts
+    : [DEFAULT_ACCOUNT, ...accounts];
+  setSetting('accounts', withDefault);
+  return { ok: true };
+});
+
+ipcMain.handle('create-account', (_event, name) => {
+  const { randomUUID } = require('crypto');
+  const id = 'acc-' + randomUUID().replace(/-/g, '').slice(0, 12);
+  const configDir = path.join(os.homedir(), '.switchboard', 'accounts', id);
+  fs.mkdirSync(configDir, { recursive: true });
+  const account = { id, name, configDir };
+  const existing = getAccounts();
+  setSetting('accounts', [...existing, account]);
+  return account;
+});
+
+ipcMain.handle('rename-account', (_event, id, name) => {
+  const updated = getAccounts().map(a => a.id === id ? { ...a, name } : a);
+  setSetting('accounts', updated);
+  return { ok: true };
+});
+
+ipcMain.handle('delete-account', (_event, id) => {
+  if (id === 'default') return { ok: false };
+  const updated = getAccounts().filter(a => a.id !== id);
+  setSetting('accounts', updated);
+  return { ok: true };
+});
+
+ipcMain.handle('get-homedir', () => os.homedir());
+
+ipcMain.handle('get-active-account-id', () => {
+  return (getSetting('global') || {}).activeAccountId || 'default';
+});
+
+ipcMain.handle('set-active-account-id', (_event, accountId) => {
+  const global = getSetting('global') || {};
+  global.activeAccountId = accountId;
+  setSetting('global', global);
+
+  // Re-init session cache for new account and trigger re-scan
+  initSessionCache();
+  restartProjectsWatcher();
+  populateCacheViaWorker();
+  return { ok: true };
+});
+
+ipcMain.handle('get-accounts-usage', async () => {
+  const accounts = getAccounts();
+  const results = {};
+  await Promise.all(accounts.map(async (account) => {
+    const cacheKey = 'usage:' + account.id;
+    try {
+      const usage = await fetchAndTransformUsage(account.configDir);
+      if (usage && !usage._error && !usage._rateLimited && Object.keys(usage).length) {
+        setSetting(cacheKey, usage);
+        results[account.id] = usage;
+      } else {
+        const cached = getSetting(cacheKey);
+        results[account.id] = cached ? { ...cached, _cached: true } : (usage || {});
+      }
+    } catch {
+      const cached = getSetting(cacheKey);
+      results[account.id] = cached ? { ...cached, _cached: true } : {};
+    }
+  }));
+  return results;
+});
+
 // --- Scheduled tasks ---
 const scheduleIpc = require('./schedule-ipc');
 
@@ -893,7 +1063,7 @@ ipcMain.handle('rename-session', (_event, sessionId, name) => {
 ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
   const folder = getCachedFolder(sessionId);
   if (!folder) return { error: 'Session not found in cache' };
-  const jsonlPath = path.join(PROJECTS_DIR, folder, sessionId + '.jsonl');
+  const jsonlPath = path.join(activeProjectsDir(), folder, sessionId + '.jsonl');
   try {
     const content = fs.readFileSync(jsonlPath, 'utf-8');
     const entries = [];
@@ -980,10 +1150,11 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   let sessionSlug = null;
   let projectFolder = null;
 
+  const activeAccount = getActiveAccount();
   if (!isPlainTerminal) {
     // Snapshot existing .jsonl files before spawning (for new session + fork/plan detection)
     projectFolder = encodeProjectPath(projectPath);
-    const claudeProjectDir = path.join(PROJECTS_DIR, projectFolder);
+    const claudeProjectDir = path.join(getProjectsDir(activeAccount), projectFolder);
     if (fs.existsSync(claudeProjectDir)) {
       try {
         knownJsonlFiles = new Set(
@@ -1096,6 +1267,9 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         TERM: 'xterm-256color', COLORTERM: 'truecolor',
         TERM_PROGRAM: 'iTerm.app', TERM_PROGRAM_VERSION: '3.6.6', FORCE_COLOR: '3', ITERM_SESSION_ID: '1',
       };
+      if (activeAccount.id !== 'default') {
+        ptyEnv.CLAUDE_CONFIG_DIR = activeAccount.configDir;
+      }
       if (mcpServer) {
         ptyEnv.CLAUDE_CODE_SSE_PORT = String(mcpServer.port);
       }
@@ -1295,14 +1469,15 @@ ipcMain.on('close-terminal', (_event, sessionId) => {
 
 // Session transitions → session-transitions.js
 const sessionTransitions = require('./session-transitions');
-sessionTransitions.init({ PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer });
+sessionTransitions.init({ PROJECTS_DIR: activeProjectsDir(), activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer });
 const { detectSessionTransitions } = sessionTransitions;
 
 // --- fs.watch on projects directory ---
 let projectsWatcher = null;
 
 function startProjectsWatcher() {
-  if (!fs.existsSync(PROJECTS_DIR)) return;
+  const watchDir = activeProjectsDir();
+  if (!fs.existsSync(watchDir)) return;
 
   const pendingFolders = new Set();
   let debounceTimer = null;
@@ -1314,12 +1489,12 @@ function startProjectsWatcher() {
 
     let changed = false;
     for (const folder of folders) {
-      const folderPath = path.join(PROJECTS_DIR, folder);
+      const folderPath = path.join(watchDir, folder);
       if (fs.existsSync(folderPath)) {
         detectSessionTransitions(folder);
         refreshFolder(folder);
       } else {
-        deleteCachedFolder(folder);
+        deleteCachedFolder(folder, getActiveAccount().id);
       }
       changed = true;
     }
@@ -1330,7 +1505,7 @@ function startProjectsWatcher() {
   }
 
   try {
-    projectsWatcher = fs.watch(PROJECTS_DIR, { recursive: true }, (_eventType, filename) => {
+    projectsWatcher = fs.watch(watchDir, { recursive: true }, (_eventType, filename) => {
       if (!filename) return;
 
       // filename is relative, e.g. "folder-name/sessions-index.json" or "folder-name/abc.jsonl"
@@ -1358,6 +1533,14 @@ function startProjectsWatcher() {
   } catch (err) {
     console.error('Failed to start projects watcher:', err);
   }
+}
+
+function restartProjectsWatcher() {
+  if (projectsWatcher) {
+    projectsWatcher.close();
+    projectsWatcher = null;
+  }
+  startProjectsWatcher();
 }
 
 // --- IPC: app version ---

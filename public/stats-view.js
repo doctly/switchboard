@@ -99,23 +99,21 @@ function buildUsageSection(usage) {
   titleRow.appendChild(refreshBtn);
   container.appendChild(titleRow);
 
-  // Show rate limit or error notice
+  // Show rate limit notice; silently skip on generic error (no token / API error)
   if (usage._rateLimited || usage._error) {
-    const notice = document.createElement('div');
-    notice.className = 'usage-rate-limited';
     if (usage._rateLimited) {
+      const notice = document.createElement('div');
+      notice.className = 'usage-rate-limited';
       const secs = usage.retryAfterSeconds || 0;
       const mins = Math.ceil(secs / 60);
       notice.textContent = secs > 0
         ? `Usage API rate limited. Try again in ~${mins} min${mins !== 1 ? 's' : ''}.`
         : 'Usage API rate limited. Try again later.';
-    } else {
-      notice.textContent = usage.message || 'Could not fetch usage data.';
+      container.appendChild(notice);
+      const statsNotice = statsViewerBody.querySelector('.stats-notice');
+      if (statsNotice) statsViewerBody.insertBefore(container, statsNotice);
+      else statsViewerBody.appendChild(container);
     }
-    container.appendChild(notice);
-    const statsNotice = statsViewerBody.querySelector('.stats-notice');
-    if (statsNotice) statsViewerBody.insertBefore(container, statsNotice);
-    else statsViewerBody.appendChild(container);
     return;
   }
 

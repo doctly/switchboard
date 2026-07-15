@@ -10,13 +10,14 @@ const { encodeProjectPath } = require('./encode-project-path');
  * Session cache module.
  * Call init(ctx) once with the shared context object.
  */
-let PROJECTS_DIR, activeSessions, getMainWindow, log;
+let PROJECTS_DIR, accountId, activeSessions, getMainWindow, log;
 let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession;
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
 let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
+  accountId = ctx.accountId || 'default';
   activeSessions = ctx.activeSessions;
   getMainWindow = ctx.getMainWindow;
   log = ctx.log;
@@ -61,7 +62,7 @@ function readFolderFromFilesystem(folder) {
 function refreshFolder(folder) {
   const folderPath = path.join(PROJECTS_DIR, folder);
   if (!fs.existsSync(folderPath)) {
-    deleteCachedFolder(folder);
+    deleteCachedFolder(folder, accountId);
     return;
   }
 
@@ -72,7 +73,7 @@ function refreshFolder(folder) {
   }
 
   // Get what's currently cached for this folder
-  const cachedSessions = getCachedByFolder(folder);
+  const cachedSessions = getCachedByFolder(folder, accountId);
   const cachedMap = new Map(); // sessionId → modified ISO string
   for (const row of cachedSessions) {
     cachedMap.set(row.sessionId, row.modified);
@@ -133,7 +134,7 @@ function refreshFolder(folder) {
 
   // Batch all DB writes to reduce lock contention
   if (sessionsToUpsert.length > 0) {
-    upsertCachedSessions(sessionsToUpsert);
+    upsertCachedSessions(sessionsToUpsert, accountId);
   }
   for (const entry of searchEntriesToUpsert) {
     deleteSearchSession(entry.id);
@@ -171,7 +172,7 @@ function populateCacheFromFilesystem() {
 /** Build projects response from cached data */
 function buildProjectsFromCache(showArchived) {
   const metaMap = getAllMeta();
-  const cachedRows = getAllCached();
+  const cachedRows = getAllCached(accountId);
   const global = getSetting('global') || {};
   const hiddenProjects = new Set(global.hiddenProjects || []);
 
@@ -200,6 +201,7 @@ function buildProjectsFromCache(showArchived) {
       name: meta?.name || null,
       starred: meta?.starred || 0,
       archived: meta?.archived || 0,
+      accountId: row.accountId || 'default',
     };
     if (!showArchived && s.archived) continue;
     if (!projectMap.has(row.projectPath)) {
@@ -306,7 +308,7 @@ function populateCacheViaWorker() {
   sendStatus('Scanning projects\u2026', 'active');
 
   const worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
-    workerData: { projectsDir: PROJECTS_DIR },
+    workerData: { projectsDir: PROJECTS_DIR, accountId },
   });
 
   worker.on('message', (msg) => {
@@ -326,13 +328,14 @@ function populateCacheViaWorker() {
     sendStatus(`Indexing ${msg.results.length} projects\u2026`, 'active');
 
     // Write results to DB on main thread (fast)
+    const currentAccountId = msg.accountId || accountId;
     let sessionCount = 0;
     for (const { folder, projectPath, sessions, indexMtimeMs } of msg.results) {
-      deleteCachedFolder(folder);
+      deleteCachedFolder(folder, currentAccountId);
       deleteSearchFolder(folder);
       if (sessions.length > 0) {
         sessionCount += sessions.length;
-        upsertCachedSessions(sessions);
+        upsertCachedSessions(sessions, currentAccountId);
         for (const s of sessions) {
           // Only JSONL custom-title (genuine user title) promotes to the DB name column.
           // AI titles must not — see refreshFolder for the rationale.

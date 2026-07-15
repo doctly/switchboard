@@ -28,6 +28,7 @@ const sessionFilters = document.getElementById('session-filters');
 const searchBar = document.getElementById('search-bar');
 const statsContent = document.getElementById('stats-content');
 const memoryContent = document.getElementById('memory-content');
+const projectsContent = document.getElementById('projects-content');
 const statsViewer = document.getElementById('stats-viewer');
 const statsViewerBody = document.getElementById('stats-viewer-body');
 const memoryViewer = document.getElementById('memory-viewer');
@@ -564,8 +565,9 @@ function updateRunningIndicators() {
   for (const [sid, card] of gridCards) {
     const running = activePtyIds.has(sid);
     const busy = sessionBusyState.get(sid) || false;
-    const dot = card.querySelector('.grid-card-dot');
-    if (dot) dot.className = 'grid-card-dot ' + (busy ? 'busy' : (running ? 'running' : 'stopped'));
+    const dot = card.querySelector('.grid-card-avatar');
+    if (dot) dot.className = dot.className.replace(/\b(running|busy|stopped)\b/g, '').trim()
+      + ' ' + (busy ? 'busy' : (running ? 'running' : 'stopped'));
     const footer = card.querySelector('.grid-card-footer');
     if (footer) footer.children[0].textContent = running ? 'Running' : 'Stopped';
     const stopBtn = card.querySelector('.grid-card-stop-btn');
@@ -706,6 +708,7 @@ async function launchNewSession(project, sessionOptions) {
     messageCount: 0,
     modified: new Date().toISOString(),
     created: new Date().toISOString(),
+    accountId: activeAccountId,
   };
 
   // Track as pending (no .jsonl yet)
@@ -750,6 +753,18 @@ async function showTerminalHeader(session) {
   terminalHeaderId.textContent = session.sessionId;
   terminalHeader.style.display = '';
   updateTerminalHeader();
+
+  // Show account badge when there are multiple accounts (always identify which account)
+  if (terminalHeaderAccount) {
+    if (accounts.length > 1) {
+      const sessAccId = session.accountId || 'default';
+      const acc = getAccountById(sessAccId);
+      terminalHeaderAccount.textContent = acc.name;
+      terminalHeaderAccount.style.display = '';
+    } else {
+      terminalHeaderAccount.style.display = 'none';
+    }
+  }
 
   // Show active shell profile
   try {
@@ -838,6 +853,8 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
     plansContent.style.display = 'none';
     statsContent.style.display = 'none';
     memoryContent.style.display = 'none';
+    if (accountsContent) accountsContent.style.display = 'none';
+    if (projectsContent) projectsContent.style.display = 'none';
     sessionFilters.style.display = 'none';
     searchBar.style.display = 'none';
 
@@ -886,6 +903,22 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
       searchInput.placeholder = 'Search agent files...';
       memoryContent.style.display = '';
       loadMemories();
+    } else if (tabName === 'accounts') {
+      if (accountsContent) {
+        accountsContent.style.display = '';
+        renderAccountsPanel();
+        refreshAccountUsage().then(() => renderAccountsPanel());
+      }
+    } else if (tabName === 'projects') {
+      if (projectsContent) {
+        projectsContent.style.display = '';
+        if (projectsChangedWhileAway) {
+          projectsChangedWhileAway = false;
+          loadProjects().then(() => renderProjectsPanel());
+        } else {
+          renderProjectsPanel();
+        }
+      }
     }
   });
 });
@@ -965,7 +998,7 @@ initGridObservers();
 {
   const gridToggleBtn = document.createElement('button');
   gridToggleBtn.id = 'grid-toggle-btn';
-  gridToggleBtn.title = 'Session overview';
+  gridToggleBtn.dataset.tooltip = 'Session overview';
   gridToggleBtn.innerHTML = '<svg width="14" height="14" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>';
   gridToggleBtn.addEventListener('click', toggleGridView);
   // Insert next to the resort button
@@ -1041,15 +1074,18 @@ loadProjects().then(() => {
 let projectsChangedTimer = null;
 let projectsChangedWhileAway = false;
 window.api.onProjectsChanged(() => {
-  // Debounce to avoid rapid re-renders during bulk changes
   if (projectsChangedTimer) clearTimeout(projectsChangedTimer);
-  if (activeTab !== 'sessions') {
+  if (activeTab !== 'sessions' && activeTab !== 'projects') {
     projectsChangedWhileAway = true;
     return;
   }
   projectsChangedTimer = setTimeout(() => {
     projectsChangedTimer = null;
-    loadProjects();
+    if (activeTab === 'sessions') {
+      loadProjects();
+    } else if (activeTab === 'projects') {
+      loadProjects().then(() => renderProjectsPanel());
+    }
   }, 300);
 });
 
@@ -1128,3 +1164,479 @@ window.api.onUpdaterEvent(updaterHandler);
 
 // --- Initialize file panel (MCP bridge UI) ---
 if (typeof initFilePanel === 'function') initFilePanel();
+
+// ─── Multi-account ────────────────────────────────────────────────────────────
+
+let accounts = [];
+let activeAccountId = 'default';
+let accountsUsage = {};
+
+const accountsContent = document.getElementById('accounts-content');
+const terminalHeaderAccount = document.getElementById('terminal-header-account');
+const accountBtn = document.getElementById('account-btn');
+const accountBtnName = document.getElementById('account-btn-name');
+const accountBtnChips = document.getElementById('account-btn-chips');
+const accountDropdown = document.getElementById('account-dropdown');
+const accountDropdownList = document.getElementById('account-dropdown-list');
+
+function getAccountById(id) {
+  return accounts.find(a => a.id === id) || { id: 'default', name: 'Default', configDir: '' };
+}
+
+function buildUsageChips(usage) {
+  if (!usage || usage._error || usage._rateLimited) return [];
+  const chips = [];
+  if (usage.session != null) chips.push(`${usage.session}% 5h`);
+  return chips;
+}
+
+function updateAccountDropdown() {
+  const activeAcc = getAccountById(activeAccountId);
+  if (accountBtnName) accountBtnName.textContent = activeAcc.name;
+
+  if (accountBtnChips) {
+    accountBtnChips.innerHTML = '';
+    for (const chip of buildUsageChips(accountsUsage[activeAccountId])) {
+      const s = document.createElement('span');
+      s.className = 'account-chip';
+      s.textContent = chip;
+      accountBtnChips.appendChild(s);
+    }
+  }
+
+  if (!accountDropdownList) return;
+  accountDropdownList.innerHTML = '';
+  for (const acc of accounts) {
+    const item = document.createElement('div');
+    item.className = 'acct-dd-item' + (acc.id === activeAccountId ? ' active' : '');
+
+    const dot = document.createElement('span');
+    dot.className = 'acct-dd-dot';
+
+    const name = document.createElement('span');
+    name.className = 'acct-dd-name';
+    name.textContent = acc.name;
+
+    const chipsEl = document.createElement('span');
+    chipsEl.className = 'acct-dd-chips';
+    for (const chip of buildUsageChips(accountsUsage[acc.id])) {
+      const s = document.createElement('span');
+      s.className = 'account-chip';
+      s.textContent = chip;
+      chipsEl.appendChild(s);
+    }
+
+    item.appendChild(dot);
+    item.appendChild(name);
+    item.appendChild(chipsEl);
+    item.addEventListener('click', () => {
+      closeAccountDropdown();
+      switchAccount(acc.id);
+    });
+    accountDropdownList.appendChild(item);
+  }
+}
+
+function closeAccountDropdown() {
+  if (accountDropdown) accountDropdown.classList.add('hidden');
+}
+
+if (accountBtn) {
+  accountBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!accountDropdown) return;
+    accountDropdown.classList.toggle('hidden');
+    if (!accountDropdown.classList.contains('hidden')) updateAccountDropdown();
+  });
+  document.addEventListener('click', closeAccountDropdown);
+}
+
+async function openAccountHomeSession(account) {
+  const homedir = await window.api.getHomedir();
+
+  // Reuse an already-open home-dir terminal for this account
+  for (const [sid, entry] of openSessions) {
+    if (!entry.closed &&
+        (entry.session?.accountId || 'default') === account.id &&
+        entry.session?.projectPath === homedir) {
+      showSession(sid);
+      return;
+    }
+  }
+
+  // Nothing open yet — launch a new session (stays on accounts tab, terminal appears in main area)
+  await launchNewSession({ projectPath: homedir }, {});
+}
+
+async function switchAccount(id) {
+  if (id === activeAccountId) return;
+  activeAccountId = id;
+  updateAccountDropdown();
+  renderAccountsPanel();
+
+  sidebarContent.innerHTML = '<div class="account-switch-preloader"><div class="acct-spinner"></div><span>Switching account…</span></div>';
+
+  await window.api.setActiveAccountId(id);
+
+  if (activeTab === 'stats') loadStats();
+  if (activeTab === 'projects') loadProjects().then(() => renderProjectsPanel());
+}
+
+function makePanelHeader(titleText, btnLabel, onBtnClick) {
+  const wrap = document.createElement('div');
+  wrap.className = 'panel-section-header';
+  const title = document.createElement('span');
+  title.className = 'panel-section-title';
+  title.textContent = titleText;
+  wrap.appendChild(title);
+  if (btnLabel) {
+    const btn = document.createElement('button');
+    btn.className = 'panel-section-btn';
+    btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="6" y1="1" x2="6" y2="11"/><line x1="1" y1="6" x2="11" y2="6"/></svg> ' + btnLabel;
+    btn.addEventListener('click', onBtnClick);
+    wrap.appendChild(btn);
+  }
+  return wrap;
+}
+
+function renderAccountsPanel() {
+  if (!accountsContent) return;
+  accountsContent.innerHTML = '';
+
+  accountsContent.appendChild(makePanelHeader('Accounts'));
+
+  for (const acc of accounts) {
+    const card = document.createElement('div');
+    card.className = 'account-card' + (acc.id === activeAccountId ? ' active-account' : '');
+
+    // ── Header row: dot + name (editable) + actions ──
+    const header = document.createElement('div');
+    header.className = 'account-card-header';
+
+    const dot = document.createElement('span');
+    dot.className = 'account-row-dot';
+
+    // Editable name
+    const nameWrap = document.createElement('div');
+    nameWrap.className = 'account-card-name-wrap';
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'account-card-name';
+    nameSpan.textContent = acc.name;
+    const nameEditInput = document.createElement('input');
+    nameEditInput.className = 'account-row-name-input';
+    nameEditInput.value = acc.name;
+    nameEditInput.style.display = 'none';
+    const editBtn = document.createElement('button');
+    editBtn.className = 'account-edit-btn';
+    editBtn.dataset.tooltip = 'Rename';
+    editBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
+
+    const startEdit = (e) => {
+      e?.stopPropagation();
+      nameSpan.style.display = 'none';
+      editBtn.style.display = 'none';
+      nameEditInput.style.display = '';
+      nameEditInput.focus();
+      nameEditInput.select();
+    };
+    const saveNameEdit = async () => {
+      const newName = nameEditInput.value.trim() || acc.name;
+      if (newName !== acc.name) {
+        acc.name = newName;
+        await window.api.renameAccount(acc.id, newName);
+        updateAccountDropdown();
+      }
+      nameEditInput.style.display = 'none';
+      nameSpan.textContent = acc.name;
+      nameSpan.style.display = '';
+      editBtn.style.display = '';
+    };
+    editBtn.addEventListener('click', startEdit);
+    nameSpan.addEventListener('dblclick', startEdit);
+    nameEditInput.addEventListener('blur', saveNameEdit);
+    nameEditInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); nameEditInput.blur(); }
+      if (e.key === 'Escape') { nameEditInput.value = acc.name; nameEditInput.blur(); }
+    });
+    nameEditInput.addEventListener('click', (e) => e.stopPropagation());
+    nameWrap.appendChild(nameSpan);
+    nameWrap.appendChild(nameEditInput);
+    nameWrap.appendChild(editBtn);
+
+    // Actions: open-session + delete
+    const actions = document.createElement('div');
+    actions.className = 'account-card-actions';
+
+    const openBtn = document.createElement('button');
+    openBtn.className = 'account-open-btn';
+    openBtn.dataset.tooltip = 'Open Claude session in home directory';
+    openBtn.textContent = 'Open Claude';
+    openBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (acc.id !== activeAccountId) await switchAccount(acc.id);
+      await openAccountHomeSession(acc);
+    });
+    actions.appendChild(openBtn);
+
+    if (acc.id !== 'default') {
+      const del = document.createElement('button');
+      del.className = 'account-row-del';
+      del.dataset.tooltip = 'Remove account';
+      del.textContent = '×';
+      del.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm(`Remove account "${acc.name}"?`)) return;
+        if (activeAccountId === acc.id) await switchAccount('default');
+        accounts = accounts.filter(a => a.id !== acc.id);
+        await window.api.deleteAccount(acc.id);
+        updateAccountDropdown();
+        renderAccountsPanel();
+      });
+      actions.appendChild(del);
+    }
+
+    header.appendChild(dot);
+    header.appendChild(nameWrap);
+    header.appendChild(actions);
+
+    // ── Meta row: dir ──
+    const meta = document.createElement('div');
+    meta.className = 'account-card-meta';
+    const dirEl = document.createElement('span');
+    dirEl.className = 'account-row-dir';
+    dirEl.textContent = acc.configDir || '~/.claude (default)';
+    meta.appendChild(dirEl);
+
+    card.appendChild(header);
+    card.appendChild(meta);
+
+    // ── Usage block: progress bars + reset times ──
+    const accUsage = accountsUsage[acc.id] || {};
+    const usageDefs = [
+      { key: 'session', resetInKey: 'sessionResetIn', label: '5h' },
+      { key: 'weekAll', resetInKey: 'weekAllResetIn', label: '7d' },
+    ];
+    const usageRows = usageDefs.filter(d => accUsage[d.key] != null);
+    if (usageRows.length) {
+      const block = document.createElement('div');
+      block.className = 'account-usage-block';
+      for (const d of usageRows) {
+        const pct = accUsage[d.key];
+        const barPct = Math.min(pct, 100);
+        const row = document.createElement('div');
+        row.className = 'account-usage-row';
+
+        const label = document.createElement('span');
+        label.className = 'account-usage-label';
+        label.textContent = d.label;
+
+        const barWrap = document.createElement('div');
+        barWrap.className = 'account-usage-bar';
+        const barFill = document.createElement('div');
+        barFill.className = 'account-usage-bar-fill' + (barPct >= 90 ? ' danger' : barPct >= 70 ? ' warn' : '');
+        barFill.style.width = barPct + '%';
+        barWrap.appendChild(barFill);
+
+        const info = document.createElement('span');
+        info.className = 'account-usage-info';
+        const resetIn = accUsage[d.resetInKey];
+        info.textContent = `${pct}%` + (resetIn ? `  · resets in ${resetIn}~` : '');
+
+        row.appendChild(label);
+        row.appendChild(barWrap);
+        row.appendChild(info);
+        block.appendChild(row);
+      }
+      if (accUsage._cached) {
+        const stale = document.createElement('div');
+        stale.className = 'account-usage-cached-note';
+        stale.textContent = 'cached data';
+        block.appendChild(stale);
+      }
+      card.appendChild(block);
+    }
+
+    // Click card body = switch account (but not open session)
+    card.addEventListener('click', async () => {
+      if (acc.id !== activeAccountId) await switchAccount(acc.id);
+    });
+    accountsContent.appendChild(card);
+  }
+
+  // Add account section
+  const addSectionHeader = makePanelHeader('Add account');
+  addSectionHeader.style.marginTop = '16px';
+  accountsContent.appendChild(addSectionHeader);
+
+  const desc = document.createElement('p');
+  desc.className = 'accounts-add-desc';
+  desc.textContent = 'Each account uses its own Claude credentials and session history. Add a second account to switch between personal and work Claude Pro plans, or any two separate logins.';
+  accountsContent.appendChild(desc);
+
+  const form = document.createElement('div');
+  form.className = 'accounts-add-form';
+
+  const newNameInput = document.createElement('input');
+  newNameInput.placeholder = 'Account name (e.g. Work)';
+
+  const addBtn = document.createElement('button');
+  addBtn.className = 'accounts-add-btn';
+  addBtn.textContent = 'Add account';
+
+  addBtn.addEventListener('click', async () => {
+    const name = newNameInput.value.trim();
+    if (!name) return;
+    addBtn.disabled = true;
+    addBtn.textContent = 'Adding…';
+    const newAcc = await window.api.createAccount(name);
+    addBtn.disabled = false;
+    addBtn.textContent = 'Add account';
+    if (!newAcc) return;
+    accounts = [...accounts, newAcc];
+    newNameInput.value = '';
+    await refreshAccountUsage();
+    updateAccountDropdown();
+    renderAccountsPanel();
+  });
+
+  newNameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') addBtn.click(); });
+
+  form.appendChild(newNameInput);
+  form.appendChild(addBtn);
+  accountsContent.appendChild(form);
+}
+
+function renderProjectsPanel() {
+  if (!projectsContent) return;
+  projectsContent.innerHTML = '';
+
+  const projects = cachedAllProjects;
+
+  projectsContent.appendChild(makePanelHeader(`Projects (${projects.length})`, 'Add', () => showAddProjectDialog()));
+
+  if (!projects.length) {
+    const empty = document.createElement('div');
+    empty.className = 'projects-empty-hint';
+    empty.textContent = 'No projects yet. Click Add to select a folder.';
+    projectsContent.appendChild(empty);
+    return;
+  }
+
+  for (const project of projects) {
+    const name = project.projectPath.split('/').filter(Boolean).pop() || project.projectPath;
+    const lastSession = project.sessions[0];
+    const lastActivity = lastSession ? formatDate(new Date(lastSession.modified)) : '—';
+    const { initials, color } = getProjectAvatar(project.projectPath);
+
+    const card = document.createElement('div');
+    card.className = 'project-card';
+
+    const avatarEl = document.createElement('span');
+    avatarEl.className = 'project-card-avatar';
+    avatarEl.textContent = initials;
+    avatarEl.style.background = color;
+
+    const info = document.createElement('div');
+    info.className = 'project-card-info';
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'project-card-name';
+    nameEl.textContent = name;
+
+    const pathEl = document.createElement('div');
+    pathEl.className = 'project-card-path';
+    pathEl.dataset.tooltip = project.projectPath;
+    pathEl.textContent = project.projectPath;
+
+    const metaEl = document.createElement('div');
+    metaEl.className = 'project-card-meta';
+    metaEl.textContent = `${project.sessions.length} session${project.sessions.length !== 1 ? 's' : ''} · ${lastActivity}`;
+
+    info.appendChild(nameEl);
+    info.appendChild(pathEl);
+    info.appendChild(metaEl);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'project-card-del-btn';
+    delBtn.dataset.tooltip = 'Remove project';
+    delBtn.innerHTML = ICONS.trash(13);
+    delBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm(`Remove "${name}" from the project list?\n\nSession files are not deleted.`)) return;
+      await window.api.removeProject(project.projectPath);
+    });
+
+    card.appendChild(avatarEl);
+    card.appendChild(info);
+    card.appendChild(delBtn);
+    projectsContent.appendChild(card);
+  }
+}
+
+async function refreshAccountUsage() {
+  try {
+    accountsUsage = await window.api.getAccountsUsage();
+  } catch {}
+}
+
+async function initAccounts() {
+  [accounts, activeAccountId] = await Promise.all([
+    window.api.getAccounts(),
+    window.api.getActiveAccountId(),
+  ]);
+  await refreshAccountUsage();
+  updateAccountDropdown();
+}
+
+// Custom tooltip system
+(function () {
+  const tip = document.getElementById('app-tooltip');
+  if (!tip) return;
+  let timer = null;
+  let activeEl = null;
+
+  function showTip(el) {
+    tip.textContent = el.dataset.tooltip;
+    tip.style.display = 'block';
+    tip.style.opacity = '0';
+
+    const rect = el.getBoundingClientRect();
+    const tw = tip.offsetWidth;
+    const th = tip.offsetHeight;
+    let left = rect.left + rect.width / 2 - tw / 2;
+    let top = rect.bottom + 6;
+    if (left < 4) left = 4;
+    if (left + tw > window.innerWidth - 4) left = window.innerWidth - tw - 4;
+    if (top + th > window.innerHeight - 4) top = rect.top - th - 6;
+
+    tip.style.left = left + 'px';
+    tip.style.top = top + 'px';
+    tip.style.opacity = '1';
+  }
+
+  function hideTip() {
+    clearTimeout(timer);
+    tip.style.opacity = '0';
+    activeEl = null;
+  }
+
+  document.addEventListener('mouseover', (e) => {
+    const el = e.target.closest('[data-tooltip]');
+    if (el === activeEl) return;
+    clearTimeout(timer);
+    tip.style.opacity = '0';
+    activeEl = el;
+    if (!el) return;
+    timer = setTimeout(() => showTip(el), 350);
+  });
+
+  document.addEventListener('mouseout', (e) => {
+    if (!activeEl) return;
+    if (!activeEl.contains(e.relatedTarget)) hideTip();
+  });
+
+  document.addEventListener('click', hideTip);
+  document.addEventListener('scroll', hideTip, true);
+}());
+
+initAccounts();

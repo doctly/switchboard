@@ -225,9 +225,9 @@ function createTerminalEntry(session) {
   searchBar.innerHTML = `
     <input type="text" class="terminal-search-input" placeholder="Find..." />
     <span class="terminal-search-count"></span>
-    <button class="terminal-search-prev" title="Previous (Shift+Enter)">&#x25B2;</button>
-    <button class="terminal-search-next" title="Next (Enter)">&#x25BC;</button>
-    <button class="terminal-search-close" title="Close (Escape)">&times;</button>
+    <button class="terminal-search-prev" data-tooltip="Previous (Shift+Enter)">&#x25B2;</button>
+    <button class="terminal-search-next" data-tooltip="Next (Enter)">&#x25BC;</button>
+    <button class="terminal-search-close" data-tooltip="Close (Escape)">&times;</button>
   `;
   container.appendChild(searchBar);
   const searchInput = searchBar.querySelector('.terminal-search-input');

@@ -99,6 +99,16 @@ const migrations = [
     try { db.exec('DELETE FROM session_cache'); } catch {}
     try { db.exec('DELETE FROM cache_meta'); } catch {}
   },
+  // v4: Add accountId to session_cache for multi-account support. Clear cache
+  // so all sessions get re-indexed and tagged with accountId = 'default'.
+  (db) => {
+    try { db.exec("ALTER TABLE session_cache ADD COLUMN accountId TEXT NOT NULL DEFAULT 'default'"); } catch {}
+    try { db.exec('DELETE FROM session_cache'); } catch {}
+    try { db.exec('DELETE FROM cache_meta'); } catch {}
+    try { db.exec('DELETE FROM search_map'); } catch {}
+    try { db.exec('DROP TABLE IF EXISTS search_fts'); } catch {}
+    searchFtsRecreated = true;
+  },
 ];
 
 const currentDbVersion = (() => {
@@ -149,23 +159,23 @@ const stmts = {
     ON CONFLICT(sessionId) DO UPDATE SET archived = excluded.archived
   `),
   // Session cache statements
-  cacheCount: db.prepare('SELECT COUNT(*) as cnt FROM session_cache'),
-  cacheGetAll: db.prepare('SELECT * FROM session_cache'),
+  cacheCountByAccount: db.prepare("SELECT COUNT(*) as cnt FROM session_cache WHERE accountId = ?"),
+  cacheGetByAccount: db.prepare('SELECT * FROM session_cache WHERE accountId = ?'),
   cacheUpsert: db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, accountId)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
       folder = excluded.folder, projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
       created = excluded.created, modified = excluded.modified,
       messageCount = excluded.messageCount, slug = excluded.slug,
-      aiTitle = excluded.aiTitle
+      aiTitle = excluded.aiTitle, accountId = excluded.accountId
   `),
-  cacheGetByFolder: db.prepare('SELECT sessionId, modified FROM session_cache WHERE folder = ?'),
+  cacheGetByFolder: db.prepare('SELECT sessionId, modified FROM session_cache WHERE folder = ? AND accountId = ?'),
   cacheGetFolder: db.prepare('SELECT folder FROM session_cache WHERE sessionId = ?'),
   cacheGetSession: db.prepare('SELECT * FROM session_cache WHERE sessionId = ?'),
   cacheDeleteSession: db.prepare('DELETE FROM session_cache WHERE sessionId = ?'),
-  cacheDeleteFolder: db.prepare('DELETE FROM session_cache WHERE folder = ?'),
+  cacheDeleteFolderAccount: db.prepare('DELETE FROM session_cache WHERE folder = ? AND accountId = ?'),
   // Cache meta statements
   metaGet: db.prepare('SELECT * FROM cache_meta WHERE folder = ?'),
   metaGetAll: db.prepare('SELECT * FROM cache_meta'),
@@ -233,30 +243,30 @@ function setArchived(sessionId, archived) {
 
 // --- Session cache functions ---
 
-function isCachePopulated() {
-  return stmts.cacheCount.get().cnt > 0;
+function isCachePopulated(accountId = 'default') {
+  return stmts.cacheCountByAccount.get(accountId).cnt > 0;
 }
 
-function getAllCached() {
-  return stmts.cacheGetAll.all();
+function getAllCached(accountId = 'default') {
+  return stmts.cacheGetByAccount.all(accountId);
 }
 
-const upsertCachedSessionsBatch = db.transaction((sessions) => {
+const upsertCachedSessionsBatch = db.transaction((sessions, accountId) => {
   for (const s of sessions) {
     stmts.cacheUpsert.run(
       s.sessionId, s.folder, s.projectPath, s.summary,
       s.firstPrompt, s.created, s.modified, s.messageCount || 0,
-      s.slug || null, s.aiTitle || null
+      s.slug || null, s.aiTitle || null, accountId
     );
   }
 });
 
-function upsertCachedSessions(sessions) {
-  upsertCachedSessionsBatch(sessions);
+function upsertCachedSessions(sessions, accountId = 'default') {
+  upsertCachedSessionsBatch(sessions, accountId);
 }
 
-function getCachedByFolder(folder) {
-  return stmts.cacheGetByFolder.all(folder);
+function getCachedByFolder(folder, accountId = 'default') {
+  return stmts.cacheGetByFolder.all(folder, accountId);
 }
 
 function getCachedFolder(sessionId) {
@@ -272,8 +282,8 @@ function deleteCachedSession(sessionId) {
   stmts.cacheDeleteSession.run(sessionId);
 }
 
-function deleteCachedFolder(folder) {
-  stmts.cacheDeleteFolder.run(folder);
+function deleteCachedFolder(folder, accountId = 'default') {
+  stmts.cacheDeleteFolderAccount.run(folder, accountId);
   stmts.metaDelete.run(folder);
 }
 

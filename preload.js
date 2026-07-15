@@ -26,6 +26,17 @@ contextBridge.exposeInMainWorld('api', {
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),
   setSetting: (key, value) => ipcRenderer.invoke('set-setting', key, value),
   deleteSetting: (key) => ipcRenderer.invoke('delete-setting', key),
+
+  // Multi-account
+  getAccounts: () => ipcRenderer.invoke('get-accounts'),
+  saveAccounts: (accounts) => ipcRenderer.invoke('save-accounts', accounts),
+  createAccount: (name) => ipcRenderer.invoke('create-account', name),
+  renameAccount: (id, name) => ipcRenderer.invoke('rename-account', id, name),
+  deleteAccount: (id) => ipcRenderer.invoke('delete-account', id),
+  getActiveAccountId: () => ipcRenderer.invoke('get-active-account-id'),
+  setActiveAccountId: (id) => ipcRenderer.invoke('set-active-account-id', id),
+  getAccountsUsage: () => ipcRenderer.invoke('get-accounts-usage'),
+  getHomedir: () => ipcRenderer.invoke('get-homedir'),
   getEffectiveSettings: (projectPath) => ipcRenderer.invoke('get-effective-settings', projectPath),
   getScheduleCreatorCommand: () => ipcRenderer.invoke('get-schedule-creator-command'),
   createScheduleSession: (projectPath) => ipcRenderer.invoke('create-schedule-session', projectPath),

@@ -46,3 +46,24 @@ function escapeHtml(str) {
 function shellEscape(path) {
   return "'" + path.replace(/'/g, "'\\''") + "'";
 }
+
+// Project avatar: deterministic color + initials from project path (like JetBrains)
+const PROJECT_AVATAR_COLORS = [
+  '#3B82F6', '#8B5CF6', '#EC4899', '#F59E0B', '#10B981',
+  '#F97316', '#06B6D4', '#EF4444', '#84CC16', '#6366F1',
+  '#14B8A6', '#F43F5E', '#A855F7', '#0EA5E9', '#22C55E',
+];
+
+function getProjectAvatar(projectPath) {
+  const name = (projectPath || '').split('/').filter(Boolean).pop() || '';
+  const parts = name
+    .replace(/[-_.]/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .split(/\s+/).filter(Boolean);
+  const initials = parts.length >= 2
+    ? (parts[0][0] + parts[1][0]).toUpperCase()
+    : name.slice(0, 2).toUpperCase() || '?';
+  let h = 5381;
+  for (let i = 0; i < name.length; i++) h = ((h << 5) + h) ^ name.charCodeAt(i);
+  return { initials, color: PROJECT_AVATAR_COLORS[Math.abs(h) % PROJECT_AVATAR_COLORS.length] };
+}

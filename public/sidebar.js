@@ -58,7 +58,7 @@ function buildSlugGroup(slug, sessions) {
 
   const archiveSlugBtn = document.createElement('button');
   archiveSlugBtn.className = 'slug-group-archive-btn';
-  archiveSlugBtn.title = 'Archive all sessions in group';
+  archiveSlugBtn.dataset.tooltip = 'Archive all sessions in group';
   archiveSlugBtn.innerHTML = ICONS.archive(14);
 
   info.appendChild(nameEl);
@@ -285,30 +285,40 @@ function renderProjects(projects, resort) {
     header.className = 'project-header';
     header.id = 'ph-' + fId;
     const shortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
-    header.innerHTML = `<span class="arrow">&#9660;</span> <span class="project-name">${shortName}</span>`;
+    header.innerHTML = `<span class="arrow">&#9660;</span>`;
+    const { initials: hdrI, color: hdrC } = getProjectAvatar(project.projectPath);
+    const hdrAvatar = document.createElement('span');
+    hdrAvatar.className = 'project-header-avatar';
+    hdrAvatar.textContent = hdrI;
+    hdrAvatar.style.background = hdrC;
+    const hdrName = document.createElement('span');
+    hdrName.className = 'project-name';
+    hdrName.textContent = shortName;
+    header.appendChild(hdrAvatar);
+    header.appendChild(hdrName);
 
     const scheduleBtn = document.createElement('button');
     scheduleBtn.className = 'project-schedule-btn';
-    scheduleBtn.title = 'Create scheduled task';
+    scheduleBtn.dataset.tooltip = 'Create scheduled task';
     scheduleBtn.innerHTML = ICONS.schedule(16);
     header.appendChild(scheduleBtn);
 
     const settingsBtn = document.createElement('button');
     settingsBtn.className = 'project-settings-btn';
-    settingsBtn.title = 'Project settings';
+    settingsBtn.dataset.tooltip = 'Project settings';
     settingsBtn.innerHTML = ICONS.gear(16);
     header.appendChild(settingsBtn);
 
     const archiveGroupBtn = document.createElement('button');
     archiveGroupBtn.className = 'project-archive-btn';
-    archiveGroupBtn.title = 'Archive all sessions';
+    archiveGroupBtn.dataset.tooltip = 'Archive all sessions';
     archiveGroupBtn.innerHTML = ICONS.archive(18);
     header.appendChild(archiveGroupBtn);
 
     const newBtn = document.createElement('button');
     newBtn.className = 'project-new-btn';
     newBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="6" y1="2" x2="6" y2="10"/><line x1="2" y1="6" x2="10" y2="6"/></svg>';
-    newBtn.title = 'New session';
+    newBtn.dataset.tooltip = 'New session';
     header.appendChild(newBtn);
 
     const sessionsList = buildSessionsList(fId, visible, older);
@@ -347,14 +357,14 @@ function renderProjects(projects, resort) {
 
       const wtHideBtn = document.createElement('button');
       wtHideBtn.className = 'worktree-hide-btn';
-      wtHideBtn.title = 'Hide worktree';
+      wtHideBtn.dataset.tooltip = 'Hide worktree';
       wtHideBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
       wtHeader.appendChild(wtHideBtn);
 
       const wtNewBtn = document.createElement('button');
       wtNewBtn.className = 'project-new-btn worktree-new-btn';
       wtNewBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="6" y1="2" x2="6" y2="10"/><line x1="2" y1="6" x2="10" y2="6"/></svg>';
-      wtNewBtn.title = 'New session in worktree';
+      wtNewBtn.dataset.tooltip = 'New session in worktree';
       wtHeader.appendChild(wtNewBtn);
 
       const wtSessionsList = buildSessionsList(wtFId, wtResult.visible, wtResult.older);
@@ -702,27 +712,27 @@ function buildSessionItem(session) {
 
   const stopBtn = document.createElement('button');
   stopBtn.className = 'session-stop-btn';
-  stopBtn.title = 'Stop session';
+  stopBtn.dataset.tooltip = 'Stop session';
   stopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>';
 
   const archiveBtn = document.createElement('button');
   archiveBtn.className = 'session-archive-btn';
-  archiveBtn.title = session.archived ? 'Unarchive' : 'Archive';
+  archiveBtn.dataset.tooltip = session.archived ? 'Unarchive' : 'Archive';
   archiveBtn.innerHTML = ICONS.archive(16);
 
   const forkBtn = document.createElement('button');
   forkBtn.className = 'session-fork-btn';
-  forkBtn.title = 'Fork session';
+  forkBtn.dataset.tooltip = 'Fork session';
   forkBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M8 3h-5v5"/><path d="M21 3l-7.536 7.536a5 5 0 0 0-1.464 3.534v6.93"/><path d="M3 3l7.536 7.536a5 5 0 0 1 1.464 3.534v.93"/></svg>';
 
   const jsonlBtn = document.createElement('button');
   jsonlBtn.className = 'session-jsonl-btn';
-  jsonlBtn.title = 'View messages';
+  jsonlBtn.dataset.tooltip = 'View messages';
   jsonlBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>';
 
   const launchConfigBtn = document.createElement('button');
   launchConfigBtn.className = 'session-launch-config-btn';
-  launchConfigBtn.title = 'Resume with config';
+  launchConfigBtn.dataset.tooltip = 'Resume with config';
   launchConfigBtn.innerHTML = ICONS.launchConfig(14);
 
   actions.appendChild(stopBtn);
