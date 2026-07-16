@@ -42,6 +42,7 @@ const settingsViewer = document.getElementById('settings-viewer');
 const globalSettingsBtn = document.getElementById('global-settings-btn');
 const addProjectBtn = document.getElementById('add-project-btn');
 const resortBtn = document.getElementById('resort-btn');
+const projectViewer = document.getElementById('project-viewer');
 const jsonlViewer = document.getElementById('jsonl-viewer');
 const jsonlViewerTitle = document.getElementById('jsonl-viewer-title');
 const jsonlViewerSessionId = document.getElementById('jsonl-viewer-session-id');
@@ -1055,8 +1056,15 @@ setTimeout(() => {
       currentThemeName = global.terminalTheme;
       TERMINAL_THEME = getTerminalTheme();
     }
+    if (global.showAvatars === false) {
+      document.body.classList.add('hide-avatars');
+    }
   }
 })();
+
+window._setShowAvatars = (val) => {
+  document.body.classList.toggle('hide-avatars', !val);
+};
 
 loadProjects().then(() => {
   // Restore grid view preference before opening sessions so they enter grid mode
@@ -1506,71 +1514,449 @@ function renderAccountsPanel() {
   accountsContent.appendChild(form);
 }
 
+let projectsSearchQuery = '';
+let projectsSortOrder = 'name'; // 'name' | 'changes'
+const projectInfoCache = new Map(); // persists across renders
+
+function openProjectViewer(project) {
+  hideAllViewers();
+  placeholder.style.display = 'none';
+  terminalArea.style.display = 'none';
+  projectViewer.style.display = 'flex';
+  projectViewer.innerHTML = '';
+
+  // Header
+  const hdr = document.createElement('div');
+  hdr.className = 'pv-header';
+  const { initials, color } = getProjectAvatar(project.projectPath);
+  const av = document.createElement('span');
+  av.className = 'pv-avatar';
+  av.textContent = initials;
+  av.style.background = color;
+  const titleWrap = document.createElement('div');
+  titleWrap.className = 'pv-title-wrap';
+  const nameEl = document.createElement('div');
+  nameEl.className = 'pv-name';
+  nameEl.textContent = project.projectPath.split('/').filter(Boolean).pop() || project.projectPath;
+  const pathEl = document.createElement('div');
+  pathEl.className = 'pv-path';
+  pathEl.textContent = project.projectPath;
+  titleWrap.appendChild(nameEl);
+  titleWrap.appendChild(pathEl);
+  const newBtn = document.createElement('button');
+  newBtn.className = 'pv-new-btn';
+  newBtn.textContent = '+ New session';
+  newBtn.onclick = () => showNewSessionPopover(project, newBtn);
+  hdr.appendChild(av);
+  hdr.appendChild(titleWrap);
+  hdr.appendChild(newBtn);
+  projectViewer.appendChild(hdr);
+
+  // Body
+  const body = document.createElement('div');
+  body.className = 'pv-body';
+  body.textContent = 'Loading…';
+  projectViewer.appendChild(body);
+
+  window.api.getProjectDetail(project.projectPath).then(detail => {
+    if (!detail) { body.textContent = 'Could not load project info.'; return; }
+    body.innerHTML = '';
+
+    // Git section
+    const gitSection = document.createElement('div');
+    gitSection.className = 'pv-section';
+    const gitTitle = document.createElement('div');
+    gitTitle.className = 'pv-section-title';
+    gitTitle.textContent = 'Git';
+    gitSection.appendChild(gitTitle);
+
+    if (detail.branch) {
+      const branchRow = document.createElement('div');
+      branchRow.className = 'pv-branch';
+      branchRow.textContent = `⎇  ${detail.branch}`;
+      if (detail.totalAdded || detail.totalDeleted) {
+        const stats = document.createElement('span');
+        stats.className = 'pv-diff-stats';
+        if (detail.totalAdded) {
+          const a = document.createElement('span');
+          a.className = 'pv-added';
+          a.textContent = `+${detail.totalAdded}`;
+          stats.appendChild(a);
+        }
+        if (detail.totalDeleted) {
+          const d = document.createElement('span');
+          d.className = 'pv-deleted';
+          d.textContent = `−${detail.totalDeleted}`;
+          stats.appendChild(d);
+        }
+        branchRow.appendChild(stats);
+      }
+      gitSection.appendChild(branchRow);
+    }
+
+    if (detail.changedFiles.length) {
+      const filesTitle = document.createElement('div');
+      filesTitle.className = 'pv-subsection-title';
+      filesTitle.textContent = 'Uncommitted changes';
+      gitSection.appendChild(filesTitle);
+      const fileList = document.createElement('div');
+      fileList.className = 'pv-file-list';
+      for (const f of detail.changedFiles) {
+        const row = document.createElement('div');
+        row.className = 'pv-file-row';
+        const fname = document.createElement('span');
+        fname.className = 'pv-file-name';
+        fname.textContent = f.file;
+        fname.title = f.file;
+        const diff = document.createElement('span');
+        diff.className = 'pv-file-diff';
+        if (f.added) { const s = document.createElement('span'); s.className = 'pv-added'; s.textContent = `+${f.added}`; diff.appendChild(s); }
+        if (f.deleted) { const s = document.createElement('span'); s.className = 'pv-deleted'; s.textContent = `−${f.deleted}`; diff.appendChild(s); }
+        row.appendChild(fname);
+        row.appendChild(diff);
+        fileList.appendChild(row);
+      }
+      gitSection.appendChild(fileList);
+    }
+
+    if (detail.commits.length) {
+      const commitsTitle = document.createElement('div');
+      commitsTitle.className = 'pv-subsection-title';
+      commitsTitle.textContent = 'Recent commits';
+      gitSection.appendChild(commitsTitle);
+      const commitList = document.createElement('div');
+      commitList.className = 'pv-commit-list';
+      for (const c of detail.commits) {
+        const row = document.createElement('div');
+        row.className = 'pv-commit-row';
+        const hash = document.createElement('span');
+        hash.className = 'pv-commit-hash';
+        hash.textContent = c.hash;
+        const msg = document.createElement('span');
+        msg.className = 'pv-commit-msg';
+        msg.textContent = c.message;
+        const date = document.createElement('span');
+        date.className = 'pv-commit-date';
+        date.textContent = c.date;
+        row.appendChild(hash);
+        row.appendChild(msg);
+        row.appendChild(date);
+        commitList.appendChild(row);
+      }
+      gitSection.appendChild(commitList);
+    }
+
+    if (!detail.branch && !detail.commits.length) {
+      const empty = document.createElement('div');
+      empty.className = 'pv-empty';
+      empty.textContent = 'Not a git repository.';
+      gitSection.appendChild(empty);
+    }
+
+    body.appendChild(gitSection);
+
+    // Docker section
+    if (detail.containers.length) {
+      const dockerSection = document.createElement('div');
+      dockerSection.className = 'pv-section';
+      const dockerTitle = document.createElement('div');
+      dockerTitle.className = 'pv-section-title';
+      dockerTitle.textContent = 'Docker Compose';
+      dockerSection.appendChild(dockerTitle);
+
+      const containerList = document.createElement('div');
+      containerList.className = 'pv-container-list';
+      for (const c of detail.containers) {
+        const row = document.createElement('div');
+        row.className = 'pv-container-row' + (c.state.includes('running') ? ' running' : '');
+        const nameEl = document.createElement('span');
+        nameEl.className = 'pv-container-name';
+        nameEl.textContent = c.name;
+        const stateEl = document.createElement('span');
+        stateEl.className = 'pv-container-state';
+        stateEl.textContent = c.status || c.state;
+        const portsEl = document.createElement('span');
+        portsEl.className = 'pv-container-ports';
+        portsEl.textContent = c.ports || '';
+        row.appendChild(nameEl);
+        row.appendChild(stateEl);
+        row.appendChild(portsEl);
+        containerList.appendChild(row);
+      }
+      dockerSection.appendChild(containerList);
+      body.appendChild(dockerSection);
+    }
+  }).catch(() => { body.textContent = 'Could not load project info.'; });
+}
+
 function renderProjectsPanel() {
   if (!projectsContent) return;
   projectsContent.innerHTML = '';
 
-  const projects = cachedAllProjects;
+  const allProjects = cachedAllProjects;
 
-  projectsContent.appendChild(makePanelHeader(`Projects (${projects.length})`, 'Add', () => showAddProjectDialog()));
+  projectsContent.appendChild(makePanelHeader(`Projects (${allProjects.length})`, 'Add', () => showAddProjectDialog()));
 
-  if (!projects.length) {
-    const empty = document.createElement('div');
-    empty.className = 'projects-empty-hint';
-    empty.textContent = 'No projects yet. Click Add to select a folder.';
-    projectsContent.appendChild(empty);
-    return;
-  }
+  // Search + sort row
+  const searchWrap = document.createElement('div');
+  searchWrap.className = 'projects-search-wrap';
 
-  for (const project of projects) {
-    const name = project.projectPath.split('/').filter(Boolean).pop() || project.projectPath;
-    const lastSession = project.sessions[0];
-    const lastActivity = lastSession ? formatDate(new Date(lastSession.modified)) : '—';
-    const { initials, color } = getProjectAvatar(project.projectPath);
+  const searchInput = document.createElement('input');
+  searchInput.className = 'projects-search-input';
+  searchInput.placeholder = 'Search projects…';
+  searchInput.value = projectsSearchQuery;
+  searchInput.addEventListener('input', () => {
+    projectsSearchQuery = searchInput.value;
+    renderProjectsList(searchInput.value);
+  });
 
-    const card = document.createElement('div');
-    card.className = 'project-card';
-
-    const avatarEl = document.createElement('span');
-    avatarEl.className = 'project-card-avatar';
-    avatarEl.textContent = initials;
-    avatarEl.style.background = color;
-
-    const info = document.createElement('div');
-    info.className = 'project-card-info';
-
-    const nameEl = document.createElement('div');
-    nameEl.className = 'project-card-name';
-    nameEl.textContent = name;
-
-    const pathEl = document.createElement('div');
-    pathEl.className = 'project-card-path';
-    pathEl.dataset.tooltip = project.projectPath;
-    pathEl.textContent = project.projectPath;
-
-    const metaEl = document.createElement('div');
-    metaEl.className = 'project-card-meta';
-    metaEl.textContent = `${project.sessions.length} session${project.sessions.length !== 1 ? 's' : ''} · ${lastActivity}`;
-
-    info.appendChild(nameEl);
-    info.appendChild(pathEl);
-    info.appendChild(metaEl);
-
-    const delBtn = document.createElement('button');
-    delBtn.className = 'project-card-del-btn';
-    delBtn.dataset.tooltip = 'Remove project';
-    delBtn.innerHTML = ICONS.trash(13);
-    delBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      if (!confirm(`Remove "${name}" from the project list?\n\nSession files are not deleted.`)) return;
-      await window.api.removeProject(project.projectPath);
+  const sortWrap = document.createElement('div');
+  sortWrap.className = 'projects-sort-wrap';
+  for (const [key, label] of [['name', 'Name'], ['changes', 'Changes']]) {
+    const btn = document.createElement('button');
+    btn.className = 'projects-sort-btn' + (projectsSortOrder === key ? ' active' : '');
+    btn.textContent = label;
+    btn.addEventListener('click', () => {
+      projectsSortOrder = key;
+      renderProjectsList(searchInput.value);
+      sortWrap.querySelectorAll('.projects-sort-btn').forEach(b => b.classList.toggle('active', b === btn));
     });
-
-    card.appendChild(avatarEl);
-    card.appendChild(info);
-    card.appendChild(delBtn);
-    projectsContent.appendChild(card);
+    sortWrap.appendChild(btn);
   }
+
+  searchWrap.appendChild(searchInput);
+  searchWrap.appendChild(sortWrap);
+  projectsContent.appendChild(searchWrap);
+
+  const listEl = document.createElement('div');
+  listEl.id = 'projects-list';
+  projectsContent.appendChild(listEl);
+
+  function renderInfoEl(infoEl, info) {
+    if (!info) return;
+    infoEl.innerHTML = '';
+    let hasContent = false;
+
+    // Merge branch info into the card's meta row
+    const card = infoEl.closest('.project-card');
+    const metaEl = card && card.querySelector('.project-card-meta');
+    if (metaEl) {
+      const base = metaEl.dataset.baseText || metaEl.textContent;
+      metaEl.dataset.baseText = base;
+      if (info.branch) {
+        metaEl.innerHTML = '';
+        metaEl.appendChild(document.createTextNode(base + ' · '));
+        const branchIcon = document.createElement('span');
+        branchIcon.className = 'project-env-branch-icon';
+        branchIcon.textContent = '⎇';
+        metaEl.appendChild(branchIcon);
+        metaEl.appendChild(document.createTextNode(' ' + info.branch));
+        if (info.added) {
+          const a = document.createElement('span');
+          a.className = 'project-env-added';
+          a.textContent = ` +${info.added}`;
+          metaEl.appendChild(a);
+        }
+        if (info.deleted) {
+          const d = document.createElement('span');
+          d.className = 'project-env-deleted';
+          d.textContent = ` −${info.deleted}`;
+          metaEl.appendChild(d);
+        }
+      } else {
+        metaEl.textContent = base;
+      }
+    }
+
+    if (info.containers && info.containers.length) {
+      hasContent = true;
+      const box = document.createElement('div');
+      box.className = 'project-env-containers-box';
+      const boxHdr = document.createElement('div');
+      boxHdr.className = 'project-env-containers-hdr';
+      boxHdr.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-4 0v2M8 7V5a2 2 0 0 0-4 0v2"/></svg> CONTAINERS · ${info.containers.length}`;
+      box.appendChild(boxHdr);
+      for (const c of info.containers) {
+        const row = document.createElement('div');
+        const isRunning = c.state.includes('running');
+        const isStarting = !isRunning && (c.state.includes('starting') || c.status?.toLowerCase().includes('starting'));
+        row.className = 'project-env-container-row';
+        const dot = document.createElement('span');
+        dot.className = 'project-env-dot' + (isRunning ? ' running' : isStarting ? ' starting' : '');
+        const uptime = parseContainerUptime(c.status);
+        const nameEl = document.createElement('span');
+        nameEl.className = 'project-env-cname';
+        nameEl.textContent = c.name;
+        const uptimeEl = document.createElement('span');
+        uptimeEl.className = 'project-env-cuptime';
+        uptimeEl.textContent = uptime || '';
+        row.appendChild(dot);
+        row.appendChild(nameEl);
+        row.appendChild(uptimeEl);
+        if (!isRunning && c.state && c.state !== 'exited') {
+          const badge = document.createElement('span');
+          badge.className = 'project-env-cbadge' + (isStarting ? ' starting' : '');
+          badge.textContent = c.state;
+          row.appendChild(badge);
+        }
+        box.appendChild(row);
+      }
+      infoEl.appendChild(box);
+    }
+    const hasBranch = !!(info.branch || (metaEl && info.branch));
+    if (hasBranch || hasContent) infoEl.classList.add('loaded');
+  }
+
+  // Background queue: fetch git+docker info one project at a time
+  let infoQueueAborted = false;
+  async function runInfoQueue(projects) {
+    for (const project of projects) {
+      if (infoQueueAborted) break;
+      const infoEl = listEl.querySelector(`[data-project-info="${CSS.escape(project.projectPath)}"]`);
+      if (!infoEl) continue;
+      // Show cached immediately (no flash)
+      const prev = projectInfoCache.get(project.projectPath);
+      if (prev) renderInfoEl(infoEl, prev);
+      try {
+        const info = await window.api.getProjectInfo(project.projectPath);
+        if (infoQueueAborted) break;
+        if (!info) continue;
+        projectInfoCache.set(project.projectPath, info);
+        renderInfoEl(infoEl, info);
+      } catch {}
+    }
+  }
+
+  function renderProjectsList(query) {
+    infoQueueAborted = true; // cancel previous queue if re-rendering
+    listEl.innerHTML = '';
+    infoQueueAborted = false;
+
+    const q = query.trim().toLowerCase();
+    let filtered = q
+      ? allProjects.filter(p => {
+          const name = p.projectPath.split('/').filter(Boolean).pop() || '';
+          return name.toLowerCase().includes(q) || p.projectPath.toLowerCase().includes(q);
+        })
+      : [...allProjects];
+
+    if (projectsSortOrder === 'name') {
+      filtered.sort((a, b) => {
+        const na = a.projectPath.split('/').filter(Boolean).pop() || '';
+        const nb = b.projectPath.split('/').filter(Boolean).pop() || '';
+        return na.localeCompare(nb);
+      });
+    } else if (projectsSortOrder === 'changes') {
+      filtered.sort((a, b) => {
+        const ia = projectInfoCache.get(a.projectPath);
+        const ib = projectInfoCache.get(b.projectPath);
+        const sa = (ia?.added || 0) + (ia?.deleted || 0);
+        const sb = (ib?.added || 0) + (ib?.deleted || 0);
+        return sb - sa;
+      });
+    }
+
+    if (!filtered.length) {
+      const empty = document.createElement('div');
+      empty.className = 'projects-empty-hint';
+      empty.textContent = q ? 'No matching projects.' : 'No projects yet. Click Add to select a folder.';
+      listEl.appendChild(empty);
+      return;
+    }
+
+    for (const project of filtered) {
+      const name = project.projectPath.split('/').filter(Boolean).pop() || project.projectPath;
+      const lastSession = project.sessions[0];
+      const lastActivity = lastSession ? formatDate(new Date(lastSession.modified)) : '—';
+      const sessionCount = project.sessions.length;
+      const { initials, color } = getProjectAvatar(project.projectPath);
+
+      const card = document.createElement('div');
+      card.className = 'project-card';
+
+      // Header row: avatar + text + actions
+      const cardHeader = document.createElement('div');
+      cardHeader.className = 'project-card-header';
+
+      const avatarEl = document.createElement('span');
+      avatarEl.className = 'project-card-avatar';
+      avatarEl.textContent = initials;
+      avatarEl.style.background = color;
+
+      const info = document.createElement('div');
+      info.className = 'project-card-info';
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'project-card-name';
+      nameEl.textContent = name;
+
+      const pathEl = document.createElement('div');
+      pathEl.className = 'project-card-path';
+      pathEl.dataset.tooltip = project.projectPath;
+      pathEl.textContent = project.projectPath;
+
+      const metaEl = document.createElement('div');
+      metaEl.className = 'project-card-meta';
+      metaEl.dataset.baseText = `${sessionCount} session${sessionCount !== 1 ? 's' : ''} · ${lastActivity}`;
+      metaEl.textContent = metaEl.dataset.baseText;
+
+      info.appendChild(nameEl);
+      info.appendChild(pathEl);
+      info.appendChild(metaEl);
+
+      const cardActions = document.createElement('div');
+      cardActions.className = 'project-card-actions';
+
+      const newBtn = document.createElement('button');
+      newBtn.className = 'project-card-new-btn';
+      newBtn.dataset.tooltip = 'New session';
+      newBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="6" y1="1" x2="6" y2="11"/><line x1="1" y1="6" x2="11" y2="6"/></svg>';
+      newBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        showNewSessionPopover(project, newBtn);
+      });
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'project-card-del-btn';
+      delBtn.dataset.tooltip = 'Remove project';
+      delBtn.innerHTML = ICONS.trash(13);
+      delBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm(`Remove "${name}" from the project list?\n\nSession files are not deleted.`)) return;
+        await window.api.removeProject(project.projectPath);
+      });
+
+      cardActions.appendChild(newBtn);
+      cardActions.appendChild(delBtn);
+
+      cardHeader.appendChild(avatarEl);
+      cardHeader.appendChild(info);
+      cardHeader.appendChild(cardActions);
+
+      // Env area spans full card width below header
+      const infoEl = document.createElement('div');
+      infoEl.className = 'project-card-env';
+      infoEl.dataset.projectInfo = project.projectPath;
+      infoEl.dataset.metaRef = project.projectPath; // used to find metaEl
+
+      card.appendChild(cardHeader);
+      card.appendChild(infoEl);
+
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('.project-card-actions')) return;
+        listEl.querySelectorAll('.project-card.selected').forEach(c => c.classList.remove('selected'));
+        card.classList.add('selected');
+        openProjectViewer(project);
+      });
+
+      listEl.appendChild(card);
+    }
+
+    // Start background info loading
+    runInfoQueue(filtered);
+  }
+
+  renderProjectsList(projectsSearchQuery);
 }
 
 async function refreshAccountUsage() {

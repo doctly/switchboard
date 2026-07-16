@@ -67,3 +67,17 @@ function getProjectAvatar(projectPath) {
   for (let i = 0; i < name.length; i++) h = ((h << 5) + h) ^ name.charCodeAt(i);
   return { initials, color: PROJECT_AVATAR_COLORS[Math.abs(h) % PROJECT_AVATAR_COLORS.length] };
 }
+
+function parseContainerUptime(status) {
+  if (!status) return '';
+  const m = status.match(/up (.+)/i);
+  if (!m) return '';
+  return m[1].trim()
+    .replace(/About /, '')
+    .replace(/(\d+) hours?/, '$1h')
+    .replace(/(\d+) minutes?/, '$1m')
+    .replace(/(\d+) seconds?/, '$1s')
+    .replace(/(\d+) days?/, '$1d')
+    .replace(/(\d+) weeks?/, '$1w')
+    .replace(/(\d+) months?/, '$1mo');
+}

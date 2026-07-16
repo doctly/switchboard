@@ -74,6 +74,7 @@
     const themeValue = fieldValue('terminalTheme', 'switchboard');
     const mcpEmulationValue = fieldValue('mcpEmulation', true);
     const shellProfileValue = fieldValue('shellProfile', 'auto');
+    const showAvatarsValue = fieldValue('showAvatars', true);
 
     // Discover available shell profiles
     let shellProfiles = [];
@@ -234,6 +235,16 @@
             <label class="settings-toggle"><input type="checkbox" id="sv-mcp-emulation" ${mcpEmulationValue ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
           </div>
         </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <span class="settings-label">Show Avatars</span>
+            <div class="settings-description">Show project initials avatars on session groups and grid cards</div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" id="sv-show-avatars" ${showAvatarsValue ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>
       </div>` : ''}
 
       ${!isProject ? `<div class="settings-section">
@@ -306,6 +317,7 @@
         settings.terminalTheme = settingsViewerBody.querySelector('#sv-terminal-theme').value || 'switchboard';
         settings.mcpEmulation = settingsViewerBody.querySelector('#sv-mcp-emulation').checked;
         settings.shellProfile = settingsViewerBody.querySelector('#sv-shell-profile').value || 'auto';
+        settings.showAvatars = settingsViewerBody.querySelector('#sv-show-avatars').checked;
       }
 
       // Merge form values into existing settings to preserve keys not managed by the form
@@ -326,6 +338,9 @@
         }
         if (settings.terminalTheme && typeof window._applyTerminalTheme === 'function') {
           window._applyTerminalTheme(settings.terminalTheme);
+        }
+        if (typeof window._setShowAvatars === 'function') {
+          window._setShowAvatars(settings.showAvatars);
         }
         if (typeof refreshSidebar === 'function') refreshSidebar();
       }

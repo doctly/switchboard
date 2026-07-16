@@ -1193,25 +1193,31 @@ body { display: flex; flex-direction: column; }
 
 /* ---- Pin ---- */
 .session-pin {
-  flex-shrink: 0;
   cursor: pointer;
-  font-size: 13px;
-  line-height: 1.5;
-  color: #7a7a96;
+  background: none;
+  border: none;
+  padding: 4px;
+  line-height: 1;
+  color: #5a5a7a;
   transition: all 0.15s;
   user-select: none;
   display: flex;
   align-items: center;
-  margin-top: 5px;
+  justify-content: center;
+  border-radius: 5px;
+  flex-shrink: 0;
 }
 
 .session-pin:hover {
   color: #f5be3c;
-  transform: scale(1.15);
 }
 
 .session-pin.pinned {
   color: #f5be3c;
+}
+
+.session-item.is-pinned {
+  border-left: 2px solid rgba(245, 190, 60, 0.45);
 }
 
 /* ---- Running dot ---- */
@@ -1296,11 +1302,10 @@ body { display: flex; flex-direction: column; }
   box-shadow: 0 0 0 3px rgba(120,130,255,0.08);
 }
 
-.session-id {
+.session-subtitle {
   font-size: 10px;
-  color: #707088;
+  color: rgba(255,255,255,0.3);
   margin-top: 2px;
-  font-family: 'SF Mono', 'Fira Code', Menlo, monospace;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3290,38 +3295,6 @@ body { display: flex; flex-direction: column; }
   color: #8088ff;
 }
 
-/* Project header schedule button */
-.project-schedule-btn {
-  background: transparent;
-  border: none;
-  color: #7a7a90;
-  font-size: 16px;
-  width: 20px;
-  height: 20px;
-  border-radius: 5px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  line-height: 0;
-  transition: all 0.15s;
-  opacity: 0.7;
-}
-
-.project-schedule-btn svg {
-  display: block;
-}
-
-.project-header:hover .project-schedule-btn {
-  opacity: 1;
-}
-
-.project-schedule-btn:hover {
-  background: rgba(255,180,50,0.1);
-  color: #e0a030;
-}
-
 /* Project header gear button */
 .project-settings-btn {
   background: transparent;
@@ -4206,36 +4179,103 @@ body { display: flex; flex-direction: column; }
   opacity: 0.88;
 }
 
+body.hide-avatars .project-header-avatar { display: none; }
+body.hide-avatars .grid-card-avatar {
+  font-size: 0;
+  background: transparent !important;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
 /* ===== Projects management panel ===== */
-.project-card {
+.projects-search-wrap {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
+  gap: 6px;
+  padding: 6px 0 8px;
+}
+
+.projects-search-input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.08);
   border-radius: 6px;
-  margin: 0 -6px 1px;
+  color: #ccc;
+  font-size: 12px;
+  padding: 5px 9px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.projects-search-input::placeholder { color: #4a4a68; }
+.projects-search-input:focus { border-color: rgba(255,255,255,0.18); }
+
+.projects-sort-wrap {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.projects-sort-btn {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 5px;
+  color: #5a5a7a;
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+}
+
+.projects-sort-btn:hover { color: #aaa; border-color: rgba(255,255,255,0.14); }
+.projects-sort-btn.active { color: #ccc; background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.16); }
+
+.project-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  margin: 0 0 8px;
   cursor: default;
-  transition: background 0.12s;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07);
+  transition: background 0.12s, border-color 0.12s;
 }
 
 .project-card:hover {
   background: rgba(255,255,255,0.05);
+  border-color: rgba(255,255,255,0.1);
+}
+
+.project-card.selected {
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.14);
+}
+
+.project-card-header {
+  display: flex;
+  align-items: center;
+  gap: 11px;
 }
 
 .project-card-avatar {
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 9.5px;
+  font-size: 10px;
   font-weight: 700;
   color: white;
   flex-shrink: 0;
   letter-spacing: 0.04em;
   user-select: none;
-  opacity: 0.88;
 }
 
 .project-card-info {
@@ -4244,32 +4284,151 @@ body { display: flex; flex-direction: column; }
 }
 
 .project-card-name {
-  font-size: 12px;
-  font-weight: 500;
-  color: #e2e2e8;
+  font-size: 15px;
+  font-weight: 600;
+  color: #e6e6ee;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .project-card-path {
-  font-size: 10px;
-  color: rgba(255,255,255,0.28);
+  font-size: 10.5px;
+  font-family: monospace;
+  color: rgba(255,255,255,0.3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-top: 1px;
+  margin-top: 2px;
   cursor: default;
 }
 
 .project-card-meta {
+  font-size: 11px;
+  color: rgba(255,255,255,0.4);
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-env-branch-icon {
+  color: rgba(255,255,255,0.55);
+}
+
+.project-card-env {
   font-size: 10px;
+  color: rgba(255,255,255,0.28);
+  font-variant-numeric: tabular-nums;
+}
+
+.project-card-env.loaded {
+  color: rgba(255,255,255,0.45);
+}
+
+
+.project-env-added {
+  color: #4ade80;
+}
+
+.project-env-deleted {
+  color: #f87171;
+}
+
+.project-env-containers-box {
+  margin-top: 10px;
+  background: rgba(0,0,0,0.22);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 8px;
+  padding: 8px 11px 7px;
+}
+
+.project-env-containers-hdr {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  color: rgba(255,255,255,0.28);
+  text-transform: uppercase;
+  margin-bottom: 7px;
+}
+
+.project-env-container-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2.5px 0;
+  font-size: 11px;
+}
+
+.project-env-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: rgba(255,255,255,0.15);
+}
+
+.project-env-dot.running { background: #4ade80; }
+.project-env-dot.starting { background: #f59e0b; }
+
+.project-env-cname {
+  font-weight: 600;
+  color: rgba(255,255,255,0.75);
+}
+
+.project-env-cuptime {
+  font-size: 10.5px;
   color: rgba(255,255,255,0.38);
-  margin-top: 1px;
+}
+
+.project-env-cbadge {
+  font-size: 10px;
+  color: rgba(255,255,255,0.35);
+  background: rgba(255,255,255,0.06);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.project-env-cbadge.starting {
+  color: #f59e0b;
+  background: rgba(245,158,11,0.1);
+}
+
+.project-card-actions {
+  display: flex;
+  flex-direction: row;
+  gap: 2px;
+  flex-shrink: 0;
+  align-self: flex-start;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.project-card:hover .project-card-actions {
+  opacity: 1;
+}
+
+.project-card-new-btn {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.5);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  line-height: 0;
+  transition: background 0.12s, color 0.12s;
+  flex-shrink: 0;
+}
+
+.project-card-new-btn:hover {
+  background: rgba(59,130,246,0.15);
+  color: #3b82f6;
 }
 
 .project-card-del-btn {
-  opacity: 0;
   background: none;
   border: none;
   color: rgba(255,255,255,0.4);
@@ -4277,12 +4436,8 @@ body { display: flex; flex-direction: column; }
   padding: 4px;
   border-radius: 4px;
   line-height: 0;
-  transition: opacity 0.12s, background 0.12s, color 0.12s;
+  transition: background 0.12s, color 0.12s;
   flex-shrink: 0;
-}
-
-.project-card:hover .project-card-del-btn {
-  opacity: 1;
 }
 
 .project-card-del-btn:hover {
@@ -4296,6 +4451,263 @@ body { display: flex; flex-direction: column; }
   color: rgba(255,255,255,0.32);
   line-height: 1.6;
   text-align: center;
+}
+
+
+/* ── Project Viewer Panel ── */
+
+#project-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--main-bg, #13131e);
+}
+
+.pv-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  flex-shrink: 0;
+}
+
+.pv-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  flex-shrink: 0;
+  letter-spacing: 0.5px;
+}
+
+.pv-title-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.pv-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.88);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pv-path {
+  font-size: 11px;
+  color: rgba(255,255,255,0.3);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pv-new-btn {
+  background: rgba(59,130,246,0.12);
+  border: 1px solid rgba(59,130,246,0.25);
+  border-radius: 6px;
+  color: #60a5fa;
+  font-size: 12px;
+  padding: 5px 11px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.pv-new-btn:hover {
+  background: rgba(59,130,246,0.22);
+  border-color: rgba(59,130,246,0.45);
+}
+
+.pv-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px 20px;
+}
+
+.pv-section {
+  margin-bottom: 20px;
+}
+
+.pv-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255,255,255,0.3);
+  margin-bottom: 8px;
+}
+
+.pv-subsection-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.45);
+  margin: 12px 0 6px;
+}
+
+.pv-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: rgba(255,255,255,0.65);
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 5px;
+  padding: 3px 8px;
+  margin-bottom: 10px;
+}
+
+.pv-diff-stats {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+.pv-added { color: #4ade80; }
+.pv-deleted { color: #f87171; }
+
+.pv-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pv-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+
+.pv-file-name {
+  font-size: 11.5px;
+  color: rgba(255,255,255,0.6);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pv-file-diff {
+  font-size: 11px;
+  color: rgba(255,255,255,0.3);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.pv-file-diff .pv-added { color: #4ade80; }
+.pv-file-diff .pv-deleted { color: #f87171; }
+
+.pv-commit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.pv-commit-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+
+.pv-commit-hash {
+  font-size: 11px;
+  color: rgba(255,255,255,0.3);
+  font-family: monospace;
+  flex-shrink: 0;
+}
+
+.pv-commit-msg {
+  font-size: 12px;
+  color: rgba(255,255,255,0.65);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.pv-commit-date {
+  font-size: 11px;
+  color: rgba(255,255,255,0.25);
+  flex-shrink: 0;
+}
+
+.pv-container-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pv-container-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+.pv-container-row.running {
+  border-color: rgba(96,165,250,0.2);
+  background: rgba(96,165,250,0.05);
+}
+
+.pv-container-name {
+  font-size: 12px;
+  color: rgba(255,255,255,0.7);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pv-container-row.running .pv-container-name {
+  color: #93c5fd;
+}
+
+.pv-container-state {
+  font-size: 11px;
+  color: rgba(255,255,255,0.3);
+  flex-shrink: 0;
+}
+
+.pv-container-row.running .pv-container-state {
+  color: #60a5fa;
+}
+
+.pv-container-ports {
+  font-size: 10.5px;
+  color: rgba(255,255,255,0.25);
+  font-family: monospace;
+  flex-shrink: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pv-empty {
+  font-size: 12px;
+  color: rgba(255,255,255,0.25);
+  padding: 4px 0;
 }
 
 /* Custom tooltip */

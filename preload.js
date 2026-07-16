@@ -46,6 +46,8 @@ contextBridge.exposeInMainWorld('api', {
   browseFolder: () => ipcRenderer.invoke('browse-folder'),
   addProject: (projectPath) => ipcRenderer.invoke('add-project', projectPath),
   removeProject: (projectPath) => ipcRenderer.invoke('remove-project', projectPath),
+  getProjectInfo: (projectPath) => ipcRenderer.invoke('get-project-info', projectPath),
+  getProjectDetail: (projectPath) => ipcRenderer.invoke('get-project-detail', projectPath),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
 
   // Send (fire-and-forget)

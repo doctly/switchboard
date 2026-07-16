@@ -112,14 +112,15 @@ function refreshFolder(folder) {
     if (s) {
       sessionsToUpsert.push(s);
       // Title precedence: user rename (session_meta.name) > JSONL custom-title > JSONL ai-title.
-      // Only customTitle (Claude /title) promotes to session_meta.name — AI titles must NEVER
-      // be written there or they'd overwrite the user's UI rename on the next index pass.
-      const name = getMeta(s.sessionId)?.name || s.customTitle || s.aiTitle || '';
+      // Only customTitle (Claude /title) promotes to session_meta.name — AI titles stay in
+      // session_cache.aiTitle and are preserved once written (COALESCE in the upsert).
+      const existingName = getMeta(s.sessionId)?.name;
+      if (!existingName && s.customTitle) namesToSet.push({ id: s.sessionId, name: s.customTitle });
+      const name = existingName || s.customTitle || s.aiTitle || '';
       searchEntriesToUpsert.push({
         id: s.sessionId, type: 'session', folder: s.folder,
         title: (name ? name + ' ' : '') + s.summary, body: s.textContent,
       });
-      if (s.customTitle) namesToSet.push({ id: s.sessionId, name: s.customTitle });
     }
     changed = true;
   }

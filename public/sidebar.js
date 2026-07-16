@@ -162,7 +162,7 @@ function renderProjects(projects, resort) {
       });
     }
     const anyFilterActive = showStarredOnly || showRunningOnly || showTodayOnly || searchMatchIds !== null;
-    if (filtered.length === 0 && !project._projectMatchedOnly && (project.sessions.length > 0 || anyFilterActive)) return null;
+    if (filtered.length === 0 && !project._projectMatchedOnly) return null;
 
     // Sort
     filtered = [...filtered].sort((a, b) => {
@@ -296,12 +296,6 @@ function renderProjects(projects, resort) {
     hdrName.textContent = shortName;
     header.appendChild(hdrAvatar);
     header.appendChild(hdrName);
-
-    const scheduleBtn = document.createElement('button');
-    scheduleBtn.className = 'project-schedule-btn';
-    scheduleBtn.dataset.tooltip = 'Create scheduled task';
-    scheduleBtn.innerHTML = ICONS.schedule(16);
-    header.appendChild(scheduleBtn);
 
     const settingsBtn = document.createElement('button');
     settingsBtn.className = 'project-settings-btn';
@@ -456,10 +450,6 @@ function rebindSidebarEvents(projects) {
     if (newBtn) {
       newBtn.onclick = (e) => { e.stopPropagation(); showNewSessionPopover(project, newBtn); };
     }
-    const scheduleBtn = header.querySelector('.project-schedule-btn');
-    if (scheduleBtn) {
-      scheduleBtn.onclick = (e) => { e.stopPropagation(); launchScheduleCreator(project); };
-    }
     const settingsBtn = header.querySelector('.project-settings-btn');
     if (settingsBtn) {
       settingsBtn.onclick = (e) => { e.stopPropagation(); openSettingsViewer('project', project.projectPath); };
@@ -484,7 +474,7 @@ function rebindSidebarEvents(projects) {
       };
     }
     header.onclick = (e) => {
-      if (e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn') || e.target.closest('.project-schedule-btn')) return;
+      if (e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn')) return;
       header.classList.toggle('collapsed');
     };
   }
@@ -688,14 +678,6 @@ function buildSessionItem(session) {
   summaryEl.className = 'session-summary';
   summaryEl.textContent = displayName;
 
-  const idEl = document.createElement('div');
-  idEl.className = 'session-id';
-  idEl.textContent = session.sessionId;
-
-  const metaEl = document.createElement('div');
-  metaEl.className = 'session-meta';
-  metaEl.textContent = timeStr + (session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '');
-
   if (session.type === 'terminal') {
     const badge = document.createElement('span');
     badge.className = 'terminal-badge';
@@ -703,7 +685,18 @@ function buildSessionItem(session) {
     summaryEl.prepend(badge);
   }
   info.appendChild(summaryEl);
-  info.appendChild(idEl);
+
+  // Show aiTitle as subtitle when it's not already used as the display name
+  if (session.aiTitle && session.aiTitle !== displayName) {
+    const subtitleEl = document.createElement('div');
+    subtitleEl.className = 'session-subtitle';
+    subtitleEl.textContent = cleanDisplayName(session.aiTitle);
+    info.appendChild(subtitleEl);
+  }
+
+  const metaEl = document.createElement('div');
+  metaEl.className = 'session-meta';
+  metaEl.textContent = timeStr + (session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '');
   info.appendChild(metaEl);
 
   // Action buttons container
@@ -742,8 +735,10 @@ function buildSessionItem(session) {
     actions.appendChild(archiveBtn);
     actions.appendChild(launchConfigBtn);
   }
+  actions.appendChild(pin);
 
-  row.appendChild(pin);
+  if (session.starred) item.classList.add('is-pinned');
+
   row.appendChild(dot);
   row.appendChild(info);
   row.appendChild(actions);
@@ -756,7 +751,8 @@ function startRename(summaryEl, session) {
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'session-rename-input';
-  input.value = session.name || session.aiTitle || session.summary;
+  const currentDisplay = session.name || session.aiTitle || session.summary;
+  input.value = currentDisplay;
 
   summaryEl.replaceWith(input);
   input.focus();
@@ -764,14 +760,13 @@ function startRename(summaryEl, session) {
 
   const save = async () => {
     const newName = input.value.trim();
-    const fallback = session.aiTitle || session.summary;
-    const nameToSave = (newName && newName !== fallback) ? newName : null;
+    const nameToSave = newName || null;
     await window.api.renameSession(session.sessionId, nameToSave);
     session.name = nameToSave;
 
     const newSummary = document.createElement('div');
     newSummary.className = 'session-summary';
-    newSummary.textContent = nameToSave || fallback;
+    newSummary.textContent = nameToSave || session.summary;
     newSummary.addEventListener('dblclick', (e) => {
       e.stopPropagation();
       startRename(newSummary, session);
@@ -786,7 +781,7 @@ function startRename(summaryEl, session) {
       input.removeEventListener('blur', save);
       const restored = document.createElement('div');
       restored.className = 'session-summary';
-      restored.textContent = session.name || session.aiTitle || session.summary;
+      restored.textContent = currentDisplay;
       restored.addEventListener('dblclick', (ev) => {
         ev.stopPropagation();
         startRename(restored, session);

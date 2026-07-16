@@ -97,6 +97,7 @@ function hideAllViewers() {
   memoryViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
   jsonlViewer.style.display = 'none';
+  projectViewer.style.display = 'none';
   terminalArea.style.display = '';
 }
 

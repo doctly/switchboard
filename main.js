@@ -405,7 +405,116 @@ ipcMain.handle('remove-project', (_event, projectPath) => {
   }
 });
 
-// --- IPC: get-projects ---
+// --- IPC: get-project-info (git branch/diff + docker compose, cached 1 min in SQLite) ---
+const PROJECT_INFO_TTL_MS = 60 * 1000;
+
+function fetchProjectInfoSync(projectPath) {
+  const { execSync } = require('child_process');
+  const data = { branch: null, added: null, deleted: null, containers: null };
+  try {
+    data.branch = execSync('git rev-parse --abbrev-ref HEAD', {
+      cwd: projectPath, encoding: 'utf8', timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const stat = execSync('git diff --shortstat HEAD', {
+      cwd: projectPath, encoding: 'utf8', timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const addM = stat.match(/(\d+) insertion/);
+    const delM = stat.match(/(\d+) deletion/);
+    if (addM) data.added = parseInt(addM[1]);
+    if (delM) data.deleted = parseInt(delM[1]);
+  } catch {}
+  try {
+    const raw = execSync('docker compose ps --format json', {
+      cwd: projectPath, encoding: 'utf8', timeout: 8000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (raw) {
+      data.containers = raw.split('\n').filter(Boolean).map(line => {
+        try {
+          const c = JSON.parse(line);
+          return { name: c.Service || c.Name, state: (c.State || '').toLowerCase(), status: c.Status || '' };
+        } catch { return null; }
+      }).filter(Boolean);
+    }
+  } catch {}
+  return data;
+}
+
+ipcMain.handle('get-project-info', (_event, projectPath) => {
+  if (!projectPath || !fs.existsSync(projectPath)) return null;
+  const cacheKey = 'project-info:' + projectPath;
+  const cached = getSetting(cacheKey);
+  const fresh = cached && cached.fetchedAt && (Date.now() - cached.fetchedAt) < PROJECT_INFO_TTL_MS;
+  if (fresh) return cached.data;
+  // Stale: return old data immediately, refresh in background
+  if (cached && cached.data) {
+    setImmediate(() => {
+      const data = fetchProjectInfoSync(projectPath);
+      setSetting(cacheKey, { data, fetchedAt: Date.now() });
+    });
+    return cached.data;
+  }
+  // No cache yet: fetch synchronously (first visit)
+  const data = fetchProjectInfoSync(projectPath);
+  setSetting(cacheKey, { data, fetchedAt: Date.now() });
+  return data;
+});
+
+// --- IPC: get-project-detail (full git log + docker details, no cache) ---
+ipcMain.handle('get-project-detail', (_event, projectPath) => {
+  if (!projectPath || !fs.existsSync(projectPath)) return null;
+  const { execSync } = require('child_process');
+  const detail = { branch: null, commits: [], changedFiles: [], totalAdded: 0, totalDeleted: 0, containers: [] };
+  try {
+    detail.branch = execSync('git rev-parse --abbrev-ref HEAD', {
+      cwd: projectPath, encoding: 'utf8', timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const log = execSync('git log --format=%h\x1f%s\x1f%an\x1f%ar -15', {
+      cwd: projectPath, encoding: 'utf8', timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (log) {
+      detail.commits = log.split('\n').filter(Boolean).map(line => {
+        const [hash, message, author, date] = line.split('\x1f');
+        return { hash, message, author, date };
+      });
+    }
+    const numstat = execSync('git diff --numstat HEAD', {
+      cwd: projectPath, encoding: 'utf8', timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (numstat) {
+      detail.changedFiles = numstat.split('\n').filter(Boolean).map(line => {
+        const [added, deleted, file] = line.split('\t');
+        const a = parseInt(added) || 0;
+        const d = parseInt(deleted) || 0;
+        detail.totalAdded += a;
+        detail.totalDeleted += d;
+        return { file, added: a, deleted: d };
+      }).sort((a, b) => (b.added + b.deleted) - (a.added + a.deleted));
+    }
+  } catch {}
+  try {
+    const raw = execSync('docker compose ps --format json', {
+      cwd: projectPath, encoding: 'utf8', timeout: 8000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (raw) {
+      detail.containers = raw.split('\n').filter(Boolean).map(line => {
+        try {
+          const c = JSON.parse(line);
+          const ports = (c.Publishers || []).map(p => `${p.PublishedPort}→${p.TargetPort}/${p.Protocol}`).filter(p => !p.startsWith('0→')).join(', ');
+          return { name: c.Service || c.Name, state: (c.State || '').toLowerCase(), status: c.Status || '', ports };
+        } catch { return null; }
+      }).filter(Boolean);
+    }
+  } catch {}
+  return detail;
+});
+
 ipcMain.handle('open-external', (_event, url) => {
   log.info('[open-external IPC]', url);
   if (/^https?:\/\//i.test(url)) return shell.openExternal(url);
@@ -993,6 +1102,7 @@ const SETTING_DEFAULTS = {
   terminalTheme: 'switchboard',
   mcpEmulation: false,
   shellProfile: 'auto',
+  showAvatars: true,
 };
 
 ipcMain.handle('get-shell-profiles', () => {

@@ -169,7 +169,7 @@ const stmts = {
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
       created = excluded.created, modified = excluded.modified,
       messageCount = excluded.messageCount, slug = excluded.slug,
-      aiTitle = excluded.aiTitle, accountId = excluded.accountId
+      aiTitle = COALESCE(session_cache.aiTitle, excluded.aiTitle), accountId = excluded.accountId
   `),
   cacheGetByFolder: db.prepare('SELECT sessionId, modified FROM session_cache WHERE folder = ? AND accountId = ?'),
   cacheGetFolder: db.prepare('SELECT folder FROM session_cache WHERE sessionId = ?'),
