@@ -72,7 +72,8 @@
     "publish": {
       "provider": "github",
       "owner": "fortael",
-      "repo": "switchboard"
+      "repo": "switchboard",
+      "releaseType": "release"
     },
     "mac": {
       "target": [
