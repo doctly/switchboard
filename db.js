@@ -99,6 +99,42 @@ const migrations = [
     try { db.exec('DELETE FROM session_cache'); } catch {}
     try { db.exec('DELETE FROM cache_meta'); } catch {}
   },
+  // v4: Add accountId to session_cache for multi-account support. Clear cache
+  // so all sessions get re-indexed and tagged with accountId = 'default'.
+  (db) => {
+    try { db.exec("ALTER TABLE session_cache ADD COLUMN accountId TEXT NOT NULL DEFAULT 'default'"); } catch {}
+    try { db.exec('DELETE FROM session_cache'); } catch {}
+    try { db.exec('DELETE FROM cache_meta'); } catch {}
+    try { db.exec('DELETE FROM search_map'); } catch {}
+    try { db.exec('DROP TABLE IF EXISTS search_fts'); } catch {}
+    searchFtsRecreated = true;
+  },
+  // v5: Add project_git_cache for stale-while-revalidate git/docker info per project.
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS project_git_cache (
+        projectPath TEXT PRIMARY KEY,
+        branch TEXT,
+        unpushedCount INTEGER NOT NULL DEFAULT 0,
+        changedCount INTEGER NOT NULL DEFAULT 0,
+        totalAdded INTEGER NOT NULL DEFAULT 0,
+        totalDeleted INTEGER NOT NULL DEFAULT 0,
+        containers TEXT NOT NULL DEFAULT '[]',
+        unpushedCommits TEXT NOT NULL DEFAULT '[]',
+        changedFiles TEXT NOT NULL DEFAULT '[]',
+        commits TEXT NOT NULL DEFAULT '[]',
+        updatedAt REAL
+      )
+    `);
+  },
+  // v6: Add upstream, remoteUrl, tags columns to project_git_cache.
+  (db) => {
+    db.exec(`
+      ALTER TABLE project_git_cache ADD COLUMN upstream TEXT;
+      ALTER TABLE project_git_cache ADD COLUMN remoteUrl TEXT;
+      ALTER TABLE project_git_cache ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
+    `);
+  },
 ];
 
 const currentDbVersion = (() => {
@@ -149,23 +185,23 @@ const stmts = {
     ON CONFLICT(sessionId) DO UPDATE SET archived = excluded.archived
   `),
   // Session cache statements
-  cacheCount: db.prepare('SELECT COUNT(*) as cnt FROM session_cache'),
-  cacheGetAll: db.prepare('SELECT * FROM session_cache'),
+  cacheCountByAccount: db.prepare("SELECT COUNT(*) as cnt FROM session_cache WHERE accountId = ?"),
+  cacheGetByAccount: db.prepare('SELECT * FROM session_cache WHERE accountId = ?'),
   cacheUpsert: db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, accountId)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
       folder = excluded.folder, projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
       created = excluded.created, modified = excluded.modified,
       messageCount = excluded.messageCount, slug = excluded.slug,
-      aiTitle = excluded.aiTitle
+      aiTitle = COALESCE(session_cache.aiTitle, excluded.aiTitle), accountId = excluded.accountId
   `),
-  cacheGetByFolder: db.prepare('SELECT sessionId, modified FROM session_cache WHERE folder = ?'),
+  cacheGetByFolder: db.prepare('SELECT sessionId, modified FROM session_cache WHERE folder = ? AND accountId = ?'),
   cacheGetFolder: db.prepare('SELECT folder FROM session_cache WHERE sessionId = ?'),
   cacheGetSession: db.prepare('SELECT * FROM session_cache WHERE sessionId = ?'),
   cacheDeleteSession: db.prepare('DELETE FROM session_cache WHERE sessionId = ?'),
-  cacheDeleteFolder: db.prepare('DELETE FROM session_cache WHERE folder = ?'),
+  cacheDeleteFolderAccount: db.prepare('DELETE FROM session_cache WHERE folder = ? AND accountId = ?'),
   // Cache meta statements
   metaGet: db.prepare('SELECT * FROM cache_meta WHERE folder = ?'),
   metaGetAll: db.prepare('SELECT * FROM cache_meta'),
@@ -233,30 +269,30 @@ function setArchived(sessionId, archived) {
 
 // --- Session cache functions ---
 
-function isCachePopulated() {
-  return stmts.cacheCount.get().cnt > 0;
+function isCachePopulated(accountId = 'default') {
+  return stmts.cacheCountByAccount.get(accountId).cnt > 0;
 }
 
-function getAllCached() {
-  return stmts.cacheGetAll.all();
+function getAllCached(accountId = 'default') {
+  return stmts.cacheGetByAccount.all(accountId);
 }
 
-const upsertCachedSessionsBatch = db.transaction((sessions) => {
+const upsertCachedSessionsBatch = db.transaction((sessions, accountId) => {
   for (const s of sessions) {
     stmts.cacheUpsert.run(
       s.sessionId, s.folder, s.projectPath, s.summary,
       s.firstPrompt, s.created, s.modified, s.messageCount || 0,
-      s.slug || null, s.aiTitle || null
+      s.slug || null, s.aiTitle || null, accountId
     );
   }
 });
 
-function upsertCachedSessions(sessions) {
-  upsertCachedSessionsBatch(sessions);
+function upsertCachedSessions(sessions, accountId = 'default') {
+  upsertCachedSessionsBatch(sessions, accountId);
 }
 
-function getCachedByFolder(folder) {
-  return stmts.cacheGetByFolder.all(folder);
+function getCachedByFolder(folder, accountId = 'default') {
+  return stmts.cacheGetByFolder.all(folder, accountId);
 }
 
 function getCachedFolder(sessionId) {
@@ -272,8 +308,8 @@ function deleteCachedSession(sessionId) {
   stmts.cacheDeleteSession.run(sessionId);
 }
 
-function deleteCachedFolder(folder) {
-  stmts.cacheDeleteFolder.run(folder);
+function deleteCachedFolder(folder, accountId = 'default') {
+  stmts.cacheDeleteFolderAccount.run(folder, accountId);
   stmts.metaDelete.run(folder);
 }
 
@@ -354,6 +390,77 @@ function isSearchIndexPopulated() {
   return row.cnt > 0;
 }
 
+// --- Project git cache ---
+
+// Lazy-initialized so the table is guaranteed to exist (migration runs first).
+let _pgc = null;
+function pgc() {
+  if (_pgc) return _pgc;
+  _pgc = {
+    get: db.prepare('SELECT * FROM project_git_cache WHERE projectPath = ?'),
+    getAll: db.prepare('SELECT projectPath, unpushedCount, changedCount FROM project_git_cache'),
+    upsert: db.prepare(`
+      INSERT INTO project_git_cache
+        (projectPath, branch, upstream, remoteUrl, tags, unpushedCount, changedCount, totalAdded, totalDeleted, containers, unpushedCommits, changedFiles, commits, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(projectPath) DO UPDATE SET
+        branch = excluded.branch,
+        upstream = excluded.upstream,
+        remoteUrl = excluded.remoteUrl,
+        tags = excluded.tags,
+        unpushedCount = excluded.unpushedCount,
+        changedCount = excluded.changedCount,
+        totalAdded = excluded.totalAdded,
+        totalDeleted = excluded.totalDeleted,
+        containers = excluded.containers,
+        unpushedCommits = excluded.unpushedCommits,
+        changedFiles = excluded.changedFiles,
+        commits = excluded.commits,
+        updatedAt = excluded.updatedAt
+    `),
+  };
+  return _pgc;
+}
+
+function getProjectGitCache(projectPath) {
+  const row = pgc().get.get(projectPath);
+  if (!row) return null;
+  return {
+    ...row,
+    tags: JSON.parse(row.tags || '[]'),
+    containers: JSON.parse(row.containers || '[]'),
+    unpushedCommits: JSON.parse(row.unpushedCommits || '[]'),
+    changedFiles: JSON.parse(row.changedFiles || '[]'),
+    commits: JSON.parse(row.commits || '[]'),
+  };
+}
+
+function setProjectGitCache(projectPath, data) {
+  pgc().upsert.run(
+    projectPath,
+    data.branch || null,
+    data.upstream || null,
+    data.remoteUrl || null,
+    JSON.stringify(data.tags || []),
+    data.unpushedCommits?.length || 0,
+    data.changedFiles?.length || 0,
+    data.totalAdded || 0,
+    data.totalDeleted || 0,
+    JSON.stringify(data.containers || []),
+    JSON.stringify(data.unpushedCommits || []),
+    JSON.stringify(data.changedFiles || []),
+    JSON.stringify(data.commits || []),
+    Date.now(),
+  );
+}
+
+function getAllProjectGitCounts() {
+  const rows = pgc().getAll.all();
+  const map = new Map();
+  for (const r of rows) map.set(r.projectPath, { unpushedCount: r.unpushedCount, changedCount: r.changedCount });
+  return map;
+}
+
 // --- Settings functions ---
 
 function getSetting(key) {
@@ -379,6 +486,7 @@ module.exports = {
   isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, upsertCachedSessions,
   deleteCachedSession, deleteCachedFolder,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
+  getProjectGitCache, setProjectGitCache, getAllProjectGitCounts,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting,

@@ -4,8 +4,8 @@
 //
 // Depends on globals from app.js: openSessions, activeSessionId, sessionMap, activePtyIds,
 // sortedOrder, sidebarContent, terminalsEl, gridViewActive, gridViewer, gridViewerCount,
-// placeholder, terminalHeader, planViewer, statsViewer, memoryViewer, settingsViewer,
-// jsonlViewer, terminalArea, cachedProjects, isMac
+// placeholder, terminalHeader, planViewer, memoryViewer, terminalArea, cachedProjects, isMac
+// Vue-managed panels (stats, jsonl, settings) are hidden via window.vueStore
 // Depends on: cleanDisplayName, formatDate (utils.js), fitAndScroll, showSession (terminal-manager.js)
 
 let gridCards = new Map(); // sessionId → card wrapper element
@@ -19,56 +19,24 @@ function wrapInGridCard(sessionId) {
   const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary) || sessionId;
   const shortProject = session.projectPath ? session.projectPath.split('/').filter(Boolean).slice(-2).join('/') : '';
 
-  // Create card wrapper
   const card = document.createElement('div');
   card.className = 'grid-card';
   card.dataset.sessionId = sessionId;
 
-  // Header
   const header = document.createElement('div');
   header.className = 'grid-card-header';
-  const dot = document.createElement('span');
-  dot.className = 'grid-card-dot';
-  header.appendChild(dot);
-  const name = document.createElement('span');
-  name.className = 'grid-card-name';
-  name.textContent = displayName;
-  header.appendChild(name);
-  const project = document.createElement('span');
-  project.className = 'grid-card-project';
-  project.textContent = shortProject;
-  header.appendChild(project);
-
-  const stopBtn = document.createElement('button');
-  stopBtn.className = 'grid-card-stop-btn';
-  stopBtn.title = 'Stop session';
-  stopBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>';
-  stopBtn.style.display = activePtyIds.has(sessionId) ? '' : 'none';
-  stopBtn.onclick = (e) => {
-    e.stopPropagation();
-    confirmAndStopSession(sessionId);
-  };
-  header.appendChild(stopBtn);
-
-  // Footer
-  const footer = document.createElement('div');
-  footer.className = 'grid-card-footer';
-  const statusSpan = document.createElement('span');
-  const timeSpan = document.createElement('span');
-  timeSpan.textContent = formatDate(lastActivityTime.get(sessionId) || new Date(session.modified));
-  footer.appendChild(statusSpan);
-  footer.appendChild(timeSpan);
-
-  // Build the card DOM
   card.appendChild(header);
+
   entry.element.classList.add('visible', 'grid-mode');
   card.appendChild(entry.element);
+
+  const footer = document.createElement('div');
+  footer.className = 'grid-card-footer';
   card.appendChild(footer);
 
   // Insert card into the correct project group in the grid
   if (gridViewActive) {
     const pp = session.projectPath || '';
-    // Find or create the project heading for this session
     let targetHeading = null;
     for (const h of terminalsEl.querySelectorAll('.grid-project-heading')) {
       if (h.dataset.projectPath === pp) { targetHeading = h; break; }
@@ -78,7 +46,6 @@ function wrapInGridCard(sessionId) {
       targetHeading.className = 'grid-project-heading';
       targetHeading.dataset.projectPath = pp;
       targetHeading.textContent = pp ? pp.split('/').filter(Boolean).slice(-2).join('/') : 'Other';
-      // Insert heading in sortedOrder position
       const orderIndex = new Map(sortedOrder.map((e, i) => [e.projectPath, i]));
       const myIdx = orderIndex.get(pp);
       let inserted = false;
@@ -94,24 +61,34 @@ function wrapInGridCard(sessionId) {
       }
       if (!inserted) terminalsEl.appendChild(targetHeading);
     }
-    // Insert card after the heading and any existing cards in this group
-    // (find next heading or end of container)
     let insertBefore = targetHeading.nextSibling;
     while (insertBefore && !insertBefore.classList.contains('grid-project-heading')) {
       insertBefore = insertBefore.nextSibling;
     }
     terminalsEl.insertBefore(card, insertBefore);
   } else {
-    // Not in grid view — just place where the terminal container was
     terminalsEl.appendChild(card);
   }
 
-  // Click header or footer to focus
+  // Card is now in DOM — mount Vue reactive header/footer via Teleport
+  const { initials: gI, color: gC } = getProjectAvatar(session.projectPath || '');
+  const running0 = activePtyIds.has(sessionId);
+  const busy0 = sessionBusyState.get(sessionId) || false;
+  const time0 = formatDate(lastActivityTime.get(sessionId) || new Date(session.modified));
+  window.vueGrid?.addCard(sessionId, header, footer, {
+    name: displayName,
+    project: shortProject,
+    initials: gI,
+    color: gC,
+    running: running0,
+    busy: busy0,
+    time: time0,
+  });
+
   header.addEventListener('mousedown', (e) => {
     e.stopPropagation();
     focusGridCard(sessionId);
   });
-  // Double-click header to switch to full terminal view
   header.addEventListener('dblclick', (e) => {
     e.stopPropagation();
     gridFocusedSessionId = sessionId;
@@ -121,8 +98,6 @@ function wrapInGridCard(sessionId) {
     e.stopPropagation();
     focusGridCard(sessionId);
   });
-
-  // Clicking/focusing the terminal area also selects the card
   entry.element.addEventListener('focusin', () => {
     if (gridViewActive && gridFocusedSessionId !== sessionId) {
       focusGridCard(sessionId);
@@ -130,22 +105,19 @@ function wrapInGridCard(sessionId) {
   });
 
   gridCards.set(sessionId, card);
-  // Set initial status from the single source of truth
-  updateRunningIndicators();
 }
 
 function unwrapGridCards() {
   for (const [sid, card] of gridCards) {
+    window.vueGrid?.removeCard(sid);
     const entry = openSessions.get(sid);
     if (entry) {
       entry.element.classList.remove('grid-mode', 'visible');
-      // Move terminal container back out of the card, before the card
       card.parentNode.insertBefore(entry.element, card);
     }
     card.remove();
   }
   gridCards.clear();
-  // Remove project headings inserted by showGridView
   terminalsEl.querySelectorAll('.grid-project-heading').forEach(el => el.remove());
 }
 
@@ -176,10 +148,12 @@ function showGridView() {
 
   // Hide other viewers but keep terminal-area visible
   planViewer.style.display = 'none';
-  statsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';
-  settingsViewer.style.display = 'none';
-  jsonlViewer.style.display = 'none';
+  if (window.vueStore) {
+    window.vueStore.settingsOpen = false;
+    window.vueStore.showStats = false;
+    window.vueStore.showJsonl = false;
+  }
   terminalArea.style.display = '';
 
   // Switch #terminals to grid layout

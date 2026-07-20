@@ -8,6 +8,19 @@
 // wrapInGridCard, showGridView (grid-view.js)
 // Depends on: shellEscape (utils.js)
 
+// Current terminal font — read from settings on startup, changed via _applyTerminalFont
+let currentFontFamily = (window.TERMINAL_FONTS?.['default']?.family) || "'SF Mono', Menlo, monospace";
+
+window._applyTerminalFont = (fontFamily) => {
+  currentFontFamily = fontFamily;
+  for (const [, entry] of openSessions) {
+    if (!entry.closed) {
+      entry.terminal.options.fontFamily = fontFamily;
+      safeFit(entry);
+    }
+  }
+};
+
 // --- Terminal key bindings ---
 // Shift+Enter → kitty protocol (CSI 13;2u) so Claude Code treats it as newline, not submit.
 // Two layers needed:
@@ -173,7 +186,7 @@ function createTerminalEntry(session) {
 
   const terminal = new Terminal({
     fontSize: 12,
-    fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
+    fontFamily: currentFontFamily,
     theme: TERMINAL_THEME,
     cursorBlink: false,
     scrollback: 10000,
@@ -225,9 +238,9 @@ function createTerminalEntry(session) {
   searchBar.innerHTML = `
     <input type="text" class="terminal-search-input" placeholder="Find..." />
     <span class="terminal-search-count"></span>
-    <button class="terminal-search-prev" title="Previous (Shift+Enter)">&#x25B2;</button>
-    <button class="terminal-search-next" title="Next (Enter)">&#x25BC;</button>
-    <button class="terminal-search-close" title="Close (Escape)">&times;</button>
+    <button class="terminal-search-prev" data-tooltip="Previous (Shift+Enter)">&#x25B2;</button>
+    <button class="terminal-search-next" data-tooltip="Next (Enter)">&#x25BC;</button>
+    <button class="terminal-search-close" data-tooltip="Close (Escape)">&times;</button>
   `;
   container.appendChild(searchBar);
   const searchInput = searchBar.querySelector('.terminal-search-input');

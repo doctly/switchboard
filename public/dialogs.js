@@ -102,16 +102,26 @@ function showNewSessionPopover(project, anchorEl) {
   popover.appendChild(claudeOptsBtn);
   popover.appendChild(termBtn);
 
-  // Position relative to anchor, flip upward if it would overflow
+  // Position relative to anchor (or center of screen if no anchor)
   document.body.appendChild(popover);
-  const rect = anchorEl.getBoundingClientRect();
-  const popoverHeight = popover.offsetHeight;
-  if (rect.bottom + 4 + popoverHeight > window.innerHeight) {
-    popover.style.top = (rect.top - popoverHeight - 4) + 'px';
+  if (anchorEl) {
+    const rect = anchorEl.getBoundingClientRect();
+    const popoverWidth = popover.offsetWidth;
+    const popoverHeight = popover.offsetHeight;
+    if (rect.bottom + 4 + popoverHeight > window.innerHeight) {
+      popover.style.top = (rect.top - popoverHeight - 4) + 'px';
+    } else {
+      popover.style.top = (rect.bottom + 4) + 'px';
+    }
+    // Align right edge of popover to right edge of button, clamp to screen
+    const leftFromRight = rect.right - popoverWidth;
+    popover.style.left = Math.max(8, leftFromRight) + 'px';
   } else {
-    popover.style.top = (rect.bottom + 4) + 'px';
+    const popoverWidth = popover.offsetWidth;
+    const popoverHeight = popover.offsetHeight;
+    popover.style.top = Math.max(8, (window.innerHeight / 2 - popoverHeight / 2)) + 'px';
+    popover.style.left = Math.max(8, (window.innerWidth / 2 - popoverWidth / 2)) + 'px';
   }
-  popover.style.left = rect.left + 'px';
 
   // Close on click outside
   function onClickOutside(e) {
@@ -180,6 +190,8 @@ async function showNewSessionDialog(project) {
 
   let selectedMode = effective.permissionMode || null;
   let dangerousSkip = effective.dangerouslySkipPermissions || false;
+  let worktreeOn = !!effective.worktree;
+  let chromeOn = !!effective.chrome;
 
   const modes = [
     { value: null, label: 'Default', desc: 'Prompt for all actions' },
@@ -188,6 +200,10 @@ async function showNewSessionDialog(project) {
     { value: 'dontAsk', label: "Don't Ask", desc: 'Auto-deny tools not explicitly allowed' },
     { value: 'bypassPermissions', label: 'Bypass', desc: 'Auto-accept all tool calls' },
   ];
+
+  function sbSwitch(id, on) {
+    return `<button type="button" class="sb-switch${on ? ' sb-switch--on' : ''}" id="${id}" aria-pressed="${on}"><span class="sb-switch-thumb"></span></button>`;
+  }
 
   function renderModeGrid() {
     return modes.map(m => {
@@ -210,7 +226,7 @@ async function showNewSessionDialog(project) {
       </div>
       <div class="settings-field-control">
         <input type="text" class="settings-input" id="nsd-worktree-name" placeholder="name (optional)" value="${escapeHtml(effective.worktreeName || '')}" style="width:140px">
-        <label class="settings-toggle"><input type="checkbox" id="nsd-worktree" ${effective.worktree ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+        ${sbSwitch('nsd-worktree', worktreeOn)}
       </div>
     </div>
     <div class="settings-field">
@@ -219,7 +235,7 @@ async function showNewSessionDialog(project) {
         <div class="settings-description">Enable Chrome browser automation</div>
       </div>
       <div class="settings-field-control">
-        <label class="settings-toggle"><input type="checkbox" id="nsd-chrome" ${effective.chrome ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+        ${sbSwitch('nsd-chrome', chromeOn)}
       </div>
     </div>
     <div class="settings-field settings-field-wide">
@@ -242,7 +258,7 @@ async function showNewSessionDialog(project) {
     </div>
     <div class="new-session-actions">
       <button class="new-session-cancel-btn">Cancel</button>
-      <button class="new-session-start-btn">Start</button>
+      <button class="btn-green">Start</button>
     </div>
   `;
 
@@ -265,6 +281,27 @@ async function showNewSessionDialog(project) {
     modeGrid.innerHTML = renderModeGrid();
   });
 
+  // Toggle helpers
+  function setSwitchState(btn, on) {
+    btn.classList.toggle('sb-switch--on', on);
+    btn.setAttribute('aria-pressed', on);
+  }
+
+  const worktreeBtn = dialog.querySelector('#nsd-worktree');
+  const worktreeNameInput = dialog.querySelector('#nsd-worktree-name');
+  const chromeBtn = dialog.querySelector('#nsd-chrome');
+
+  worktreeBtn.addEventListener('click', () => { worktreeOn = !worktreeOn; setSwitchState(worktreeBtn, worktreeOn); });
+  chromeBtn.addEventListener('click', () => { chromeOn = !chromeOn; setSwitchState(chromeBtn, chromeOn); });
+
+  // Auto-enable worktree toggle when user types a name
+  worktreeNameInput.addEventListener('input', () => {
+    if (worktreeNameInput.value.trim() && !worktreeOn) {
+      worktreeOn = true;
+      setSwitchState(worktreeBtn, true);
+    }
+  });
+
   function close() {
     overlay.remove();
   }
@@ -276,11 +313,11 @@ async function showNewSessionDialog(project) {
     } else if (selectedMode) {
       options.permissionMode = selectedMode;
     }
-    if (dialog.querySelector('#nsd-worktree').checked) {
+    if (worktreeOn) {
       options.worktree = true;
-      options.worktreeName = dialog.querySelector('#nsd-worktree-name').value.trim();
+      options.worktreeName = worktreeNameInput.value.trim();
     }
-    if (dialog.querySelector('#nsd-chrome').checked) {
+    if (chromeOn) {
       options.chrome = true;
     }
     const preLaunch = dialog.querySelector('#nsd-pre-launch').value.trim();
@@ -292,7 +329,7 @@ async function showNewSessionDialog(project) {
   }
 
   dialog.querySelector('.new-session-cancel-btn').onclick = close;
-  dialog.querySelector('.new-session-start-btn').onclick = start;
+  dialog.querySelector('.btn-green').onclick = start;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
   // Keyboard support
@@ -314,6 +351,7 @@ async function showResumeSessionDialog(session) {
 
   let selectedMode = effective.permissionMode || null;
   let dangerousSkip = effective.dangerouslySkipPermissions || false;
+  let chromeOn = !!effective.chrome;
 
   const modes = [
     { value: null, label: 'Default', desc: 'Prompt for all actions' },
@@ -345,7 +383,7 @@ async function showResumeSessionDialog(session) {
         <div class="settings-description">Enable Chrome browser automation</div>
       </div>
       <div class="settings-field-control">
-        <label class="settings-toggle"><input type="checkbox" id="rsd-chrome" ${effective.chrome ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+        <button type="button" class="sb-switch${chromeOn ? ' sb-switch--on' : ''}" id="rsd-chrome" aria-pressed="${chromeOn}"><span class="sb-switch-thumb"></span></button>
       </div>
     </div>
     <div class="settings-field settings-field-wide">
@@ -368,7 +406,7 @@ async function showResumeSessionDialog(session) {
     </div>
     <div class="new-session-actions">
       <button class="new-session-cancel-btn">Cancel</button>
-      <button class="new-session-start-btn">Resume</button>
+      <button class="btn-green">Resume</button>
     </div>
   `;
 
@@ -391,6 +429,13 @@ async function showResumeSessionDialog(session) {
     modeGrid.innerHTML = renderModeGrid();
   });
 
+  const chromeBtnR = dialog.querySelector('#rsd-chrome');
+  chromeBtnR.addEventListener('click', () => {
+    chromeOn = !chromeOn;
+    chromeBtnR.classList.toggle('sb-switch--on', chromeOn);
+    chromeBtnR.setAttribute('aria-pressed', chromeOn);
+  });
+
   function close() {
     overlay.remove();
   }
@@ -402,7 +447,7 @@ async function showResumeSessionDialog(session) {
     } else if (selectedMode) {
       options.permissionMode = selectedMode;
     }
-    if (dialog.querySelector('#rsd-chrome').checked) {
+    if (chromeOn) {
       options.chrome = true;
     }
     const preLaunch = dialog.querySelector('#rsd-pre-launch').value.trim();
@@ -414,7 +459,7 @@ async function showResumeSessionDialog(session) {
   }
 
   dialog.querySelector('.new-session-cancel-btn').onclick = close;
-  dialog.querySelector('.new-session-start-btn').onclick = resume;
+  dialog.querySelector('.btn-green').onclick = resume;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
   function onKey(e) {
@@ -424,8 +469,6 @@ async function showResumeSessionDialog(session) {
   document.addEventListener('keydown', onKey);
 }
 
-// Settings viewer is in settings-panel.js (openSettingsViewer / closeSettingsViewer)
-// Global settings button & add project button bindings are in app.js (need DOM refs)
 
 function showAddProjectDialog() {
   const overlay = document.createElement('div');

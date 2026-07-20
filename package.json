@@ -1,22 +1,24 @@
 {
   "name": "switchboard",
-  "version": "0.0.30",
+  "version": "0.1.0",
   "private": true,
   "description": "A desktop app for browsing, searching, and managing CLI coding sessions",
   "author": "Doctly <support@doctly.ai>",
   "main": "main.js",
   "scripts": {
-    "start": "npm run bundle:codemirror && electron .",
+    "start": "npm run bundle:codemirror && npm run bundle:vue && electron .",
     "test": "node --test",
-    "electron": "electron .",
+    "electron": "npm run bundle:vue && electron .",
+    "dev": "npm run bundle:codemirror && npm run bundle:vue && (vite build --watch & electron .) && wait",
     "bundle:codemirror": "esbuild public/codemirror-setup.js --bundle --outfile=public/codemirror-bundle.js --format=iife --platform=browser --minify",
+    "bundle:vue": "vite build",
     "generate-icons": "node scripts/generate-icons.js && node scripts/generate-dmg-background.js",
-    "build": "npm run bundle:codemirror && electron-builder",
-    "build:mac": "npm run bundle:codemirror && electron-builder --mac && node scripts/postinstall.js && codesign --sign - --force --deep dist/mac-arm64/Switchboard.app 2>/dev/null; true",
-    "build:mac:arm64": "electron-builder --mac --arm64 2>/dev/null; true",
-    "build:win": "npm run bundle:codemirror && electron-builder --win",
-    "build:linux": "npm run bundle:codemirror && electron-builder --linux",
-    "release": "npm run bundle:codemirror && electron-builder --publish always",
+    "build": "npm run bundle:codemirror && npm run bundle:vue && electron-builder",
+    "build:mac": "npm run bundle:codemirror && npm run bundle:vue && electron-builder --mac && node scripts/postinstall.js && codesign --sign - --force --deep dist/mac-arm64/Switchboard.app 2>/dev/null; true",
+    "build:mac:arm64": "npm run bundle:vue && electron-builder --mac --arm64 2>/dev/null; true",
+    "build:win": "npm run bundle:codemirror && npm run bundle:vue && electron-builder --win",
+    "build:linux": "npm run bundle:codemirror && npm run bundle:vue && electron-builder --linux",
+    "release": "npm run bundle:codemirror && npm run bundle:vue && electron-builder --publish always",
     "postinstall": "node scripts/postinstall.js"
   },
   "dependencies": {
@@ -44,12 +46,15 @@
     "@codemirror/view": "^6.39.16",
     "@ddietr/codemirror-themes": "^1.5.2",
     "@napi-rs/canvas": "^0.1.62",
+    "@vitejs/plugin-vue": "^6.0.8",
     "codemirror": "^6.0.2",
     "electron": "^41.0.0",
     "electron-builder": "^26.0.0",
     "electron-reloader": "^1.2.3",
     "esbuild": "^0.27.3",
-    "png2icons": "^2.0.1"
+    "png2icons": "^2.0.1",
+    "vite": "^8.1.5",
+    "vue": "^3.5.40"
   },
   "build": {
     "appId": "ai.doctly.switchboard",
@@ -66,7 +71,7 @@
     ],
     "publish": {
       "provider": "github",
-      "owner": "doctly",
+      "owner": "fortael",
       "repo": "switchboard"
     },
     "mac": {

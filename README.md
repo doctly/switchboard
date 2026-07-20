@@ -18,6 +18,18 @@ Switchboard is a desktop app that gives you a unified view of all your Claude Co
 - **Activity Stats** — Heatmap of your coding activity across all projects
 - **Session Names** — Picks up session names from Claude Code's `/rename` command automatically
 
+## Installing
+
+Build from source for your platform — no code-signing certificate required. See **[docs/building.md](docs/building.md)** for step-by-step instructions.
+
+```bash
+git clone https://github.com/doctly/switchboard.git
+cd switchboard
+npm install
+make dev        # run in dev mode
+make build      # build a distributable for your platform
+```
+
 ## Session Grid Overview
 
 Toggle the grid overview from the sidebar for a bird's-eye view of all your open sessions at once, grouped by project.

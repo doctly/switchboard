@@ -44,6 +44,8 @@ const TERMINAL_THEMES = {
   },
 };
 
+window.TERMINAL_THEMES = TERMINAL_THEMES;
+
 let currentThemeName = 'switchboard';
 function getTerminalTheme() {
   return TERMINAL_THEMES[currentThemeName] || TERMINAL_THEMES.switchboard;

@@ -1,17 +1,29 @@
-// --- JSONL Message History Viewer ---
-// Depends on globals: escapeHtml (utils.js), hideAllViewers, placeholder,
-// terminalArea, jsonlViewer, jsonlViewerTitle, jsonlViewerSessionId, jsonlViewerBody (app.js)
+<template>
+  <div id="jsonl-viewer-header">
+    <span id="jsonl-viewer-title">{{ title }}</span>
+    <span id="jsonl-viewer-session-id">{{ sessionId }}</span>
+  </div>
+  <div id="jsonl-viewer-body" ref="bodyRef"></div>
+</template>
+
+<script setup>
+import { ref } from 'vue';
+
+const title = ref('Message History');
+const sessionId = ref('');
+const bodyRef = ref(null);
+
+// ── Helpers ───────────────────────────────────────────────────────
+function escHtml(str) {
+  return window.escapeHtml ? window.escapeHtml(str) : str;
+}
 
 function renderJsonlText(text) {
   if (window.marked) {
-    // Escape XML/HTML-like tags so they render as visible text,
-    // but preserve markdown code blocks (which may contain HTML examples).
     const escaped = text.replace(/<(\/?[a-zA-Z][a-zA-Z0-9_-]*(?:\s[^>]*)?\/?)\>/g, '&lt;$1&gt;');
-    let html = window.marked.parse(escaped);
-    return html;
+    return window.marked.parse(escaped);
   }
-  // Fallback if marked isn't loaded
-  let html = escapeHtml(text);
+  let html = escHtml(text);
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre class="jsonl-code-block"><code>$2</code></pre>');
   html = html.replace(/`([^`]+)`/g, '<code class="jsonl-inline-code">$1</code>');
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
@@ -20,8 +32,7 @@ function renderJsonlText(text) {
 
 function formatDuration(ms) {
   if (ms < 1000) return ms + 'ms';
-  const s = (ms / 1000).toFixed(1);
-  return s + 's';
+  return (ms / 1000).toFixed(1) + 's';
 }
 
 function makeInlineContent(className, bodyContent) {
@@ -63,16 +74,13 @@ function makeCollapsible(className, headerText, bodyContent, startExpanded) {
   return wrapper;
 }
 
-// --- Tool use rendering ---
-// Renders tool calls in a bullet + indented content style matching Claude Code's terminal.
-
 function toolBlock(color, label, summary, content) {
   const el = document.createElement('div');
   el.className = 'jsonl-tool-block';
   const header = document.createElement('div');
   header.className = 'jsonl-tool-header';
   header.innerHTML = '<span class="jsonl-tool-bullet" style="color:' + color + '">●</span>'
-    + '<span class="jsonl-tool-name">' + escapeHtml(label) + '</span>'
+    + '<span class="jsonl-tool-name">' + escHtml(label) + '</span>'
     + (summary ? '<span class="jsonl-tool-summary">' + summary + '</span>' : '');
   el.appendChild(header);
   if (content) {
@@ -88,63 +96,6 @@ function toolBlock(color, label, summary, content) {
   return el;
 }
 
-function renderToolUse(block) {
-  const name = block.name || 'unknown';
-  const input = block.input || {};
-  const renderer = toolRenderers[name];
-  if (renderer) {
-    try { return renderer(input, block); } catch {}
-  }
-  // MCP / computer-use tools with an action field
-  if (input.action) {
-    try { return renderMcpAction(name, input, block); } catch {}
-  }
-  // Default: collapsible JSON
-  return toolBlock('#8888a0', name, '', makeCollapsible('jsonl-tool-result', 'Input', input, true));
-}
-
-function renderMcpAction(name, input, block) {
-  const action = input.action;
-  // Short display name: strip mcp__ prefix, take last segment
-  const shortName = name.replace(/^mcp__/, '').split('__').pop();
-  const actionLabels = {
-    type: 'Type',
-    screenshot: 'Screenshot',
-    click: 'Click',
-    scroll: 'Scroll',
-    hover: 'Hover',
-    drag: 'Drag',
-    key: 'Key',
-    wait: 'Wait',
-    javascript_exec: 'JS Exec',
-    navigate: 'Navigate',
-  };
-  const label = actionLabels[action] || action;
-  let summary = '<span class="jsonl-tool-detail">' + escapeHtml(shortName) + '</span>';
-  let content = null;
-
-  if (action === 'type' && input.text) {
-    summary += ' <code>' + escapeHtml(input.text.length > 80 ? input.text.slice(0, 80) + '...' : input.text) + '</code>';
-  } else if (action === 'click' && (input.x != null || input.selector)) {
-    const target = input.selector || `(${input.x}, ${input.y})`;
-    summary += ' <code>' + escapeHtml(target) + '</code>';
-  } else if (action === 'key' && input.key) {
-    summary += ' <code>' + escapeHtml(input.key) + '</code>';
-  } else if (action === 'navigate' && input.url) {
-    summary += ' <code>' + escapeHtml(input.url.length > 80 ? input.url.slice(0, 80) + '...' : input.url) + '</code>';
-  } else if (action === 'scroll') {
-    const dir = input.direction || (input.deltaY > 0 ? 'down' : 'up');
-    summary += ' <span class="jsonl-tool-detail">' + escapeHtml(dir) + '</span>';
-  } else if (action === 'javascript_exec' && input.text) {
-    const pre = document.createElement('pre');
-    pre.className = 'jsonl-tool-cmd-block';
-    pre.textContent = input.text;
-    content = pre;
-  }
-
-  return toolBlock('#c090e0', label, summary, content);
-}
-
 function shortPath(p) {
   return (p || '').split('/').slice(-3).join('/');
 }
@@ -157,7 +108,7 @@ const toolRenderers = {
       const start = input.offset || 0;
       range = input.limit ? `:${start}-${start + input.limit}` : `:${start}`;
     }
-    return toolBlock('#8888a0', 'Read', '<code>' + escapeHtml(shortPath(path) + range) + '</code>', null);
+    return toolBlock('#8888a0', 'Read', '<code>' + escHtml(shortPath(path) + range) + '</code>', null);
   },
 
   Edit(input) {
@@ -168,21 +119,21 @@ const toolRenderers = {
       diff.className = 'jsonl-tool-diff';
       let html = '';
       for (const line of input.old_string.split('\n')) {
-        html += '<span class="jsonl-diff-del">- ' + escapeHtml(line) + '</span>\n';
+        html += '<span class="jsonl-diff-del">- ' + escHtml(line) + '</span>\n';
       }
       for (const line of input.new_string.split('\n')) {
-        html += '<span class="jsonl-diff-add">+ ' + escapeHtml(line) + '</span>\n';
+        html += '<span class="jsonl-diff-add">+ ' + escHtml(line) + '</span>\n';
       }
       diff.innerHTML = html;
       content = diff;
     }
-    return toolBlock('#e0a040', 'Edit', '<code>' + escapeHtml(shortPath(path)) + '</code>', content);
+    return toolBlock('#e0a040', 'Edit', '<code>' + escHtml(shortPath(path)) + '</code>', content);
   },
 
   Write(input) {
     const path = input.file_path || '';
     const lines = (input.content || '').split('\n').length;
-    const detail = '<code>' + escapeHtml(shortPath(path)) + '</code> <span class="jsonl-tool-detail">' + lines + ' lines</span>';
+    const detail = '<code>' + escHtml(shortPath(path)) + '</code> <span class="jsonl-tool-detail">' + lines + ' lines</span>';
     let content = null;
     if (input.content) {
       content = makeCollapsible('jsonl-tool-result', 'Content', input.content, true);
@@ -202,25 +153,71 @@ const toolRenderers = {
     const pattern = input.pattern || '';
     const path = input.path || '';
     const sp = path ? shortPath(path) : '';
-    const summary = '<code>' + escapeHtml(pattern) + (sp ? ' in ' + escapeHtml(sp) : '') + '</code>';
+    const summary = '<code>' + escHtml(pattern) + (sp ? ' in ' + escHtml(sp) : '') + '</code>';
     return toolBlock('#c090e0', 'Grep', summary, null);
   },
 
   Glob(input) {
     const pattern = input.pattern || '';
-    return toolBlock('#c090e0', 'Glob', '<code>' + escapeHtml(pattern) + '</code>', null);
+    return toolBlock('#c090e0', 'Glob', '<code>' + escHtml(pattern) + '</code>', null);
   },
 
   Agent(input) {
     const desc = input.description || '';
     const type = input.subagent_type || '';
-    const summary = (type ? '<span class="jsonl-tool-detail">' + escapeHtml(type) + '</span> ' : '')
-      + escapeHtml(desc);
+    const summary = (type ? '<span class="jsonl-tool-detail">' + escHtml(type) + '</span> ' : '')
+      + escHtml(desc);
     return toolBlock('#f0a050', 'Agent', summary, null);
   },
 };
 
-// Render a local command (! prefix) as a tool block
+function renderMcpAction(name, input) {
+  const action = input.action;
+  const shortName = name.replace(/^mcp__/, '').split('__').pop();
+  const actionLabels = {
+    type: 'Type', screenshot: 'Screenshot', click: 'Click', scroll: 'Scroll',
+    hover: 'Hover', drag: 'Drag', key: 'Key', wait: 'Wait',
+    javascript_exec: 'JS Exec', navigate: 'Navigate',
+  };
+  const label = actionLabels[action] || action;
+  let summary = '<span class="jsonl-tool-detail">' + escHtml(shortName) + '</span>';
+  let content = null;
+
+  if (action === 'type' && input.text) {
+    summary += ' <code>' + escHtml(input.text.length > 80 ? input.text.slice(0, 80) + '...' : input.text) + '</code>';
+  } else if (action === 'click' && (input.x != null || input.selector)) {
+    const target = input.selector || `(${input.x}, ${input.y})`;
+    summary += ' <code>' + escHtml(target) + '</code>';
+  } else if (action === 'key' && input.key) {
+    summary += ' <code>' + escHtml(input.key) + '</code>';
+  } else if (action === 'navigate' && input.url) {
+    summary += ' <code>' + escHtml(input.url.length > 80 ? input.url.slice(0, 80) + '...' : input.url) + '</code>';
+  } else if (action === 'scroll') {
+    const dir = input.direction || (input.deltaY > 0 ? 'down' : 'up');
+    summary += ' <span class="jsonl-tool-detail">' + escHtml(dir) + '</span>';
+  } else if (action === 'javascript_exec' && input.text) {
+    const pre = document.createElement('pre');
+    pre.className = 'jsonl-tool-cmd-block';
+    pre.textContent = input.text;
+    content = pre;
+  }
+
+  return toolBlock('#c090e0', label, summary, content);
+}
+
+function renderToolUse(block) {
+  const name = block.name || 'unknown';
+  const input = block.input || {};
+  const renderer = toolRenderers[name];
+  if (renderer) {
+    try { return renderer(input, block); } catch {}
+  }
+  if (input.action) {
+    try { return renderMcpAction(name, input, block); } catch {}
+  }
+  return toolBlock('#8888a0', name, '', makeCollapsible('jsonl-tool-result', 'Input', input, true));
+}
+
 function renderLocalCommand({ cmd, output }) {
   const pre = document.createElement('pre');
   pre.className = 'jsonl-tool-cmd-block';
@@ -244,7 +241,16 @@ function renderLocalCommand({ cmd, output }) {
   return el;
 }
 
-// Merge consecutive local command entries (separate JSONL entries for caveat, bash-input, stdout/stderr)
+function getEntryText(entry) {
+  if (!entry) return null;
+  const content = entry.message?.content || entry.content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+  }
+  return null;
+}
+
 function mergeLocalCommandEntries(entries) {
   const result = [];
   let i = 0;
@@ -252,19 +258,15 @@ function mergeLocalCommandEntries(entries) {
     const entry = entries[i];
     const text = getEntryText(entry);
 
-    // Look for a local-command-caveat or bash-input entry
     if (text && (/<local-command-caveat>/.test(text) || /<bash-input>/.test(text))) {
-      // Gather consecutive entries that are part of this local command
       let combined = '';
       const start = i;
       while (i < entries.length) {
         const t = getEntryText(entries[i]);
         if (!t) break;
-        // Stop if we hit a non-local-command entry (no XML tags we recognize)
         if (i > start && !/<bash-input>|<bash-stdout>|<bash-stderr>|<local-command-caveat>/.test(t)) break;
         combined += t + '\n';
         i++;
-        // Stop after we've seen stdout or stderr (end of command)
         if (/<\/bash-stdout>|<\/bash-stderr>/.test(t)) break;
       }
 
@@ -276,10 +278,8 @@ function mergeLocalCommandEntries(entries) {
         const stdout = stdoutMatch ? stdoutMatch[1].trim() : '';
         const stderr = stderrMatch ? stderrMatch[1].trim() : '';
         const output = [stdout, stderr].filter(Boolean).join('\n');
-        // Create a synthetic entry
         result.push({ _localCmd: { cmd, output }, type: 'local-command' });
       } else {
-        // Couldn't parse, keep original entries
         for (let j = start; j < i; j++) result.push(entries[j]);
       }
     } else {
@@ -290,23 +290,10 @@ function mergeLocalCommandEntries(entries) {
   return result;
 }
 
-function getEntryText(entry) {
-  if (!entry) return null;
-  const content = entry.message?.content || entry.content;
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content.filter(b => b.type === 'text').map(b => b.text).join('\n');
-  }
-  return null;
-}
-
-// Merge local command blocks within a single entry's text blocks
 function mergeLocalCommandBlocks(blocks) {
-  // Check if any text block contains <bash-input>
   const hasLocalCmd = blocks.some(b => b.type === 'text' && b.text && /<bash-input>/.test(b.text));
   if (!hasLocalCmd) return blocks;
 
-  // Concatenate all text blocks to find the full command structure
   let combined = '';
   for (const b of blocks) {
     if (b.type === 'text' && b.text) combined += b.text + '\n';
@@ -322,17 +309,12 @@ function mergeLocalCommandBlocks(blocks) {
   const stderr = stderrMatch ? stderrMatch[1].trim() : '';
   const output = [stdout, stderr].filter(Boolean).join('\n');
 
-  // Replace all text blocks with a single merged one
   const merged = { type: 'text', text: combined, _localCmd: { cmd, output } };
   const result = [];
   let replacedText = false;
   for (const b of blocks) {
     if (b.type === 'text') {
-      if (!replacedText) {
-        result.push(merged);
-        replacedText = true;
-      }
-      // skip other text blocks
+      if (!replacedText) { result.push(merged); replacedText = true; }
     } else {
       result.push(b);
     }
@@ -340,12 +322,46 @@ function mergeLocalCommandBlocks(blocks) {
   return result;
 }
 
-// Render a tool result into a container, handling images, text, and mixed content
+function extractImages(data) {
+  const images = [];
+  if (!data) return images;
+  if (typeof data === 'string') {
+    const imgMatches = data.matchAll(/\{"type"\s*:\s*"image"\s*,\s*"source"\s*:\s*\{[^}]*"data"\s*:\s*"([^"]+)"[^}]*\}/g);
+    for (const m of imgMatches) {
+      const base64 = m[1];
+      const mediaMatch = m[0].match(/"media_type"\s*:\s*"([^"]+)"/);
+      const mediaType = mediaMatch ? mediaMatch[1] : 'image/jpeg';
+      images.push({ src: `data:${mediaType};base64,${base64}` });
+    }
+    return images;
+  }
+  if (Array.isArray(data)) {
+    for (const block of data) {
+      if (block.type === 'image' && block.source?.data) {
+        const mediaType = block.source.media_type || 'image/jpeg';
+        images.push({ src: `data:${mediaType};base64,${block.source.data}` });
+      }
+    }
+  }
+  return images;
+}
+
+function extractResultText(data) {
+  if (!data) return null;
+  if (typeof data === 'string') {
+    const cleaned = data.replace(/\{"type"\s*:\s*"image"\s*,\s*"source"\s*:\s*\{[^}]*\}\s*\}/g, '').trim();
+    return cleaned || null;
+  }
+  if (Array.isArray(data)) {
+    const texts = data.filter(b => b.type === 'text' || b.text).map(b => b.text || JSON.stringify(b));
+    return texts.length ? texts.join('\n') : null;
+  }
+  return JSON.stringify(data, null, 2);
+}
+
 function renderToolResult(resultData, container) {
-  // Try to extract image data from the result
   const images = extractImages(resultData);
   const textParts = extractResultText(resultData);
-
   if (textParts) {
     container.appendChild(makeInlineContent('jsonl-tool-result', textParts));
   }
@@ -367,52 +383,7 @@ function renderToolResult(resultData, container) {
   }
 }
 
-function extractImages(data) {
-  const images = [];
-  if (!data) return images;
-
-  // String result — may contain JSON with image data
-  if (typeof data === 'string') {
-    // Look for {"type":"image","source":... } JSON in the string
-    const imgMatches = data.matchAll(/\{"type"\s*:\s*"image"\s*,\s*"source"\s*:\s*\{[^}]*"data"\s*:\s*"([^"]+)"[^}]*\}/g);
-    for (const m of imgMatches) {
-      const base64 = m[1];
-      // Detect media type from the JSON or default to jpeg
-      const mediaMatch = m[0].match(/"media_type"\s*:\s*"([^"]+)"/);
-      const mediaType = mediaMatch ? mediaMatch[1] : 'image/jpeg';
-      images.push({ src: `data:${mediaType};base64,${base64}` });
-    }
-    return images;
-  }
-
-  // Array of content blocks
-  if (Array.isArray(data)) {
-    for (const block of data) {
-      if (block.type === 'image' && block.source?.data) {
-        const mediaType = block.source.media_type || 'image/jpeg';
-        images.push({ src: `data:${mediaType};base64,${block.source.data}` });
-      }
-    }
-  }
-  return images;
-}
-
-function extractResultText(data) {
-  if (!data) return null;
-  if (typeof data === 'string') {
-    // Strip the image JSON blobs from the display text
-    const cleaned = data.replace(/\{"type"\s*:\s*"image"\s*,\s*"source"\s*:\s*\{[^}]*\}\s*\}/g, '').trim();
-    return cleaned || null;
-  }
-  if (Array.isArray(data)) {
-    const texts = data.filter(b => b.type === 'text' || b.text).map(b => b.text || JSON.stringify(b));
-    return texts.length ? texts.join('\n') : null;
-  }
-  return JSON.stringify(data, null, 2);
-}
-
 function renderJsonlEntry(entry, toolResultMap) {
-  // Synthetic local command entry from mergeLocalCommandEntries
   if (entry._localCmd) {
     return renderLocalCommand(entry._localCmd);
   }
@@ -420,15 +391,13 @@ function renderJsonlEntry(entry, toolResultMap) {
   const ts = entry.timestamp;
   const timeStr = ts ? new Date(ts).toLocaleTimeString() : '';
 
-  // --- custom-title ---
   if (entry.type === 'custom-title') {
     const div = document.createElement('div');
     div.className = 'jsonl-entry jsonl-meta-entry';
-    div.innerHTML = '<span class="jsonl-meta-icon">T</span> Title set: <strong>' + escapeHtml(entry.customTitle || '') + '</strong>';
+    div.innerHTML = '<span class="jsonl-meta-icon">T</span> Title set: <strong>' + escHtml(entry.customTitle || '') + '</strong>';
     return div;
   }
 
-  // --- system entries ---
   if (entry.type === 'system') {
     const div = document.createElement('div');
     div.className = 'jsonl-entry jsonl-meta-entry';
@@ -438,7 +407,7 @@ function renderJsonlEntry(entry, toolResultMap) {
     } else if (entry.subtype === 'local_command') {
       const cmdMatch = (entry.content || '').match(/<command-name>(.*?)<\/command-name>/);
       const cmd = cmdMatch ? cmdMatch[1] : entry.content || 'unknown';
-      div.innerHTML = '<span class="jsonl-meta-icon">$</span> Command: <code class="jsonl-inline-code">' + escapeHtml(cmd) + '</code>'
+      div.innerHTML = '<span class="jsonl-meta-icon">$</span> Command: <code class="jsonl-inline-code">' + escHtml(cmd) + '</code>'
         + (timeStr ? ' <span class="jsonl-ts">' + timeStr + '</span>' : '');
     } else {
       return null;
@@ -446,27 +415,23 @@ function renderJsonlEntry(entry, toolResultMap) {
     return div;
   }
 
-  // --- progress entries ---
   if (entry.type === 'progress') {
     const data = entry.data;
     if (!data || typeof data !== 'object') return null;
-    const dt = data.type;
-    if (dt === 'bash_progress') {
+    if (data.type === 'bash_progress') {
       const div = document.createElement('div');
       div.className = 'jsonl-entry jsonl-meta-entry';
       const elapsed = data.elapsedTimeSeconds ? ` (${data.elapsedTimeSeconds}s, ${data.totalLines || 0} lines)` : '';
-      div.innerHTML = '<span class="jsonl-meta-icon">&#9658;</span> Bash output' + escapeHtml(elapsed);
+      div.innerHTML = '<span class="jsonl-meta-icon">&#9658;</span> Bash output' + escHtml(elapsed);
       if (data.output || data.fullOutput) {
         const output = data.fullOutput || data.output || '';
         div.appendChild(makeCollapsible('jsonl-tool-result', 'Output', output, true));
       }
       return div;
     }
-    // Skip noisy progress types
     return null;
   }
 
-  // --- user / assistant messages ---
   let role = null;
   let contentBlocks = null;
 
@@ -486,10 +451,8 @@ function renderJsonlEntry(entry, toolResultMap) {
   }
   if (!Array.isArray(contentBlocks)) return null;
 
-  // Detect local command execution across multiple text blocks and merge
   contentBlocks = mergeLocalCommandBlocks(contentBlocks);
 
-  // User messages that are purely tool results get assistant styling
   const isToolResultOnly = role === 'user' && Array.isArray(contentBlocks) &&
     contentBlocks.every(b => b.type === 'tool_result');
   const visualRole = isToolResultOnly ? 'assistant' : role;
@@ -497,17 +460,14 @@ function renderJsonlEntry(entry, toolResultMap) {
   const div = document.createElement('div');
   div.className = 'jsonl-entry ' + (visualRole === 'user' ? 'jsonl-user' : 'jsonl-assistant');
 
-
   for (const block of contentBlocks) {
     if (block.type === 'thinking' && block.thinking) {
       div.appendChild(makeCollapsible('jsonl-thinking', 'Thinking', block.thinking, false));
     } else if (block.type === 'text' && block.text && block.text.trim()) {
-      // Render merged local command as a tool block
       if (block._localCmd) {
         div.appendChild(renderLocalCommand(block._localCmd));
         continue;
       }
-      // Render [Image: source: /path] as an inline image if the entire block is just that
       const imgMatch = block.text.trim().match(/^\[Image:\s*source:\s*([^\]]+)\]$/);
       if (imgMatch) {
         const imgEl = document.createElement('img');
@@ -522,10 +482,9 @@ function renderJsonlEntry(entry, toolResultMap) {
       div.appendChild(textEl);
     } else if (block.type === 'tool_use') {
       const toolEl = renderToolUse(block);
-      // Attach matched tool result into the tool block's content area
       if (block.id && toolResultMap && toolResultMap.has(block.id)) {
         const resultData = toolResultMap.get(block.id);
-        toolResultMap.delete(block.id); // mark as claimed
+        toolResultMap.delete(block.id);
         let contentEl = toolEl.querySelector('.jsonl-tool-content');
         if (!contentEl) {
           contentEl = document.createElement('div');
@@ -536,45 +495,39 @@ function renderJsonlEntry(entry, toolResultMap) {
       }
       div.appendChild(toolEl);
     } else if (block.type === 'tool_result') {
-      // Skip if already claimed by a tool_use above
       if (block.tool_use_id && toolResultMap && !toolResultMap.has(block.tool_use_id)) continue;
       const resultContent = block.content || block.output || '';
-      div.appendChild(makeCollapsible('jsonl-tool-result',
-        'Tool Result',
-        resultContent,
-        false));
+      div.appendChild(makeCollapsible('jsonl-tool-result', 'Tool Result', resultContent, false));
     }
   }
 
-  // Skip entries with no visible content
   if (!div.children.length) return null;
-
   return div;
 }
 
-async function showJsonlViewer(session) {
+// ── Public API ────────────────────────────────────────────────────
+async function open(session) {
   const result = await window.api.readSessionJsonl(session.sessionId);
-  hideAllViewers();
-  placeholder.style.display = 'none';
-  terminalArea.style.display = 'none';
-  jsonlViewer.style.display = 'flex';
 
   const displayName = session.name || session.aiTitle || session.summary || session.sessionId;
-  jsonlViewerTitle.textContent = displayName;
-  jsonlViewerSessionId.textContent = session.sessionId;
-  jsonlViewerBody.innerHTML = '';
+  title.value = displayName;
+  sessionId.value = session.sessionId;
+
+  // Wait for the DOM to update before writing into bodyRef
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  const body = bodyRef.value;
+  if (!body) return;
+  body.innerHTML = '';
 
   if (result.error) {
-    jsonlViewerBody.innerHTML = '<div class="plans-empty">Error loading messages: ' + escapeHtml(result.error) + '</div>';
+    body.innerHTML = '<div class="plans-empty">Error loading messages: ' + escHtml(result.error) + '</div>';
     return;
   }
 
   const rawEntries = result.entries || [];
-
-  // Merge consecutive local command entries (caveat + bash-input + stdout/stderr)
   const entries = mergeLocalCommandEntries(rawEntries);
 
-  // Build tool_use_id → result content map so results render under their tool call
   const toolResultMap = new Map();
   for (const entry of entries) {
     const blocks = entry.message?.content || entry.content;
@@ -590,17 +543,17 @@ async function showJsonlViewer(session) {
   for (const entry of entries) {
     const el = renderJsonlEntry(entry, toolResultMap);
     if (el) {
-      jsonlViewerBody.appendChild(el);
+      body.appendChild(el);
       rendered++;
     }
   }
 
   if (rendered === 0) {
-    jsonlViewerBody.innerHTML = '<div class="plans-empty">No messages found in this session.</div>';
+    body.innerHTML = '<div class="plans-empty">No messages found in this session.</div>';
   }
 
   // Click-to-fullscreen for inline images
-  jsonlViewerBody.querySelectorAll('.jsonl-clickable-img').forEach(img => {
+  body.querySelectorAll('.jsonl-clickable-img').forEach(img => {
     img.onclick = () => {
       const overlay = document.createElement('div');
       overlay.className = 'jsonl-screenshot-fullscreen';
@@ -612,6 +565,8 @@ async function showJsonlViewer(session) {
     };
   });
 
-  // Scroll to the bottom so the most recent messages are visible
-  jsonlViewerBody.scrollTop = jsonlViewerBody.scrollHeight;
+  body.scrollTop = body.scrollHeight;
 }
+
+defineExpose({ open });
+</script>

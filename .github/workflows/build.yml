@@ -1,38 +1,14 @@
-name: Build & Release
+name: Test
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
   pull_request:
     branches: [main]
 
-permissions:
-  contents: write
-
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-14
-            platform: mac
-          - os: windows-latest
-            platform: win
-          # Linux is split per-arch to avoid electron-builder bundling native
-          # modules from the wrong architecture. When multiple targets (AppImage
-          # + deb) are built for multiple arches in one invocation, the native
-          # module rebuild only runs between arch switches for the first target
-          # type — the second target type reuses whatever was last compiled,
-          # which can be the wrong arch. See #18.
-          - os: ubuntu-latest
-            platform: linux
-            arch: x64
-          - os: ubuntu-24.04-arm
-            platform: linux
-            arch: arm64
-
-    runs-on: ${{ matrix.os }}
+  test:
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -42,64 +18,8 @@ jobs:
           node-version: 20
           cache: npm
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install setuptools (node-gyp distutils fix)
-        run: python -m pip install setuptools
-
       - name: Install dependencies
         run: npm ci
 
-      - name: Bundle CodeMirror
-        run: npm run bundle:codemirror
-
-      - name: Build
-        run: npx electron-builder --${{ matrix.platform }} --publish never
-        env:
-          CSC_LINK: ${{ matrix.platform == 'mac' && secrets.CSC_LINK || '' }}
-          CSC_KEY_PASSWORD: ${{ matrix.platform == 'mac' && secrets.CSC_KEY_PASSWORD || '' }}
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.platform == 'mac' }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist-${{ matrix.platform }}${{ matrix.arch && format('-{0}', matrix.arch) || '' }}
-          path: |
-            dist/*.dmg
-            dist/*.dmg.blockmap
-            dist/*.zip
-            dist/*.zip.blockmap
-            dist/*.exe
-            dist/*.exe.blockmap
-            dist/*.AppImage
-            dist/*.deb
-            dist/latest*.yml
-          if-no-files-found: ignore
-
-  publish:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Create GitHub release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --draft \
-            --title "${GITHUB_REF_NAME#v}" \
-            --notes "" \
-            dist/*
+      - name: Run tests
+        run: npm test

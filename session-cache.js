@@ -10,13 +10,14 @@ const { encodeProjectPath } = require('./encode-project-path');
  * Session cache module.
  * Call init(ctx) once with the shared context object.
  */
-let PROJECTS_DIR, activeSessions, getMainWindow, log;
+let PROJECTS_DIR, accountId, activeSessions, getMainWindow, log;
 let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession;
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
-let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName;
+let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName, getAllProjectGitCounts;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
+  accountId = ctx.accountId || 'default';
   activeSessions = ctx.activeSessions;
   getMainWindow = ctx.getMainWindow;
   log = ctx.log;
@@ -35,6 +36,7 @@ function init(ctx) {
   getSetting = ctx.db.getSetting;
   getMeta = ctx.db.getMeta;
   setName = ctx.db.setName;
+  getAllProjectGitCounts = ctx.db.getAllProjectGitCounts;
 }
 
 // readSessionFile is imported from read-session-file.js (shared with worker)
@@ -61,7 +63,7 @@ function readFolderFromFilesystem(folder) {
 function refreshFolder(folder) {
   const folderPath = path.join(PROJECTS_DIR, folder);
   if (!fs.existsSync(folderPath)) {
-    deleteCachedFolder(folder);
+    deleteCachedFolder(folder, accountId);
     return;
   }
 
@@ -72,7 +74,7 @@ function refreshFolder(folder) {
   }
 
   // Get what's currently cached for this folder
-  const cachedSessions = getCachedByFolder(folder);
+  const cachedSessions = getCachedByFolder(folder, accountId);
   const cachedMap = new Map(); // sessionId → modified ISO string
   for (const row of cachedSessions) {
     cachedMap.set(row.sessionId, row.modified);
@@ -111,14 +113,15 @@ function refreshFolder(folder) {
     if (s) {
       sessionsToUpsert.push(s);
       // Title precedence: user rename (session_meta.name) > JSONL custom-title > JSONL ai-title.
-      // Only customTitle (Claude /title) promotes to session_meta.name — AI titles must NEVER
-      // be written there or they'd overwrite the user's UI rename on the next index pass.
-      const name = getMeta(s.sessionId)?.name || s.customTitle || s.aiTitle || '';
+      // Only customTitle (Claude /title) promotes to session_meta.name — AI titles stay in
+      // session_cache.aiTitle and are preserved once written (COALESCE in the upsert).
+      const existingName = getMeta(s.sessionId)?.name;
+      if (!existingName && s.customTitle) namesToSet.push({ id: s.sessionId, name: s.customTitle });
+      const name = existingName || s.customTitle || s.aiTitle || '';
       searchEntriesToUpsert.push({
         id: s.sessionId, type: 'session', folder: s.folder,
         title: (name ? name + ' ' : '') + s.summary, body: s.textContent,
       });
-      if (s.customTitle) namesToSet.push({ id: s.sessionId, name: s.customTitle });
     }
     changed = true;
   }
@@ -133,7 +136,7 @@ function refreshFolder(folder) {
 
   // Batch all DB writes to reduce lock contention
   if (sessionsToUpsert.length > 0) {
-    upsertCachedSessions(sessionsToUpsert);
+    upsertCachedSessions(sessionsToUpsert, accountId);
   }
   for (const entry of searchEntriesToUpsert) {
     deleteSearchSession(entry.id);
@@ -171,9 +174,10 @@ function populateCacheFromFilesystem() {
 /** Build projects response from cached data */
 function buildProjectsFromCache(showArchived) {
   const metaMap = getAllMeta();
-  const cachedRows = getAllCached();
+  const cachedRows = getAllCached(accountId);
   const global = getSetting('global') || {};
   const hiddenProjects = new Set(global.hiddenProjects || []);
+  const gitCounts = getAllProjectGitCounts?.() || new Map();
 
   // Group by projectPath, not on-disk folder name. Multiple ~/.claude/projects/<folder>/
   // directories can resolve to the same projectPath (Claude Code's folder-name encoding
@@ -200,6 +204,7 @@ function buildProjectsFromCache(showArchived) {
       name: meta?.name || null,
       starred: meta?.starred || 0,
       archived: meta?.archived || 0,
+      accountId: row.accountId || 'default',
     };
     if (!showArchived && s.archived) continue;
     if (!projectMap.has(row.projectPath)) {
@@ -266,6 +271,11 @@ function buildProjectsFromCache(showArchived) {
   const projects = [];
   for (const proj of projectMap.values()) {
     proj.sessions.sort((a, b) => new Date(b.modified) - new Date(a.modified));
+    const gc = gitCounts.get(proj.projectPath);
+    if (gc) {
+      proj.unpushedCount = gc.unpushedCount || 0;
+      proj.changedCount = gc.changedCount || 0;
+    }
     projects.push(proj);
   }
 
@@ -306,7 +316,7 @@ function populateCacheViaWorker() {
   sendStatus('Scanning projects\u2026', 'active');
 
   const worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
-    workerData: { projectsDir: PROJECTS_DIR },
+    workerData: { projectsDir: PROJECTS_DIR, accountId },
   });
 
   worker.on('message', (msg) => {
@@ -326,13 +336,14 @@ function populateCacheViaWorker() {
     sendStatus(`Indexing ${msg.results.length} projects\u2026`, 'active');
 
     // Write results to DB on main thread (fast)
+    const currentAccountId = msg.accountId || accountId;
     let sessionCount = 0;
     for (const { folder, projectPath, sessions, indexMtimeMs } of msg.results) {
-      deleteCachedFolder(folder);
+      deleteCachedFolder(folder, currentAccountId);
       deleteSearchFolder(folder);
       if (sessions.length > 0) {
         sessionCount += sessions.length;
-        upsertCachedSessions(sessions);
+        upsertCachedSessions(sessions, currentAccountId);
         for (const s of sessions) {
           // Only JSONL custom-title (genuine user title) promotes to the DB name column.
           // AI titles must not — see refreshFolder for the rationale.

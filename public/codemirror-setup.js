@@ -528,6 +528,36 @@ function createUnifiedMergeViewer(parent, originalContent, modifiedContent, file
   return new EditorView({ state, parent });
 }
 
+function createReadOnlyMergeViewer(parent, originalContent, modifiedContent, filename) {
+  const langExt = getLanguageExt(filename);
+  const sharedExts = [
+    lineNumbers(),
+    highlightSpecialChars(),
+    foldGutter(),
+    bracketMatching(),
+    highlightSelectionMatches(),
+    keymap.of([...foldKeymap]),
+    cmFindKeymap,
+    cmFindDomHandler,
+    cmFloatingSearch(),
+    langExt,
+    dracula,
+    syntaxHighlighting(markdownExtras),
+    appThemePatch,
+    EditorView.editable.of(false),
+    EditorState.readOnly.of(true),
+  ];
+
+  return new MergeView({
+    parent,
+    a: { doc: originalContent, extensions: sharedExts },
+    b: { doc: modifiedContent, extensions: sharedExts },
+    gutter: true,
+    highlightChanges: true,
+    collapseUnchanged: { margin: 3, minSize: 4 },
+  });
+}
+
 // ── Exports ─────────────────────────────────────────────────────────
 
 window.createPlanEditor = createPlanEditor;
@@ -535,6 +565,7 @@ window.createReadOnlyViewer = createReadOnlyViewer;
 window.createEditableViewer = createEditableViewer;
 window.createMergeViewer = createMergeViewer;
 window.createUnifiedMergeViewer = createUnifiedMergeViewer;
+window.createReadOnlyMergeViewer = createReadOnlyMergeViewer;
 window.CMEditorView = EditorView;
 window.CMEditorState = EditorState;
 window.CMMergeView = MergeView;

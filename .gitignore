@@ -1,9 +1,12 @@
+.idea/
 node_modules/
 dist/
+design/
 *.db
 *.db-wal
 *.db-shm
 public/codemirror-bundle.js
+public/vue-bundle.js
 .DS_Store
 *.pem
 .env

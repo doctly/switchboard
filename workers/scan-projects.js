@@ -6,6 +6,7 @@ const { deriveProjectPath } = require('../derive-project-path');
 const { readSessionFile } = require('../read-session-file');
 
 const PROJECTS_DIR = workerData.projectsDir;
+const ACCOUNT_ID = workerData.accountId || 'default';
 
 function readFolderFromFilesystem(folder) {
   const folderPath = path.join(PROJECTS_DIR, folder);
@@ -39,7 +40,7 @@ try {
     const result = readFolderFromFilesystem(folders[i]);
     if (result) results.push(result);
   }
-  parentPort.postMessage({ ok: true, results });
+  parentPort.postMessage({ ok: true, results, accountId: ACCOUNT_ID });
 } catch (err) {
   parentPort.postMessage({ ok: false, error: err.message });
 }

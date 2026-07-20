@@ -8,7 +8,7 @@ cli:
   allowed-tools: WebFetch
 ---
 
-Check Hacker News for the current top article and any posts related to AI document conversion or extraction.
+Check Hacker /News for the current top article and any posts related to AI document conversion or extraction.
 
 ## Steps
 

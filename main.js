@@ -37,8 +37,7 @@ let autoUpdater = null;
 if (app.isPackaged || process.env.FORCE_UPDATER) {
   autoUpdater = require('electron-updater').autoUpdater;
   autoUpdater.logger = log;
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.autoDownload = false;
   if (!app.isPackaged) autoUpdater.forceDevUpdateConfig = true;
 
   function sendUpdaterEvent(type, data) {
@@ -64,17 +63,74 @@ const {
   isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, upsertCachedSessions,
   deleteCachedSession, deleteCachedFolder,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
+  getProjectGitCache, setProjectGitCache, getAllProjectGitCounts,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting,
   closeDb,
 } = require('./db');
 
-const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
-const PLANS_DIR = path.join(os.homedir(), '.claude', 'plans');
-const CLAUDE_DIR = path.join(os.homedir(), '.claude');
+const DEFAULT_CLAUDE_DIR = path.join(os.homedir(), '.claude');
+const PLANS_DIR = path.join(DEFAULT_CLAUDE_DIR, 'plans');
+const CLAUDE_DIR = DEFAULT_CLAUDE_DIR;
 const STATS_CACHE_PATH = path.join(CLAUDE_DIR, 'stats-cache.json');
 const MAX_BUFFER_SIZE = 256 * 1024;
+
+// --- Multi-account helpers ---
+
+const DEFAULT_ACCOUNT = { id: 'default', name: 'Default', configDir: DEFAULT_CLAUDE_DIR };
+
+function getAccounts() {
+  const stored = getSetting('accounts');
+  if (!Array.isArray(stored) || stored.length === 0) return [DEFAULT_ACCOUNT];
+  // Always ensure default account is present
+  if (!stored.find(a => a.id === 'default')) return [DEFAULT_ACCOUNT, ...stored];
+  return stored;
+}
+
+function getActiveAccount() {
+  const global = getSetting('global') || {};
+  const activeId = global.activeAccountId || 'default';
+  return getAccounts().find(a => a.id === activeId) || DEFAULT_ACCOUNT;
+}
+
+function getProjectsDir(account) {
+  return path.join(account.configDir, 'projects');
+}
+
+// Convenience: current active projects dir
+function activeProjectsDir() {
+  return getProjectsDir(getActiveAccount());
+}
+
+function activeConfigDir() {
+  return getActiveAccount().configDir;
+}
+
+// Build stats in the same format as stats-cache.json using Switchboard's own DB.
+// This ensures all accounts see charts even before running `claude /stats`.
+function computeStatsFromDb(accountId) {
+  const sessions = getAllCached(accountId);
+  const dailyMap = {};
+  let totalMessages = 0;
+  for (const s of sessions) {
+    const date = (s.modified || s.created || '').slice(0, 10);
+    if (!date || date < '2020-01-01') continue;
+    if (!dailyMap[date]) dailyMap[date] = { date, messageCount: 0, toolCallCount: 0 };
+    const mc = s.messageCount || 0;
+    dailyMap[date].messageCount += mc;
+    totalMessages += mc;
+  }
+  const dailyActivity = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
+  return {
+    dailyActivity,
+    dailyModelTokens: [],
+    totalSessions: sessions.length,
+    totalMessages,
+    modelUsage: {},
+    lastComputedDate: new Date().toISOString().slice(0, 10),
+  };
+}
 
 // Active PTY sessions
 const activeSessions = new Map();
@@ -254,17 +310,24 @@ const { deriveProjectPath } = require('./derive-project-path');
 
 // Session cache → session-cache.js
 const sessionCache = require('./session-cache');
-sessionCache.init({
-  PROJECTS_DIR,
-  activeSessions,
-  getMainWindow: () => mainWindow,
-  log,
-  db: {
-    deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession,
-    deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
-    setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName,
-  },
-});
+
+function initSessionCache() {
+  const account = getActiveAccount();
+  sessionCache.init({
+    PROJECTS_DIR: getProjectsDir(account),
+    accountId: account.id,
+    activeSessions,
+    getMainWindow: () => mainWindow,
+    log,
+    db: {
+      deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession,
+      deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
+      setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName, getAllProjectGitCounts,
+    },
+  });
+}
+
+initSessionCache();
 const { readSessionFile, readFolderFromFilesystem, refreshFolder, populateCacheFromFilesystem,
         buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker } = sessionCache;
 
@@ -295,7 +358,7 @@ ipcMain.handle('add-project', (_event, projectPath) => {
 
     // Create the corresponding folder in ~/.claude/projects/ so it persists
     const folder = encodeProjectPath(projectPath);
-    const folderPath = path.join(PROJECTS_DIR, folder);
+    const folderPath = path.join(activeProjectsDir(), folder);
     if (!fs.existsSync(folderPath)) {
       fs.mkdirSync(folderPath, { recursive: true });
     }
@@ -342,7 +405,163 @@ ipcMain.handle('remove-project', (_event, projectPath) => {
   }
 });
 
-// --- IPC: get-projects ---
+// --- IPC: get-project-info (git branch/diff + docker compose, cached 1 min in SQLite) ---
+const PROJECT_INFO_TTL_MS = 60 * 1000;
+
+function fetchProjectInfoSync(projectPath) {
+  const { execSync } = require('child_process');
+  const data = { branch: null, added: null, deleted: null, containers: null };
+  try {
+    data.branch = execSync('git rev-parse --abbrev-ref HEAD', {
+      cwd: projectPath, encoding: 'utf8', timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const stat = execSync('git diff --shortstat HEAD', {
+      cwd: projectPath, encoding: 'utf8', timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const addM = stat.match(/(\d+) insertion/);
+    const delM = stat.match(/(\d+) deletion/);
+    if (addM) data.added = parseInt(addM[1]);
+    if (delM) data.deleted = parseInt(delM[1]);
+  } catch {}
+  try {
+    const raw = execSync('docker compose ps --format json', {
+      cwd: projectPath, encoding: 'utf8', timeout: 8000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (raw) {
+      data.containers = raw.split('\n').filter(Boolean).map(line => {
+        try {
+          const c = JSON.parse(line);
+          return { name: c.Service || c.Name, state: (c.State || '').toLowerCase(), status: c.Status || '' };
+        } catch { return null; }
+      }).filter(Boolean);
+    }
+  } catch {}
+  return data;
+}
+
+ipcMain.handle('get-project-info', (_event, projectPath) => {
+  if (!projectPath || !fs.existsSync(projectPath)) return null;
+  const cacheKey = 'project-info:' + projectPath;
+  const cached = getSetting(cacheKey);
+  const fresh = cached && cached.fetchedAt && (Date.now() - cached.fetchedAt) < PROJECT_INFO_TTL_MS;
+  if (fresh) return cached.data;
+  // Stale: return old data immediately, refresh in background
+  if (cached && cached.data) {
+    setImmediate(() => {
+      const data = fetchProjectInfoSync(projectPath);
+      setSetting(cacheKey, { data, fetchedAt: Date.now() });
+    });
+    return cached.data;
+  }
+  // No cache yet: fetch synchronously (first visit)
+  const data = fetchProjectInfoSync(projectPath);
+  setSetting(cacheKey, { data, fetchedAt: Date.now() });
+  return data;
+});
+
+// --- IPC: get-project-detail (full git log + docker details, no cache) ---
+ipcMain.handle('get-project-detail', (_event, projectPath) => {
+  if (!projectPath || !fs.existsSync(projectPath)) return null;
+  const { execSync } = require('child_process');
+  const detail = { branch: null, upstream: null, remoteUrl: null, tags: [], worktreePaths: [], commits: [], unpushedCommits: [], changedFiles: [], totalAdded: 0, totalDeleted: 0, containers: [] };
+  try {
+    detail.branch = execSync('git rev-parse --abbrev-ref HEAD', {
+      cwd: projectPath, encoding: 'utf8', timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const log = execSync('git log --format=%h\x1f%s\x1f%an\x1f%ar -15', {
+      cwd: projectPath, encoding: 'utf8', timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (log) {
+      detail.commits = log.split('\n').filter(Boolean).map(line => {
+        const [hash, message, author, date] = line.split('\x1f');
+        return { hash, message, author, date };
+      });
+    }
+    try {
+      const unpushed = execSync('git log --format=%h\x1f%s\x1f%an\x1f%ar @{u}..HEAD', {
+        cwd: projectPath, encoding: 'utf8', timeout: 5000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      if (unpushed) {
+        detail.unpushedCommits = unpushed.split('\n').filter(Boolean).map(line => {
+          const [hash, message, author, date] = line.split('\x1f');
+          return { hash, message, author, date };
+        });
+      }
+      const upstream = execSync('git rev-parse --abbrev-ref --symbolic-full-name @{u}', {
+        cwd: projectPath, encoding: 'utf8', timeout: 3000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      detail.upstream = upstream;
+      const remoteName = upstream.split('/')[0];
+      try {
+        detail.remoteUrl = execSync(`git remote get-url ${remoteName}`, {
+          cwd: projectPath, encoding: 'utf8', timeout: 3000,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+      } catch {}
+    } catch {} // no upstream set — just leave empty
+    try {
+      const tagsRaw = execSync('git tag --sort=-version:refname', {
+        cwd: projectPath, encoding: 'utf8', timeout: 3000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      detail.tags = tagsRaw ? tagsRaw.split('\n').filter(Boolean).slice(0, 20) : [];
+    } catch { detail.tags = []; }
+    try {
+      const wtRaw = execSync('git worktree list --porcelain', {
+        cwd: projectPath, encoding: 'utf8', timeout: 3000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      // Each worktree block is separated by blank line; first entry is the main worktree
+      detail.worktreePaths = wtRaw.split('\n\n').slice(1).map(block => {
+        const match = block.match(/^worktree (.+)/m);
+        return match ? match[1].trim() : null;
+      }).filter(Boolean);
+    } catch { detail.worktreePaths = []; }
+    const numstat = execSync('git diff --numstat HEAD', {
+      cwd: projectPath, encoding: 'utf8', timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (numstat) {
+      detail.changedFiles = numstat.split('\n').filter(Boolean).map(line => {
+        const [added, deleted, file] = line.split('\t');
+        const a = parseInt(added) || 0;
+        const d = parseInt(deleted) || 0;
+        detail.totalAdded += a;
+        detail.totalDeleted += d;
+        return { file, added: a, deleted: d };
+      }).sort((a, b) => (b.added + b.deleted) - (a.added + a.deleted));
+    }
+  } catch {}
+  try {
+    const raw = execSync('docker compose ps --format json', {
+      cwd: projectPath, encoding: 'utf8', timeout: 8000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (raw) {
+      detail.containers = raw.split('\n').filter(Boolean).map(line => {
+        try {
+          const c = JSON.parse(line);
+          const ports = (c.Publishers || []).map(p => `${p.PublishedPort}→${p.TargetPort}/${p.Protocol}`).filter(p => !p.startsWith('0→')).join(', ');
+          return { name: c.Service || c.Name, state: (c.State || '').toLowerCase(), status: c.Status || '', ports };
+        } catch { return null; }
+      }).filter(Boolean);
+    }
+  } catch {}
+  try { setProjectGitCache(projectPath, detail); } catch {}
+  return detail;
+});
+
+ipcMain.handle('get-project-git-cache', (_event, projectPath) => {
+  try { return getProjectGitCache(projectPath); } catch { return null; }
+});
+
 ipcMain.handle('open-external', (_event, url) => {
   log.info('[open-external IPC]', url);
   if (/^https?:\/\//i.test(url)) return shell.openExternal(url);
@@ -351,6 +570,202 @@ ipcMain.handle('open-external', (_event, url) => {
 // --- IPC: MCP bridge ---
 ipcMain.on('mcp-diff-response', (_event, sessionId, diffId, action, editedContent) => {
   resolvePendingDiff(sessionId, diffId, action, editedContent);
+});
+
+// --- IPC: git operations ---
+ipcMain.handle('git-branches', (_event, projectPath) => {
+  const { execFileSync } = require('child_process');
+  try {
+    const current = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 }).trim();
+    const all = execFileSync('git', ['branch'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 }).trim();
+    const branches = all.split('\n').map(b => b.replace(/^[*+]\s*/, '').trim()).filter(Boolean);
+    let remotes = [];
+    try {
+      const raw = execFileSync('git', ['branch', '-r'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 }).trim();
+      remotes = raw.split('\n').map(b => b.trim().replace(/^origin\//, '')).filter(b => b && b !== 'HEAD' && !b.includes('->') && !branches.includes(b));
+    } catch {}
+    return { ok: true, current, branches, remotes };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('git-checkout', (_event, projectPath, branch) => {
+  const { execSync } = require('child_process');
+  try {
+    execSync(`git checkout ${branch}`, { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.stderr || e.message }; }
+});
+
+ipcMain.handle('git-fetch', (_event, projectPath) => {
+  const { execSync } = require('child_process');
+  try {
+    const out = execSync('git fetch --prune', { cwd: projectPath, encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] });
+    return { ok: true, output: out };
+  } catch (e) { return { ok: false, error: e.stderr || e.message }; }
+});
+
+ipcMain.handle('git-pull', (_event, projectPath) => {
+  const { execSync } = require('child_process');
+  try {
+    const out = execSync('git pull', { cwd: projectPath, encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] });
+    return { ok: true, output: out };
+  } catch (e) { return { ok: false, error: e.stderr || e.message }; }
+});
+
+ipcMain.handle('git-commit', (_event, projectPath, message) => {
+  const { execSync } = require('child_process');
+  try {
+    execSync('git add -A', { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+    execSync(`git commit -m ${JSON.stringify(message)}`, { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.stderr || e.message }; }
+});
+
+ipcMain.handle('git-push', (_event, projectPath) => {
+  const { execSync } = require('child_process');
+  try {
+    const out = execSync('git push', { cwd: projectPath, encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] });
+    return { ok: true, output: out };
+  } catch (e) {
+    // try push with set-upstream
+    try {
+      const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: projectPath, encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      const out2 = execSync(`git push --set-upstream origin ${branch}`, { cwd: projectPath, encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] });
+      return { ok: true, output: out2 };
+    } catch (e2) { return { ok: false, error: e2.stderr || e2.message }; }
+  }
+});
+
+ipcMain.handle('git-create-branch', (_event, projectPath, branchName, checkout) => {
+  const { execFileSync } = require('child_process');
+  try {
+    if (checkout) {
+      execFileSync('git', ['checkout', '-b', branchName], { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+    } else {
+      execFileSync('git', ['branch', branchName], { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+    }
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.stderr || e.message }; }
+});
+
+ipcMain.handle('git-generate-commit-msg', async (_event, projectPath, style = 'short') => {
+  const { execSync, spawn } = require('child_process');
+  try {
+    const diff = execSync('git diff HEAD', { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] });
+    if (!diff.trim()) return { ok: false, error: 'No changes to describe' };
+    const globalSettings = getSetting('global') || {};
+    const baseInstruction = globalSettings.commitMessagePrompt || COMMIT_MSG_PROMPT_DEFAULT;
+    const styleSuffix = style === 'descriptive'
+      ? ' Write a short title line followed by a blank line and a concise bullet list of key changes (3-5 bullets max). Use conventional commit format.'
+      : ' Write a single short sentence (max 72 chars). Use conventional commit format (feat/fix/refactor/docs/chore).';
+    const prompt = `${baseInstruction}${styleSuffix}\n\nOutput ONLY the commit message, no explanation:\n\n${diff.slice(0, 8000)}`;
+    const msg = await new Promise((resolve, reject) => {
+      const child = spawn('claude', ['-p', prompt, '--no-session-persistence'], { cwd: projectPath });
+      let stdout = '', stderr = '';
+      child.stdout.on('data', d => { stdout += d; });
+      child.stderr.on('data', d => { stderr += d; });
+      const timer = setTimeout(() => { child.kill(); reject(new Error('Timed out after 60s')); }, 60000);
+      child.on('close', code => {
+        clearTimeout(timer);
+        if (code !== 0 && !stdout.trim()) reject(new Error(stderr.trim() || `claude exited with code ${code}`));
+        else resolve(stdout.trim());
+      });
+      child.on('error', err => { clearTimeout(timer); reject(err); });
+    });
+    if (!msg) return { ok: false, error: 'No output from claude' };
+    return { ok: true, message: msg };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('delete-worktree', (_event, projectPath, worktreePath) => {
+  const { execFileSync } = require('child_process');
+  const { setProjectGitCache } = require('./db');
+  let branch = null;
+  try {
+    branch = execFileSync('git', ['-C', worktreePath, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+      encoding: 'utf8', timeout: 5000,
+    }).trim();
+  } catch {}
+  // Remove the worktree — idempotent: ignore "not a working tree" error
+  try {
+    execFileSync('git', ['-C', projectPath, 'worktree', 'remove', worktreePath, '--force'], {
+      encoding: 'utf8', timeout: 10000,
+    });
+  } catch (e) {
+    if (!e.message.includes('is not a working tree') && !e.message.includes('not a git')) {
+      return { ok: false, error: e.message };
+    }
+  }
+  // Prune stale worktree refs
+  try { execFileSync('git', ['-C', projectPath, 'worktree', 'prune'], { encoding: 'utf8', timeout: 5000 }); } catch {}
+  // Delete the branch
+  if (branch && branch !== 'HEAD' && branch !== 'main' && branch !== 'master') {
+    try { execFileSync('git', ['-C', projectPath, 'branch', '-D', branch], { encoding: 'utf8', timeout: 5000 }); } catch {}
+  }
+  // Clear project git cache for the worktree path so stale data doesn't show
+  try { setProjectGitCache(worktreePath, { branch: null, upstream: null, remoteUrl: null, tags: [], commits: [], unpushedCommits: [], changedFiles: [], totalAdded: 0, totalDeleted: 0, containers: [] }); } catch {}
+  return { ok: true, branch };
+});
+
+ipcMain.handle('get-git-user-info', (_event, projectPath) => {
+  const { execFileSync } = require('child_process');
+  try {
+    const name = execFileSync('git', ['config', 'user.name'], { cwd: projectPath, encoding: 'utf8' }).trim();
+    const email = execFileSync('git', ['config', 'user.email'], { cwd: projectPath, encoding: 'utf8' }).trim();
+    return { ok: true, name, email };
+  } catch { return { ok: false, name: '', email: '' }; }
+});
+
+ipcMain.handle('get-file-tree', (_event, projectPath) => {
+  const IGNORE = new Set(['.git', 'node_modules', '.next', 'dist', 'build', '__pycache__', '.venv', 'venv', '.DS_Store', 'target', '.cache', 'coverage', '.turbo']);
+  function walk(dir, rel, depth) {
+    if (depth > 5) return [];
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+    return entries
+      .filter(e => !IGNORE.has(e.name) && !e.name.startsWith('.'))
+      .sort((a, b) => {
+        if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      })
+      .map(e => {
+        const relPath = rel ? `${rel}/${e.name}` : e.name;
+        const isDir = e.isDirectory();
+        return { name: e.name, path: relPath, isDir, children: isDir ? walk(path.join(dir, e.name), relPath, depth + 1) : null };
+      });
+  }
+  try { return { ok: true, tree: walk(projectPath, '', 0) }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('get-project-sessions', (_event, projectPath) => {
+  try {
+    const { buildProjectsFromCache } = require('./session-cache');
+    const projects = buildProjectsFromCache(false);
+    const proj = projects.find(p => p.projectPath === projectPath);
+    const sessions = (proj?.sessions || []).slice(0, 10).map(s => ({
+      id: s.sessionId, name: s.name || s.aiTitle || s.summary?.slice(0, 40) || s.sessionId?.slice(0, 8), updatedAt: s.modified, running: false,
+    }));
+    return { ok: true, sessions };
+  } catch (e) { return { ok: false, sessions: [] }; }
+});
+
+ipcMain.handle('get-file-diff', (_event, projectPath, filePath) => {
+  const { execSync } = require('child_process');
+  const path = require('path');
+  let oldContent = '';
+  try {
+    oldContent = execSync(`git show HEAD:${filePath}`, {
+      cwd: projectPath, encoding: 'utf8', timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch {}
+  try {
+    const newContent = fs.readFileSync(path.join(projectPath, filePath), 'utf8');
+    return { ok: true, oldContent, newContent, filePath };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
 ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
@@ -409,7 +824,7 @@ ipcMain.handle('unwatch-file', (_event, filePath) => {
 
 ipcMain.handle('get-projects', (_event, showArchived) => {
   try {
-    const needsPopulate = !isCachePopulated() || !isSearchIndexPopulated();
+    const needsPopulate = !isCachePopulated(getActiveAccount().id) || !isSearchIndexPopulated();
 
     if (needsPopulate) {
       populateCacheViaWorker();
@@ -489,14 +904,25 @@ ipcMain.handle('save-plan', (_event, filePath, content) => {
 
 // --- IPC: get-stats ---
 ipcMain.handle('get-stats', () => {
+  const activeAccount = getActiveAccount();
+  const dbStats = computeStatsFromDb(activeAccount.id);
   try {
-    if (!fs.existsSync(STATS_CACHE_PATH)) return null;
-    const raw = fs.readFileSync(STATS_CACHE_PATH, 'utf8');
-    return JSON.parse(raw);
+    const statsPath = path.join(activeConfigDir(), 'stats-cache.json');
+    if (fs.existsSync(statsPath)) {
+      const fileStats = JSON.parse(fs.readFileSync(statsPath, 'utf8'));
+      // Prefer file stats (has rich token data) but fall back to DB for activity data
+      if (!fileStats.dailyActivity?.length && dbStats.dailyActivity.length) {
+        fileStats.dailyActivity = dbStats.dailyActivity;
+      }
+      if (!fileStats.totalSessions) fileStats.totalSessions = dbStats.totalSessions;
+      if (!fileStats.totalMessages) fileStats.totalMessages = dbStats.totalMessages;
+      return fileStats;
+    }
   } catch (err) {
     console.error('Error reading stats cache:', err);
-    return null;
   }
+  // No file cache — return DB-computed stats so charts always render
+  return dbStats;
 });
 
 // --- IPC: refresh-stats (run /stats + /usage via PTY) ---
@@ -507,6 +933,7 @@ ipcMain.handle('refresh-stats', async () => {
   const statsShellProfile = resolveShell(statsProfileId);
   const statsShell = statsShellProfile.path;
   const statsShellExtraArgs = statsShellProfile.args || [];
+  const configDir = activeConfigDir();
   const ptyEnv = {
     ...cleanPtyEnv,
     TERM: 'xterm-256color',
@@ -514,7 +941,9 @@ ipcMain.handle('refresh-stats', async () => {
     TERM_PROGRAM: 'iTerm.app',
     TERM_PROGRAM_VERSION: '3.6.6',
     FORCE_COLOR: '3',
-    ITERM_SESSION_ID: '1',
+    // No ITERM_SESSION_ID: without it Claude CLI won't try to reach iTerm2 via AppleScript,
+    // which avoids the macOS "would like to access data from other apps" permission prompt.
+    ...(configDir !== DEFAULT_CLAUDE_DIR ? { CLAUDE_CONFIG_DIR: configDir } : {}),
   };
 
   // Helper: spawn claude with args, collect output, auto-accept trust, kill when idle
@@ -591,14 +1020,23 @@ ipcMain.handle('refresh-stats', async () => {
     // Run /stats via PTY (for heatmap/chart data) and fetch usage via API in parallel
     const [, usage] = await Promise.all([
       runClaude('"/stats"', { waitFor: /streak/i, timeoutMs: 10000 }),
-      fetchAndTransformUsage().catch(() => ({})),
+      fetchAndTransformUsage(configDir).catch(() => ({})),
     ]);
 
-    // Read refreshed stats cache
-    let stats = null;
+    // Read refreshed stats cache (written to active account's config dir)
+    const activeAccount = getActiveAccount();
+    const dbStats = computeStatsFromDb(activeAccount.id);
+    let stats = dbStats;
     try {
-      if (fs.existsSync(STATS_CACHE_PATH)) {
-        stats = JSON.parse(fs.readFileSync(STATS_CACHE_PATH, 'utf8'));
+      const statsPath = path.join(configDir, 'stats-cache.json');
+      if (fs.existsSync(statsPath)) {
+        const fileStats = JSON.parse(fs.readFileSync(statsPath, 'utf8'));
+        if (!fileStats.dailyActivity?.length && dbStats.dailyActivity.length) {
+          fileStats.dailyActivity = dbStats.dailyActivity;
+        }
+        if (!fileStats.totalSessions) fileStats.totalSessions = dbStats.totalSessions;
+        if (!fileStats.totalMessages) fileStats.totalMessages = dbStats.totalMessages;
+        stats = fileStats;
       }
     } catch {}
 
@@ -611,12 +1049,27 @@ ipcMain.handle('refresh-stats', async () => {
 
 // --- IPC: get-usage (lightweight, API-only, no PTY) ---
 ipcMain.handle('get-usage', async () => {
+  const cacheKey = 'usage:' + ((getSetting('global') || {}).activeAccountId || 'default');
   try {
-    return await fetchAndTransformUsage() || {};
+    const usage = await fetchAndTransformUsage(activeConfigDir()) || {};
+    if (!usage._error && !usage._rateLimited && Object.keys(usage).length) {
+      setSetting(cacheKey, usage);
+      return usage;
+    }
+    const cached = getSetting(cacheKey);
+    return cached ? { ...cached, _cached: true } : usage;
   } catch (err) {
     log.error('Error fetching usage:', err);
-    return {};
+    const cached = getSetting(cacheKey);
+    return cached ? { ...cached, _cached: true } : {};
   }
+});
+
+// --- IPC: get-cached-usage (DB-only, no Keychain/API access) ---
+ipcMain.handle('get-cached-usage', () => {
+  const cacheKey = 'usage:' + ((getSetting('global') || {}).activeAccountId || 'default');
+  const cached = getSetting(cacheKey);
+  return cached ? { ...cached, _cached: true } : {};
 });
 
 // --- IPC: get-memories ---
@@ -657,13 +1110,14 @@ ipcMain.handle('get-memories', () => {
   // --- Per-project files ---
   const projects = [];
   try {
-    if (fs.existsSync(PROJECTS_DIR)) {
-      const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+    const memoriesProjectsDir = activeProjectsDir();
+    if (fs.existsSync(memoriesProjectsDir)) {
+      const folders = fs.readdirSync(memoriesProjectsDir, { withFileTypes: true })
         .filter(d => d.isDirectory() && d.name !== '.git')
         .map(d => d.name);
 
       for (const folder of folders) {
-        const folderPath = path.join(PROJECTS_DIR, folder);
+        const folderPath = path.join(memoriesProjectsDir, folder);
         const projectPath = deriveProjectPath(folderPath, folder);
         if (projectPath && hiddenProjects.has(projectPath)) continue;
 
@@ -807,8 +1261,86 @@ ipcMain.handle('delete-setting', (_event, key) => {
   return { ok: true };
 });
 
+// --- Multi-account IPCs ---
+
+ipcMain.handle('get-accounts', () => getAccounts());
+
+ipcMain.handle('save-accounts', (_event, accounts) => {
+  const withDefault = accounts.find(a => a.id === 'default')
+    ? accounts
+    : [DEFAULT_ACCOUNT, ...accounts];
+  setSetting('accounts', withDefault);
+  return { ok: true };
+});
+
+ipcMain.handle('create-account', (_event, name) => {
+  const { randomUUID } = require('crypto');
+  const id = 'acc-' + randomUUID().replace(/-/g, '').slice(0, 12);
+  const configDir = path.join(os.homedir(), '.switchboard', 'accounts', id);
+  fs.mkdirSync(configDir, { recursive: true });
+  const account = { id, name, configDir };
+  const existing = getAccounts();
+  setSetting('accounts', [...existing, account]);
+  return account;
+});
+
+ipcMain.handle('rename-account', (_event, id, name) => {
+  const updated = getAccounts().map(a => a.id === id ? { ...a, name } : a);
+  setSetting('accounts', updated);
+  return { ok: true };
+});
+
+ipcMain.handle('delete-account', (_event, id) => {
+  if (id === 'default') return { ok: false };
+  const updated = getAccounts().filter(a => a.id !== id);
+  setSetting('accounts', updated);
+  return { ok: true };
+});
+
+ipcMain.handle('get-homedir', () => os.homedir());
+
+ipcMain.handle('get-active-account-id', () => {
+  return (getSetting('global') || {}).activeAccountId || 'default';
+});
+
+ipcMain.handle('set-active-account-id', (_event, accountId) => {
+  const global = getSetting('global') || {};
+  global.activeAccountId = accountId;
+  setSetting('global', global);
+
+  // Re-init session cache for new account and trigger re-scan
+  initSessionCache();
+  restartProjectsWatcher();
+  populateCacheViaWorker();
+  return { ok: true };
+});
+
+ipcMain.handle('get-accounts-usage', async () => {
+  const accounts = getAccounts();
+  const results = {};
+  await Promise.all(accounts.map(async (account) => {
+    const cacheKey = 'usage:' + account.id;
+    try {
+      const usage = await fetchAndTransformUsage(account.configDir);
+      if (usage && !usage._error && !usage._rateLimited && Object.keys(usage).length) {
+        setSetting(cacheKey, usage);
+        results[account.id] = usage;
+      } else {
+        const cached = getSetting(cacheKey);
+        results[account.id] = cached ? { ...cached, _cached: true } : (usage || {});
+      }
+    } catch {
+      const cached = getSetting(cacheKey);
+      results[account.id] = cached ? { ...cached, _cached: true } : {};
+    }
+  }));
+  return results;
+});
+
 // --- Scheduled tasks ---
 const scheduleIpc = require('./schedule-ipc');
+
+const COMMIT_MSG_PROMPT_DEFAULT = `Write a concise git commit message (max 72 chars for first line) for these changes. Use conventional commit format (feat/fix/refactor/docs/chore). Output ONLY the commit message, no explanation:`;
 
 const SETTING_DEFAULTS = {
   permissionMode: null,
@@ -823,6 +1355,8 @@ const SETTING_DEFAULTS = {
   terminalTheme: 'switchboard',
   mcpEmulation: false,
   shellProfile: 'auto',
+  showAvatars: true,
+  commitMessagePrompt: '',
 };
 
 ipcMain.handle('get-shell-profiles', () => {
@@ -893,7 +1427,7 @@ ipcMain.handle('rename-session', (_event, sessionId, name) => {
 ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
   const folder = getCachedFolder(sessionId);
   if (!folder) return { error: 'Session not found in cache' };
-  const jsonlPath = path.join(PROJECTS_DIR, folder, sessionId + '.jsonl');
+  const jsonlPath = path.join(activeProjectsDir(), folder, sessionId + '.jsonl');
   try {
     const content = fs.readFileSync(jsonlPath, 'utf-8');
     const entries = [];
@@ -980,10 +1514,11 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   let sessionSlug = null;
   let projectFolder = null;
 
+  const activeAccount = getActiveAccount();
   if (!isPlainTerminal) {
     // Snapshot existing .jsonl files before spawning (for new session + fork/plan detection)
     projectFolder = encodeProjectPath(projectPath);
-    const claudeProjectDir = path.join(PROJECTS_DIR, projectFolder);
+    const claudeProjectDir = path.join(getProjectsDir(activeAccount), projectFolder);
     if (fs.existsSync(claudeProjectDir)) {
       try {
         knownJsonlFiles = new Set(
@@ -1053,6 +1588,19 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
           claudeCmd += ` --permission-mode "${sessionOptions.permissionMode}"`;
         }
         if (sessionOptions.worktree) {
+          // Ensure .claude/worktrees/ is in .gitignore so worktree dirs aren't tracked
+          try {
+            const gitignorePath = path.join(projectPath, '.gitignore');
+            const entry = '.claude/worktrees/';
+            let content = '';
+            try { content = fs.readFileSync(gitignorePath, 'utf8'); } catch {}
+            const lines = content.split('\n').map(l => l.trim());
+            const alreadyCovered = lines.some(l => l === entry || l === '.claude/' || l === '.claude');
+            if (!alreadyCovered) {
+              const addition = (content.length && !content.endsWith('\n') ? '\n' : '') + entry + '\n';
+              fs.appendFileSync(gitignorePath, addition, 'utf8');
+            }
+          } catch {}
           claudeCmd += ' --worktree';
           if (sessionOptions.worktreeName) {
             claudeCmd += ` "${sessionOptions.worktreeName}"`;
@@ -1096,6 +1644,9 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         TERM: 'xterm-256color', COLORTERM: 'truecolor',
         TERM_PROGRAM: 'iTerm.app', TERM_PROGRAM_VERSION: '3.6.6', FORCE_COLOR: '3', ITERM_SESSION_ID: '1',
       };
+      if (activeAccount.id !== 'default') {
+        ptyEnv.CLAUDE_CONFIG_DIR = activeAccount.configDir;
+      }
       if (mcpServer) {
         ptyEnv.CLAUDE_CODE_SSE_PORT = String(mcpServer.port);
       }
@@ -1295,14 +1846,15 @@ ipcMain.on('close-terminal', (_event, sessionId) => {
 
 // Session transitions → session-transitions.js
 const sessionTransitions = require('./session-transitions');
-sessionTransitions.init({ PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer });
+sessionTransitions.init({ PROJECTS_DIR: activeProjectsDir(), activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer });
 const { detectSessionTransitions } = sessionTransitions;
 
 // --- fs.watch on projects directory ---
 let projectsWatcher = null;
 
 function startProjectsWatcher() {
-  if (!fs.existsSync(PROJECTS_DIR)) return;
+  const watchDir = activeProjectsDir();
+  if (!fs.existsSync(watchDir)) return;
 
   const pendingFolders = new Set();
   let debounceTimer = null;
@@ -1314,12 +1866,12 @@ function startProjectsWatcher() {
 
     let changed = false;
     for (const folder of folders) {
-      const folderPath = path.join(PROJECTS_DIR, folder);
+      const folderPath = path.join(watchDir, folder);
       if (fs.existsSync(folderPath)) {
         detectSessionTransitions(folder);
         refreshFolder(folder);
       } else {
-        deleteCachedFolder(folder);
+        deleteCachedFolder(folder, getActiveAccount().id);
       }
       changed = true;
     }
@@ -1330,7 +1882,7 @@ function startProjectsWatcher() {
   }
 
   try {
-    projectsWatcher = fs.watch(PROJECTS_DIR, { recursive: true }, (_eventType, filename) => {
+    projectsWatcher = fs.watch(watchDir, { recursive: true }, (_eventType, filename) => {
       if (!filename) return;
 
       // filename is relative, e.g. "folder-name/sessions-index.json" or "folder-name/abc.jsonl"
@@ -1358,6 +1910,14 @@ function startProjectsWatcher() {
   } catch (err) {
     console.error('Failed to start projects watcher:', err);
   }
+}
+
+function restartProjectsWatcher() {
+  if (projectsWatcher) {
+    projectsWatcher.close();
+    projectsWatcher = null;
+  }
+  startProjectsWatcher();
 }
 
 // --- IPC: app version ---

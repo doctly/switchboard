@@ -582,6 +582,33 @@ function refitActiveTerminal() {
 
 // ── Utility ─────────────────────────────────────────────────────────
 
+// Open a read-only git diff in the file panel (no accept/reject — just for viewing).
+// Called from the project viewer when the user clicks a changed file.
+window.openGitDiffInPanel = async function(projectPath, filePath) {
+  const result = await window.api.getFileDiff(projectPath, filePath);
+  if (!result?.ok) return;
+  const { oldContent, newContent } = result;
+
+  const GIT_SESSION = '__git_diff__';
+  const state = getSessionState(GIT_SESSION);
+  destroyCurrentTab(state);
+
+  state.currentTab = {
+    type: 'diff',
+    label: basename(filePath),
+    filePath,
+    diffId: GIT_SESSION,
+    oldContent,
+    newContent,
+    resolved: true, // no accept/reject buttons
+    editorView: null,
+  };
+  state.panelVisible = true;
+  currentPanelSessionId = GIT_SESSION;
+  showPanel(state);
+  renderPanel(GIT_SESSION);
+};
+
 function basename(filePath) {
   if (!filePath) return 'untitled';
   const parts = filePath.replace(/\\/g, '/').split('/');
