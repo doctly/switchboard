@@ -58,6 +58,8 @@ contextBridge.exposeInMainWorld('api', {
   gitCommit: (projectPath, message) => ipcRenderer.invoke('git-commit', projectPath, message),
   gitPush: (projectPath) => ipcRenderer.invoke('git-push', projectPath),
   gitCreateBranch: (projectPath, branchName, checkout) => ipcRenderer.invoke('git-create-branch', projectPath, branchName, checkout),
+  getProjectAvatar: (projectPath) => ipcRenderer.invoke('get-project-avatar', projectPath),
+  fetchGitlabAvatar: (projectPath, remoteUrl) => ipcRenderer.invoke('fetch-gitlab-avatar', projectPath, remoteUrl),
   gitGenerateCommitMsg: (projectPath, style) => ipcRenderer.invoke('git-generate-commit-msg', projectPath, style),
   getGitUserInfo: (projectPath) => ipcRenderer.invoke('get-git-user-info', projectPath),
   deleteWorktree: (projectPath, worktreePath) => ipcRenderer.invoke('delete-worktree', projectPath, worktreePath),
@@ -91,6 +93,9 @@ contextBridge.exposeInMainWorld('api', {
   },
   onProjectsChanged: (callback) => {
     ipcRenderer.on('projects-changed', () => callback());
+  },
+  onProjectInfoUpdated: (callback) => {
+    ipcRenderer.on('project-info-updated', (_event, path, data) => callback(path, data));
   },
   onStatusUpdate: (callback) => {
     ipcRenderer.on('status-update', (_event, text, type) => callback(text, type));

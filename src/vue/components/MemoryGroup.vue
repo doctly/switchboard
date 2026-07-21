@@ -2,6 +2,7 @@
   <div class="project-group" :class="{ collapsed }">
     <div class="project-header" @click="toggle">
       <span class="arrow">&#9660;</span>
+      <ProjectAvatar v-if="projectPath" class="project-header-avatar" :project-path="projectPath" />
       <span class="project-name">{{ label }}</span>
       <span class="memory-file-count">{{ files.length }}</span>
     </div>
@@ -41,12 +42,14 @@
 <script setup>
 import { ref } from 'vue';
 import ListItem from './ListItem.vue';
+import ProjectAvatar from './ProjectAvatar.vue';
 
 const props = defineProps({
   groupKey: { type: String, required: true },
   label: { type: String, required: true },
   files: { type: Array, required: true },
   activeFile: { type: String, default: null },
+  projectPath: { type: String, default: null },
 });
 
 const emit = defineEmits(['open']);

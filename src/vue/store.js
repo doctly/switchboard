@@ -48,4 +48,7 @@ export const store = reactive({
   // Main area panel visibility (Vue-owned — do not touch via innerHTML/style directly)
   showStats: false,
   showJsonl: false,
+
+  // Project avatars: projectPath → data: URL string
+  avatarDataUrls: {},
 });

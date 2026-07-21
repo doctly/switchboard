@@ -4,7 +4,7 @@
     :class="itemClasses"
     :id="'si-' + session.sessionId"
     :data-session-id="session.sessionId"
-    @click="$emit('open', session)"
+    @click="!renaming && $emit('open', session)"
   >
     <div class="session-row">
       <span class="session-status-dot" :class="{ running: isRunning }"></span>

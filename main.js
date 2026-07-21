@@ -11,7 +11,20 @@ const { fetchAndTransformUsage } = require('./claude-auth');
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
 log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 
-try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
+try { require('electron-reloader')(module, { watchRenderer: false }); } catch {};
+try {
+  const chokidar = require('chokidar');
+  let _reloadTimer;
+  chokidar.watch(['public/vue-bundle.js', 'public/style.css'], { ignoreInitial: true })
+    .on('change', () => {
+      clearTimeout(_reloadTimer);
+      _reloadTimer = setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.reloadIgnoringCache();
+        }
+      }, 400);
+    });
+} catch {}
 
 // Clean env for child processes — strip Electron internals that cause nested
 // Electron apps (or node-pty inside them) to malfunction.
@@ -67,6 +80,7 @@ const {
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting,
+  getStoredAvatar, setStoredAvatar,
   closeDb,
 } = require('./db');
 
@@ -410,7 +424,15 @@ const PROJECT_INFO_TTL_MS = 60 * 1000;
 
 function fetchProjectInfoSync(projectPath) {
   const { execSync } = require('child_process');
-  const data = { branch: null, added: null, deleted: null, containers: null };
+  const data = { branch: null, added: null, deleted: null, containers: null, sizeMb: null };
+  try {
+    const duOut = execSync(`du -sk "${projectPath}"`, {
+      encoding: 'utf8', timeout: 15000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const kb = parseInt(duOut.split(/\s+/)[0]);
+    if (!isNaN(kb)) data.sizeMb = Math.round(kb / 1024);
+  } catch {}
   try {
     data.branch = execSync('git rev-parse --abbrev-ref HEAD', {
       cwd: projectPath, encoding: 'utf8', timeout: 5000,
@@ -453,6 +475,9 @@ ipcMain.handle('get-project-info', (_event, projectPath) => {
     setImmediate(() => {
       const data = fetchProjectInfoSync(projectPath);
       setSetting(cacheKey, { data, fetchedAt: Date.now() });
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('project-info-updated', projectPath, data);
+      }
     });
     return cached.data;
   }
@@ -466,7 +491,11 @@ ipcMain.handle('get-project-info', (_event, projectPath) => {
 ipcMain.handle('get-project-detail', (_event, projectPath) => {
   if (!projectPath || !fs.existsSync(projectPath)) return null;
   const { execSync } = require('child_process');
-  const detail = { branch: null, upstream: null, remoteUrl: null, tags: [], worktreePaths: [], commits: [], unpushedCommits: [], changedFiles: [], totalAdded: 0, totalDeleted: 0, containers: [] };
+  const detail = { branch: null, upstream: null, remoteUrl: null, tags: [], worktreePaths: [], commits: [], unpushedCommits: [], changedFiles: [], totalAdded: 0, totalDeleted: 0, containers: [], readmePath: null };
+  for (const name of ['README.md', 'readme.md', 'Readme.md', 'README.rst', 'README']) {
+    const fp = path.join(projectPath, name);
+    if (fs.existsSync(fp)) { detail.readmePath = fp; break; }
+  }
   try {
     detail.branch = execSync('git rev-parse --abbrev-ref HEAD', {
       cwd: projectPath, encoding: 'utf8', timeout: 5000,
@@ -506,6 +535,15 @@ ipcMain.handle('get-project-detail', (_event, projectPath) => {
         }).trim();
       } catch {}
     } catch {} // no upstream set — just leave empty
+    // Always try origin as fallback even without upstream
+    if (!detail.remoteUrl) {
+      try {
+        detail.remoteUrl = execSync('git remote get-url origin', {
+          cwd: projectPath, encoding: 'utf8', timeout: 3000,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+      } catch {}
+    }
     try {
       const tagsRaw = execSync('git tag --sort=-version:refname', {
         cwd: projectPath, encoding: 'utf8', timeout: 3000,
@@ -646,6 +684,49 @@ ipcMain.handle('git-create-branch', (_event, projectPath, branchName, checkout) 
     }
     return { ok: true };
   } catch (e) { return { ok: false, error: e.stderr || e.message }; }
+});
+
+// --- IPC: project avatar (GitLab) ---
+ipcMain.handle('get-project-avatar', (_event, projectPath) => {
+  const result = getStoredAvatar(projectPath);
+  if (!result) return null;
+  return `data:${result.mimeType};base64,${result.avatarData.toString('base64')}`;
+});
+
+ipcMain.handle('fetch-gitlab-avatar', async (_event, projectPath, remoteUrl) => {
+  let base = remoteUrl.trim();
+  const ssh = base.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
+  let host, projectApiPath;
+  if (ssh) {
+    host = `https://${ssh[1]}`;
+    projectApiPath = ssh[2];
+  } else {
+    base = base.replace(/\.git$/, '');
+    const m = base.match(/^(https?:\/\/[^/]+)\/(.+)$/);
+    if (!m) throw new Error('Cannot parse remote URL');
+    host = m[1];
+    projectApiPath = m[2];
+  }
+  const globalSettings = getSetting('global') || {};
+  const token = globalSettings.gitlabToken;
+  const headers = token ? { 'PRIVATE-TOKEN': token } : {};
+  const apiUrl = `${host}/api/v4/projects/${encodeURIComponent(projectApiPath)}`;
+  const resp = await fetch(apiUrl, { headers });
+  if (!resp.ok) throw new Error(`GitLab API error: ${resp.status}`);
+  const data = await resp.json();
+  if (!data.avatar_url) {
+    setStoredAvatar(projectPath, null, null);
+    return null;
+  }
+  // Use the API avatar endpoint (authenticated) instead of downloading avatar_url directly
+  // (avatar_url points to CDN/storage that may reject PRIVATE-TOKEN header).
+  const avatarApiUrl = `${host}/api/v4/projects/${data.id}/avatar`;
+  const imgResp = await fetch(avatarApiUrl, { headers });
+  if (!imgResp.ok) throw new Error(`Avatar download error: ${imgResp.status}`);
+  const contentType = imgResp.headers.get('content-type') || 'image/png';
+  const buffer = Buffer.from(await imgResp.arrayBuffer());
+  setStoredAvatar(projectPath, buffer, contentType);
+  return `data:${contentType};base64,${buffer.toString('base64')}`;
 });
 
 ipcMain.handle('git-generate-commit-msg', async (_event, projectPath, style = 'short') => {

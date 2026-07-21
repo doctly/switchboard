@@ -1,13 +1,34 @@
 <template>
   <div v-if="store.headerSession" class="vue-session-header">
-    <!-- Top row: project path + session name -->
     <div class="vsh-top">
       <div class="vsh-identity">
-        <span class="vsh-avatar" :style="{ background: avatar.color }">{{ avatar.initials }}</span>
-        <div class="vsh-breadcrumb">
-          <span class="vsh-project-path">{{ projectShortPath }}</span>
-          <span class="vsh-sep">›</span>
-          <span class="vsh-session-name" :title="sessionName">{{ sessionName }}</span>
+        <ProjectAvatar class="vsh-avatar" :project-path="session.projectPath" />
+        <div class="vsh-info">
+          <div class="vsh-title-row">
+            <span class="vsh-project-path" :title="session.projectPath">{{ projectShortPath }}</span>
+            <span class="vsh-sep">›</span>
+            <span class="vsh-session-name" :title="sessionName">{{ sessionName }}</span>
+          </div>
+          <div class="vsh-status-row">
+            <span class="vsh-status-dot" :class="statusClass"></span>
+            <span class="vsh-status-label">{{ statusLabel }}</span>
+            <template v-if="messageCount">
+              <span class="vsh-dot-sep">·</span>
+              <span class="vsh-msg-count">{{ messageCount }} msgs</span>
+            </template>
+            <template v-if="timeStr">
+              <span class="vsh-dot-sep">·</span>
+              <span class="vsh-time">{{ timeStr }}</span>
+            </template>
+            <template v-if="sessionId">
+              <span class="vsh-dot-sep">·</span>
+              <span class="vsh-session-id">{{ shortId }}</span>
+            </template>
+          </div>
+          <div v-if="aiTitle || store.headerPtyTitle" class="vsh-subtitle-row">
+            <span v-if="aiTitle" class="vsh-ai-title">{{ aiTitle }}</span>
+            <span v-if="store.headerPtyTitle" class="vsh-pty-title">{{ store.headerPtyTitle }}</span>
+          </div>
         </div>
       </div>
       <div class="vsh-controls">
@@ -16,44 +37,16 @@
         <button class="session-stop-btn vsh-stop" data-tooltip="Stop session" @click="stop" v-html="stopSvg"></button>
       </div>
     </div>
-
-    <!-- AI title row (task description) -->
-    <div v-if="aiTitle" class="vsh-ai-title">{{ aiTitle }}</div>
-
-    <!-- PTY title if different from session name -->
-    <div v-if="store.headerPtyTitle" class="vsh-pty-title">{{ store.headerPtyTitle }}</div>
-
-    <!-- Status row -->
-    <div class="vsh-status">
-      <span class="vsh-status-dot" :class="statusClass"></span>
-      <span class="vsh-status-label">{{ statusLabel }}</span>
-      <template v-if="messageCount">
-        <span class="vsh-dot-sep">·</span>
-        <span class="vsh-msg-count">{{ messageCount }} msgs</span>
-      </template>
-      <template v-if="timeStr">
-        <span class="vsh-dot-sep">·</span>
-        <span class="vsh-time">{{ timeStr }}</span>
-      </template>
-      <template v-if="sessionId">
-        <span class="vsh-dot-sep">·</span>
-        <span class="vsh-session-id">{{ shortId }}</span>
-      </template>
-    </div>
   </div>
 </template>
 
 <script setup>
 import { computed } from 'vue';
 import { store } from '../store.js';
+import ProjectAvatar from './ProjectAvatar.vue';
 
 const session = computed(() => store.headerSession);
 const sessionId = computed(() => session.value?.sessionId);
-
-const avatar = computed(() => {
-  const path = session.value?.projectPath || '';
-  return window.getProjectAvatar ? window.getProjectAvatar(path) : { initials: '?', color: '#888' };
-});
 
 const projectShortPath = computed(() => {
   const p = session.value?.projectPath || '';
@@ -71,7 +64,6 @@ const aiTitle = computed(() => {
   const s = session.value;
   if (!s?.aiTitle) return null;
   const cleaned = window.cleanDisplayName ? window.cleanDisplayName(s.aiTitle) : s.aiTitle;
-  // Don't show if it's the same as the session name
   return cleaned !== sessionName.value ? cleaned : null;
 });
 

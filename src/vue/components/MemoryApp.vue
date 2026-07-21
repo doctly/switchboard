@@ -20,6 +20,7 @@
         :label="proj.shortName"
         :files="proj.files"
         :active-file="activeFile"
+        :project-path="proj.projectPath"
         @open="openMemory"
       />
     </template>

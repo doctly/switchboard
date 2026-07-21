@@ -36,7 +36,7 @@
     <template v-else>
       <!-- Header -->
       <div class="pv-header">
-        <span class="pv-avatar" :style="{ background: avatar.color }">{{ avatar.initials }}</span>
+        <ProjectAvatar class="pv-avatar" :project-path="project.projectPath" />
         <div class="pv-title-wrap">
           <div class="pv-name">
             {{ projectName }}
@@ -154,7 +154,7 @@
                   class="pv-commit-input"
                   placeholder="Commit message…"
                   v-model="commitMessage"
-                  rows="3"
+                  rows="5"
                 ></textarea>
                 <div class="pv-git-user" v-if="gitUser.name || gitUser.email">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -197,6 +197,17 @@
                     <div class="pv-session-date">{{ fmtDate(s.updatedAt) }}</div>
                   </div>
                 </div>
+              </div>
+
+              <div class="pv-card pv-avatar-card" v-if="mrLink?.type === 'gitlab'">
+                <div class="pv-card-title">Avatar</div>
+                <div class="pv-avatar-preview">
+                  <img v-if="avatarDataUrl" class="pv-avatar-preview-img" :src="avatarDataUrl" :alt="projectName">
+                  <span v-else class="pv-avatar pv-avatar--large" :style="{ background: avatar.color }">{{ avatar.initials }}</span>
+                </div>
+                <SbButton @click="updateAvatar" :disabled="avatarLoading">
+                  {{ avatarLoading ? 'Updating…' : 'Update Avatar' }}
+                </SbButton>
               </div>
             </div>
           </div>
@@ -321,6 +332,12 @@
           <div v-if="!activeSessions.length && !sessions.length" class="pv-empty">No sessions found.</div>
         </template>
 
+        <!-- ── README TAB ────────────────────────────────────────── -->
+        <template v-else-if="activeTab === 'readme'">
+          <div v-if="readmeHtml" class="pv-readme" v-html="readmeHtml"></div>
+          <div v-else class="pv-loading">Loading…</div>
+        </template>
+
       </div>
     </template>
 
@@ -366,15 +383,18 @@
 
 <script setup>
 import { ref, computed, watch, nextTick, onMounted } from 'vue';
+import { store } from '../store.js';
 import FileTreeNode from './FileTreeNode.vue';
 import SbButton from './SbButton.vue';
 import SbSwitch from './SbSwitch.vue';
+import ProjectAvatar from './ProjectAvatar.vue';
 
 const TABS = computed(() => [
   { id: 'overview', label: 'Overview' },
   { id: 'commits', label: unpushedCount.value ? `Commits (${unpushedCount.value})` : 'Commits' },
   { id: 'files', label: 'Files' },
   { id: 'sessions', label: activeSessions.value.length ? `Sessions (${activeSessions.value.length})` : 'Sessions' },
+  ...(detail.value?.readmePath ? [{ id: 'readme', label: 'README' }] : []),
 ]);
 
 const props = defineProps({ callbacks: { type: Object, required: true } });
@@ -386,6 +406,11 @@ const detail = ref(null);
 const loading = ref(false);
 const activeTab = ref('overview');
 watch(activeTab, (tab) => props.callbacks.onTabChange?.(tab));
+
+// Incremented each time open() is called so the watcher fires
+// even when the same project path is re-opened (net-zero ref change
+// would otherwise suppress the Vue watcher).
+const _openCount = ref(0);
 
 // Git actions
 const branches = ref([]);
@@ -401,6 +426,13 @@ const confirmPush = ref(false);
 const showCreateBranch = ref(false);
 const newBranchName = ref('');
 const checkoutBranch = ref(true);
+
+// Avatar
+const avatarDataUrl = ref(null);
+const avatarLoading = ref(false);
+
+// README
+const readmeHtml = ref('');
 
 // Changed files
 const loadingFile = ref(null);
@@ -503,11 +535,15 @@ function filterTree(nodes, q) {
 }
 
 // ── Data loading ──────────────────────────────────────────────────
-watch(viewedPath, async (p) => {
+watch([viewedPath, _openCount], async ([p]) => {
   if (!p) return;
   activeDiff.value = null;
   activeFile.value = null;
   commitMessage.value = '';
+  avatarDataUrl.value = null;
+  readmeHtml.value = '';
+  if (activeTab.value === 'readme') activeTab.value = 'overview';
+  loadAvatar();
   // Show stale cache immediately — no blank flash
   const cached = await window.api.getProjectGitCache(p).catch(() => null);
   if (cached) {
@@ -568,6 +604,11 @@ watch(activeTab, async (tab) => {
     const res = await window.api.getFileTree(viewedPath.value).catch(() => null);
     if (res?.ok) fileTree.value = res.tree;
     treeLoading.value = false;
+  }
+  if (tab === 'readme' && !readmeHtml.value && detail.value?.readmePath) {
+    const res = await window.api.readFileForPanel(detail.value.readmePath).catch(() => null);
+    const content = res?.ok ? res.content : '';
+    readmeHtml.value = content && window.marked ? window.marked.parse(content) : content;
   }
 });
 
@@ -739,6 +780,28 @@ async function deleteWorktree(wt) {
 
 function openSession(s) { window.__sb?.openSessionById?.(s.id); }
 function openExternal(url) { window.api?.openExternal?.(url); }
+
+async function loadAvatar() {
+  if (!project.value) return;
+  const url = await window.api.getProjectAvatar(project.value.projectPath).catch(() => null);
+  avatarDataUrl.value = url;
+  if (url) store.avatarDataUrls[project.value.projectPath] = url;
+}
+
+async function updateAvatar() {
+  if (!project.value || !detail.value?.remoteUrl) return;
+  avatarLoading.value = true;
+  try {
+    const url = await window.api.fetchGitlabAvatar(project.value.projectPath, detail.value.remoteUrl);
+    avatarDataUrl.value = url;
+    if (url) store.avatarDataUrls[project.value.projectPath] = url;
+    else delete store.avatarDataUrls[project.value.projectPath];
+  } catch (e) {
+    console.error('Avatar fetch failed:', e);
+  } finally {
+    avatarLoading.value = false;
+  }
+}
 function newSession(e) { if (project.value) props.callbacks.newSession?.(project.value, e?.currentTarget); }
 
 // ── Expose ────────────────────────────────────────────────────────
@@ -747,6 +810,7 @@ defineExpose({
     project.value = proj;
     worktrees.value = wts;
     viewedPath.value = proj?.projectPath || '';
+    _openCount.value++;
   },
   close() { project.value = null; worktrees.value = []; viewedPath.value = ''; detail.value = null; activeDiff.value = null; activeFile.value = null; },
   setTab(tab) { activeTab.value = tab; },

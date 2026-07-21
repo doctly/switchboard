@@ -16,6 +16,12 @@
             :class="{ active: sortOrder === key }"
             @click="sortOrder = key"
           >{{ label }}</button>
+          <button
+            class="projects-sort-btn"
+            :class="{ active: showContainers }"
+            @click="showContainers = !showContainers"
+            title="Toggle container visibility"
+          >Containers</button>
         </div>
       </div>
       <div class="project-sessions">
@@ -30,10 +36,7 @@
           @click="openProject(project)"
         >
           <div class="session-row">
-            <span
-              class="project-card-avatar"
-              :style="{ background: avatar(project).color }"
-            >{{ avatar(project).initials }}</span>
+            <ProjectAvatar class="project-card-avatar" :project-path="project.projectPath" />
             <div class="session-info">
               <div class="session-summary">
                 <span class="project-item-name">{{ projectName(project) }}</span>
@@ -47,7 +50,7 @@
                 <span v-if="projectInfo[project.projectPath].added" class="project-env-added">+{{ projectInfo[project.projectPath].added }}</span>
                 <span v-if="projectInfo[project.projectPath].deleted" class="project-env-deleted">−{{ projectInfo[project.projectPath].deleted }}</span>
               </div>
-              <div v-if="projectInfo[project.projectPath]?.containers?.length" class="project-card-env">
+              <div v-if="showContainers && projectInfo[project.projectPath]?.containers?.length" class="project-card-env">
                 <div class="project-env-containers-box">
                   <div class="project-env-containers-hdr">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-4 0v2M8 7V5a2 2 0 0 0-4 0v2"/></svg>
@@ -96,12 +99,21 @@
           </div>
         </div>
       </div>
+      <div class="projects-add-row">
+        <button class="projects-add-btn" @click="callbacks.addProject?.()">
+          <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <line x1="6" y1="1" x2="6" y2="11"/><line x1="1" y1="6" x2="11" y2="6"/>
+          </svg>
+          Add project
+        </button>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
+import ProjectAvatar from './ProjectAvatar.vue';
 
 const props = defineProps({
   callbacks: { type: Object, required: true },
@@ -110,6 +122,7 @@ const props = defineProps({
 const projects = ref([]);
 const searchQuery = ref('');
 const sortOrder = ref('name');
+const showContainers = ref(true);
 const projectInfo = reactive({});
 const activeProjectPath = ref(null);
 const sortOptions = [['name', 'Name'], ['changes', 'Changes']];
@@ -150,9 +163,6 @@ function projectName(p) {
   return p.projectPath.split('/').filter(Boolean).pop() || p.projectPath;
 }
 
-function avatar(p) {
-  return window.getProjectAvatar ? window.getProjectAvatar(p.projectPath) : { initials: '?', color: '#888' };
-}
 
 function baseMeta(p) {
   const n = p.sessions.length;
@@ -160,7 +170,9 @@ function baseMeta(p) {
   const activity = last
     ? (window.formatDate ? window.formatDate(new Date(last.modified)) : last.modified)
     : '—';
-  return `${n} session${n !== 1 ? 's' : ''} · ${activity}`;
+  const info = projectInfo[p.projectPath];
+  const size = info?.sizeMb != null ? ` · ${info.sizeMb} MB` : '';
+  return `${n} session${n !== 1 ? 's' : ''} · ${activity}${size}`;
 }
 
 function parseUptime(status) {
@@ -182,6 +194,7 @@ async function removeProject(project) {
 async function runInfoQueue(gen, list) {
   for (const project of list) {
     if (queueGen !== gen) break;
+    if (projectInfo[project.projectPath]) continue; // already loaded, skip
     try {
       const info = await window.api.getProjectInfo(project.projectPath);
       if (queueGen !== gen) break;
@@ -189,6 +202,12 @@ async function runInfoQueue(gen, list) {
     } catch {}
   }
 }
+
+onMounted(() => {
+  window.api.onProjectInfoUpdated?.((path, info) => {
+    if (info) projectInfo[path] = info;
+  });
+});
 
 defineExpose({
   setProjects(list) {

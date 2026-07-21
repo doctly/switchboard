@@ -1670,6 +1670,20 @@ window.__sb = {
     await window.api.renameSession(id, name);
     const s = sessionMap.get(id);
     if (s) s.name = name;
+    // Replace the session object in Vue's reactive array via splice — this is the
+    // only reliable way to force ProjectGroup.allItems to recompute, because simple
+    // property mutation on the nested object is not always detected by Vue's watcher.
+    if (window.vueStore?.projects) {
+      outer: for (const p of window.vueStore.projects) {
+        if (!p.sessions) continue;
+        for (let i = 0; i < p.sessions.length; i++) {
+          if (p.sessions[i]?.sessionId === id) {
+            p.sessions.splice(i, 1, { ...p.sessions[i], name });
+            break outer;
+          }
+        }
+      }
+    }
     refreshSidebar();
   },
 

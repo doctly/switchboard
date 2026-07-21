@@ -12,7 +12,7 @@
     <!-- Project header -->
     <div v-else class="project-header" :class="{ collapsed }" :id="'ph-' + folderId" @click.self="toggle">
       <span class="arrow" @click.stop="toggle">&#9660;</span>
-      <span class="project-header-avatar" :style="{ background: avatar.color }" @click.stop="toggle">{{ avatar.initials }}</span>
+      <ProjectAvatar class="project-header-avatar" :project-path="project.projectPath" @click.stop="toggle" />
       <span class="project-name" @click.stop="toggle">{{ shortName }}</span>
       <button class="project-settings-btn" data-tooltip="Project settings" @click.stop="$emit('settings', project.projectPath)" v-html="gearSvg"></button>
       <button class="project-archive-btn" data-tooltip="Archive all sessions" @click.stop="archiveAll" v-html="archiveSvg"></button>
@@ -150,6 +150,7 @@
 import { computed, ref } from 'vue';
 import SessionItem from './SessionItem.vue';
 import SlugGroup from './SlugGroup.vue';
+import ProjectAvatar from './ProjectAvatar.vue';
 
 const props = defineProps({
   project: { type: Object, required: true },

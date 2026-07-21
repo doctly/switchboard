@@ -246,6 +246,26 @@
             </div>
           </div>
 
+          <!-- ── Integrations ──────────────────────────────────────── -->
+          <div class="settings-section">
+            <div class="settings-section-title">Integrations</div>
+            <div class="settings-field">
+              <div class="settings-field-info">
+                <span class="settings-label">GitLab Token</span>
+                <div class="settings-description">Personal access token for GitLab API (read_api scope). Used for downloading project avatars.</div>
+              </div>
+              <div class="settings-field-control">
+                <input
+                  type="password"
+                  class="settings-input"
+                  v-model="form.gitlabToken"
+                  placeholder="glpat-…"
+                  autocomplete="off"
+                >
+              </div>
+            </div>
+          </div>
+
           <!-- ── Updates ────────────────────────────────────────── -->
           <div class="settings-section">
             <div class="settings-section-title">Updates</div>
@@ -332,6 +352,7 @@ const form = reactive({
   monoFont: 'default',
   uiFont: 'default',
   commitMessagePrompt: '',
+  gitlabToken: '',
 });
 
 const useGlobal = reactive({
@@ -381,6 +402,7 @@ async function loadSettings() {
     form.monoFont = current.monoFont ?? 'default';
     form.uiFont = current.uiFont ?? 'default';
     form.commitMessagePrompt = current.commitMessagePrompt || COMMIT_MSG_PROMPT_DEFAULT;
+    form.gitlabToken = current.gitlabToken || '';
     originalMcpEmulation = form.mcpEmulation;
 
     try { shellProfiles.value = await window.api.getShellProfiles(); } catch { shellProfiles.value = []; }
@@ -430,6 +452,7 @@ async function save() {
       monoFont: form.monoFont || 'default',
       uiFont: form.uiFont || 'default',
       commitMessagePrompt: form.commitMessagePrompt === COMMIT_MSG_PROMPT_DEFAULT ? '' : (form.commitMessagePrompt || ''),
+      gitlabToken: form.gitlabToken || '',
     };
   }
 

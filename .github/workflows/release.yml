@@ -40,8 +40,12 @@ jobs:
       - name: Bundle assets
         run: npm run bundle:codemirror && npm run bundle:vue
 
-      - name: Build Mac app and publish to GitHub Releases
-        run: npx electron-builder --mac --publish always --config.mac.notarize=false
+      - name: Build Mac app
+        run: npx electron-builder --mac --publish never --config.mac.notarize=false
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Create GitHub Release and upload DMG
+        run: gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes dist/Switchboard-*-arm64.dmg
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_IDENTITY_AUTO_DISCOVERY: false

@@ -135,6 +135,17 @@ const migrations = [
       ALTER TABLE project_git_cache ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
     `);
   },
+  // v7: Add project_avatars for storing GitLab avatar image blobs.
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS project_avatars (
+        projectPath TEXT PRIMARY KEY,
+        avatarData BLOB,
+        mimeType TEXT,
+        fetchedAt INTEGER
+      )
+    `);
+  },
 ];
 
 const currentDbVersion = (() => {
@@ -461,6 +472,40 @@ function getAllProjectGitCounts() {
   return map;
 }
 
+// --- Project avatar ---
+
+let _pa = null;
+function pa() {
+  if (_pa) return _pa;
+  _pa = {
+    get: db.prepare('SELECT avatarData, mimeType FROM project_avatars WHERE projectPath = ?'),
+    upsert: db.prepare(`
+      INSERT INTO project_avatars (projectPath, avatarData, mimeType, fetchedAt)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(projectPath) DO UPDATE SET
+        avatarData = excluded.avatarData,
+        mimeType = excluded.mimeType,
+        fetchedAt = excluded.fetchedAt
+    `),
+    del: db.prepare('DELETE FROM project_avatars WHERE projectPath = ?'),
+  };
+  return _pa;
+}
+
+function getStoredAvatar(projectPath) {
+  const row = pa().get.get(projectPath);
+  if (!row || !row.avatarData) return null;
+  return { avatarData: row.avatarData, mimeType: row.mimeType || 'image/png' };
+}
+
+function setStoredAvatar(projectPath, avatarData, mimeType) {
+  if (!avatarData) {
+    pa().del.run(projectPath);
+  } else {
+    pa().upsert.run(projectPath, avatarData, mimeType || 'image/png', Date.now());
+  }
+}
+
 // --- Settings functions ---
 
 function getSetting(key) {
@@ -490,5 +535,6 @@ module.exports = {
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting,
+  getStoredAvatar, setStoredAvatar,
   closeDb,
 };
