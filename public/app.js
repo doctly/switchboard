@@ -892,7 +892,7 @@ const updaterHandler = (type, data) => {
       setUpdaterStatus('Checking for updates…');
       break;
     case 'update-available':
-      setUpdaterStatus(`Downloading v${data.version}…`);
+      setUpdaterStatus(`Update available: v${data.version}`);
       break;
     case 'update-not-available':
       setUpdaterStatus('Up to date', 3000);
@@ -907,7 +907,7 @@ const updaterHandler = (type, data) => {
       const toast = document.getElementById('update-toast');
       const msg = document.getElementById('update-toast-msg');
       const notice = (data.releaseName && data.releaseName !== `v${data.version}` && data.releaseName !== data.version) ? `<span class="update-summary">${escapeHtml(data.releaseName)}</span>` : '';
-      msg.innerHTML = `New Version Ready<br><span class="update-version">v${data.version}</span> (<a href="https://github.com/doctly/switchboard/releases" target="_blank" class="update-notes-link">release notes</a>)${notice}`;
+      msg.innerHTML = `New Version Ready<br><span class="update-version">v${data.version}</span> (<a href="https://github.com/fortael/switchboard/releases" target="_blank" class="update-notes-link">release notes</a>)${notice}`;
       toast.classList.remove('hidden');
       document.getElementById('update-restart-btn').onclick = () => window.api.updaterInstall();
       document.getElementById('update-dismiss-btn').onclick = () => {

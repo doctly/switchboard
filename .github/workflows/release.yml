@@ -12,9 +12,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -27,9 +27,9 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -45,7 +45,7 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
-      - name: Create GitHub Release and upload DMG
-        run: gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes dist/Switchboard-*-arm64.dmg
+      - name: Upload artifacts to GitHub Release
+        run: gh release upload "${{ github.ref_name }}" dist/Switchboard-*-arm64.dmg dist/latest-mac.yml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
