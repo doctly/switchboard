@@ -63,7 +63,7 @@
   },
   "build": {
     "appId": "ai.doctly.switchboard",
-    "productName": "Switchboard",
+    "productName": "Wooton Pad",
     "files": [
       "*.js",
       "workers/**/*",

@@ -1,10 +1,16 @@
-# Switchboard
+# Wooton Pad
 
-**[switchboard.ai](https://fortael.github.io/switchboard/)** — Your command center for Claude Code sessions.
+> **Fork of [Switchboard](https://github.com/doctly/switchboard)** — extended with multi-account support, git integration, and a project viewer panel.
 
-Switchboard is a desktop app that gives you a unified view of all your Claude Code sessions across every project. Launch, resume, fork, and monitor sessions from a single window — no more juggling terminal tabs or digging through `~/.claude/projects` to find that one conversation from last week.
+---
 
-![Switchboard](build/screenshot.png)
+**[fortael.github.io/switchboard](https://fortael.github.io/switchboard/)** — Your command center for Claude Code sessions.
+
+---
+
+Wooton Pad is a desktop app that gives you a unified view of all your Claude Code sessions across every project. Launch, resume, fork, and monitor sessions from a single window — no more juggling terminal tabs or digging through `~/.claude/projects` to find that one conversation from last week.
+
+![Wooton Pad](build/screenshot.png)
 
 ### Key Features
 
@@ -13,7 +19,7 @@ Switchboard is a desktop app that gives you a unified view of all your Claude Co
 - **Status Notifications** — In-app alerts when a session is waiting for permission approval or user input
 - **Fork & Resume** — Branch off from any point in a session's history
 - **Full-Text Search** — Find any session by what was discussed, not just when it happened
-- **IDE Emulation** — Switchboard acts as an IDE for Claude CLI, showing file diffs and opens in a side panel where you can accept, reject, or edit changes before they're applied. Supports both inline and side-by-side diff views. Disable this in Global Settings if you prefer Claude to use your own editor (VS Code, Cursor, etc.)
+- **IDE Emulation** — Acts as an IDE for Claude CLI, showing file diffs and opens in a side panel where you can accept, reject, or edit changes before they're applied. Supports both inline and side-by-side diff views. Disable this in Global Settings if you prefer Claude to use your own editor (VS Code, Cursor, etc.)
 - **Plans & Memory** — Browse and edit your plan files and CLAUDE.md memory in one place
 - **Activity Stats** — Heatmap of your coding activity across all projects
 - **Session Names** — Picks up session names from Claude Code's `/rename` command automatically
@@ -24,14 +30,14 @@ Switchboard is a desktop app that gives you a unified view of all your Claude Co
 
 Grab the latest macOS build (Apple Silicon) from the releases page:
 
-**[Download Switchboard](https://github.com/fortael/switchboard/releases/latest)**
+**[Download Wooton Pad](https://github.com/fortael/switchboard/releases/latest)**
 
 #### macOS security warning
 
-Because Switchboard is not code-signed with an Apple Developer certificate, macOS will block it on first launch with a "damaged" message. Remove the quarantine attribute after installing:
+Because Wooton Pad is not code-signed with an Apple Developer certificate, macOS will block it on first launch with a "damaged" message. Remove the quarantine attribute after installing:
 
 ```bash
-xattr -cr /Applications/Switchboard.app
+xattr -cr "/Applications/Wooton Pad.app"
 ```
 
 Then open the app normally.
@@ -61,7 +67,7 @@ Toggle the grid overview from the sidebar for a bird's-eye view of all your open
 
 ## File Preview Side Panel & Claude IDE MCP Emulator
 
-Switchboard can act as an IDE for your Claude Code sessions. When enabled, Claude's file opens and proposed edits appear in a side panel next to the terminal instead of being sent to an external editor.
+Wooton Pad can act as an IDE for your Claude Code sessions. When enabled, Claude's file opens and proposed edits appear in a side panel next to the terminal instead of being sent to an external editor.
 
 ![IDE Emulation](build/screenshot-ide.png)
 
@@ -70,11 +76,11 @@ Switchboard can act as an IDE for your Claude Code sessions. When enabled, Claud
 - **Partial acceptance** — In inline mode, you can accept or reject individual chunks within a diff, then submit the final result.
 - **File viewer** — Clickable file links in terminal output (OSC 8 hyperlinks) open in the side panel with syntax highlighting.
 
-To disable IDE emulation entirely (e.g. if you want Claude to use VS Code or Cursor instead), uncheck **IDE Emulation** in **Global Settings**. This stops Switchboard from registering as an IDE, so Claude CLI will discover and connect to your real editor. Changes take effect on new sessions — running sessions are not affected.
+To disable IDE emulation entirely (e.g. if you want Claude to use VS Code or Cursor instead), uncheck **IDE Emulation** in **Global Settings**. This stops Wooton Pad from registering as an IDE, so Claude CLI will discover and connect to your real editor. Changes take effect on new sessions — running sessions are not affected.
 
 ## Status Notifications
 
-Switchboard monitors all your sessions in the background and shows status indicators in the sidebar so you can tell at a glance which sessions need attention — even when you're working in a different one.
+Wooton Pad monitors all your sessions in the background and shows status indicators in the sidebar so you can tell at a glance which sessions need attention — even when you're working in a different one.
 
 ![Status Notifications](build/screenshot-notifications.png)
 

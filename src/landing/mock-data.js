@@ -7,7 +7,7 @@ export const MOCK_ACTIVE_PTY_IDS = new Set(['sess-001', 'sess-004']);
 
 export const MOCK_PROJECTS = [
   {
-    projectPath: '/Users/demo/Projects/switchboard',
+    projectPath: '/Users/demo/Projects/wooton-pad',
     sessions: [
       {
         sessionId: 'sess-001',
@@ -134,19 +134,45 @@ export const MOCK_MEMORIES = {
       ],
     },
     {
-      folder: '/Users/demo/Projects/switchboard',
-      shortName: 'switchboard',
-      projectPath: '/Users/demo/Projects/switchboard',
+      folder: '/Users/demo/Projects/wooton-pad',
+      shortName: 'wooton-pad',
+      projectPath: '/Users/demo/Projects/wooton-pad',
       files: [
         {
           filename: 'CLAUDE.md',
-          filePath: '/Users/demo/Projects/switchboard/CLAUDE.md',
-          displayPath: '~/Projects/switchboard/CLAUDE.md',
+          filePath: '/Users/demo/Projects/wooton-pad/CLAUDE.md',
+          displayPath: '~/Projects/wooton-pad/CLAUDE.md',
           modified: hours(2),
         },
       ],
     },
   ],
+};
+
+export const MOCK_PROJECT_DETAIL = {
+  '/Users/demo/Projects/my-api': {
+    branch: 'feat/rate-limiting',
+    totalAdded: 168,
+    totalDeleted: 12,
+    changedFiles: [
+      { file: 'src/middleware/rate-limit.js', added: 89, deleted: 0 },
+      { file: 'src/routes/api.js', added: 12, deleted: 3 },
+      { file: 'test/rate-limit.test.js', added: 65, deleted: 0 },
+      { file: 'package.json', added: 2, deleted: 1 },
+    ],
+    commits: [
+      { hash: 'a3f8c21', message: 'feat: add token bucket rate limiter', author: 'demo', date: '2d ago' },
+      { hash: 'b91e4f7', message: 'feat: add middleware scaffolding', author: 'demo', date: '3d ago' },
+      { hash: 'c45d2a9', message: 'chore: initial Express setup', author: 'demo', date: '5d ago' },
+      { hash: 'd73e1b4', message: 'docs: add README and contributing guide', author: 'demo', date: '6d ago' },
+    ],
+    containers: [
+      { name: 'my-api-postgres-1', state: 'running', status: 'Up 2 hours' },
+      { name: 'my-api-redis-1', state: 'running', status: 'Up 2 hours' },
+    ],
+    worktreePaths: [],
+    readmePath: null,
+  },
 };
 
 export const MOCK_PROJECT_INFO = {
@@ -161,7 +187,7 @@ export const MOCK_PROJECT_INFO = {
       { name: 'my-api-app-1', state: 'running', status: 'Up 1 hour' },
     ],
   },
-  '/Users/demo/Projects/switchboard': {
+  '/Users/demo/Projects/wooton-pad': {
     branch: 'main',
     added: 128,
     deleted: 34,

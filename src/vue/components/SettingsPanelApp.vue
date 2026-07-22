@@ -165,7 +165,7 @@
                   <option v-for="(font, key) in terminalFonts" :key="key" :value="key">{{ font.label }}</option>
                 </select>
                 <span class="settings-font-preview" :style="{ fontFamily: terminalFonts[form.uiFont]?.family }">
-                  Switchboard — 42 sessions
+                  Wooton Pad — 42 sessions
                 </span>
               </div>
             </div>

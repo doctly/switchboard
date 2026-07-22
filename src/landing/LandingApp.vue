@@ -4,8 +4,8 @@
     <!-- ── HERO ───────────────────────────────────────────────── -->
     <header class="lp-hero">
       <div class="lp-hero-inner">
-        <img class="lp-logo" :src="iconUrl" alt="Switchboard icon" width="72" height="72">
-        <h1 class="lp-title">Switchboard</h1>
+        <img class="lp-logo" :src="iconUrl" alt="Wooton Pad icon" width="72" height="72">
+        <h1 class="lp-title">Wooton Pad</h1>
         <p class="lp-tagline">The session manager for Claude Code</p>
         <div class="lp-cta">
           <a class="lp-btn-primary" href="https://github.com/fortael/switchboard/releases" target="_blank" rel="noopener">
@@ -14,6 +14,7 @@
           <a class="lp-btn-secondary" href="https://github.com/fortael/switchboard" target="_blank" rel="noopener">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
             GitHub
+            <span v-if="stars !== null" class="lp-stars">★ {{ stars }}</span>
           </a>
         </div>
         <div class="lp-platforms">
@@ -26,7 +27,7 @@
     <section class="lp-demo-section">
       <div class="lp-section-inner">
         <h2 class="lp-section-title">Try the real interface</h2>
-        <p class="lp-section-subtitle">This is the actual Switchboard UI — powered by the real Vue components, with mock data. Click the tabs, browse sessions, switch views.</p>
+        <p class="lp-section-subtitle">This is the actual Wooton Pad UI — powered by the real Vue components, with mock data. Click the tabs, browse sessions, switch views.</p>
 
         <div class="lp-app-window">
           <!-- macOS-style title bar -->
@@ -36,7 +37,7 @@
               <span class="lp-tl lp-tl-min"></span>
               <span class="lp-tl lp-tl-max"></span>
             </div>
-            <span class="lp-titlebar-name">Switchboard</span>
+            <span class="lp-titlebar-name">Wooton Pad</span>
           </div>
 
           <!-- App body -->
@@ -206,6 +207,30 @@
       </div>
     </section>
 
+    <!-- ── PROJECT VIEWER DEMO ──────────────────────────────────── -->
+    <section class="lp-project-demo-section">
+      <div class="lp-section-inner">
+        <div class="lp-project-demo-text">
+          <h2 class="lp-section-title" style="margin:0 0 16px;">Your IDE is optional</h2>
+          <p class="lp-project-demo-desc">Review changes, edit files, and commit — right inside Wooton Pad. Complex analysis no longer needs an editor open; Claude handles it all via CLI.</p>
+        </div>
+
+        <div class="lp-app-window lp-project-window">
+          <div class="lp-titlebar">
+            <div class="lp-traffic-lights">
+              <span class="lp-tl lp-tl-close"></span>
+              <span class="lp-tl lp-tl-min"></span>
+              <span class="lp-tl lp-tl-max"></span>
+            </div>
+            <span class="lp-titlebar-name">Wooton Pad — my-api</span>
+          </div>
+          <div class="lp-project-body">
+            <ProjectViewerApp ref="projectViewerRef" :callbacks="demoCallbacks" />
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- ── INSTALL ────────────────────────────────────────────── -->
     <section class="lp-install">
       <div class="lp-section-inner">
@@ -246,7 +271,7 @@
     <!-- ── FOOTER ─────────────────────────────────────────────── -->
     <footer class="lp-footer">
       <div class="lp-footer-inner">
-        <span>Switchboard · Open source · MIT license</span>
+        <span>Wooton Pad · Open source · MIT license · Fork of Switchboard</span>
         <a href="https://github.com/fortael/switchboard" target="_blank" rel="noopener">github.com/fortael/switchboard</a>
       </div>
     </footer>
@@ -265,13 +290,17 @@ import AccountDropdownApp from '../vue/components/AccountDropdownApp.vue';
 import ProjectsApp from '../vue/components/ProjectsApp.vue';
 import PlansApp from '../vue/components/PlansApp.vue';
 import MemoryApp from '../vue/components/MemoryApp.vue';
+import ProjectViewerApp from '../vue/components/ProjectViewerApp.vue';
 import { MOCK_ACCOUNTS, MOCK_PROJECTS, MOCK_ACTIVE_PTY_IDS, MOCK_TERMINAL_LINES, MOCK_USAGE, MOCK_PLANS, MOCK_MEMORIES } from './mock-data.js';
+
+const stars = ref(null);
 
 const accountDropdownRef = ref(null);
 const accountsRef = ref(null);
 const projectsRef = ref(null);
 const plansRef = ref(null);
 const memoryRef = ref(null);
+const projectViewerRef = ref(null);
 
 // Tabs shown in the demo (full set)
 const DEMO_TABS = [
@@ -304,6 +333,8 @@ const demoCallbacks = {
   openAccountHomeSession: () => {},
   openPlan: () => {},
   openMemory: () => {},
+  newSession: () => {},
+  openSession: () => {},
   renameAccount: () => {},
   deleteAccount: () => {},
   createAccount: () => null,
@@ -337,12 +368,23 @@ function isRunning(session) {
 }
 
 onMounted(async () => {
+  fetch('https://api.github.com/repos/fortael/switchboard')
+    .then(r => r.json())
+    .then(d => { if (d.stargazers_count != null) stars.value = d.stargazers_count; })
+    .catch(() => {});
+
   accountDropdownRef.value?.setAccounts(MOCK_ACCOUNTS, 'default', MOCK_USAGE);
   accountsRef.value?.setAccounts(MOCK_ACCOUNTS, 'default');
   accountsRef.value?.setUsage(MOCK_USAGE);
   projectsRef.value?.setProjects(MOCK_PROJECTS);
   plansRef.value?.setPlans(MOCK_PLANS);
   memoryRef.value?.setMemories(MOCK_MEMORIES);
+  projectViewerRef.value?.open({ projectPath: '/Users/demo/Projects/my-api' });
+  // Click the first changed file row after project data loads to demo the diff view
+  setTimeout(() => {
+    const row = document.querySelector('.lp-project-body .pv-file-row--clickable');
+    if (row) row.click();
+  }, 900);
 
   // ProjectGroup.vue uses ref(fn) for lazy collapsed init. In Vue 3.5, if the
   // lazy init resolves to a truthy function rather than a boolean, all projects
@@ -458,6 +500,14 @@ html, body {
   border-color: var(--border-strong);
 }
 
+.lp-stars {
+  margin-left: 4px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
 .lp-platforms {
   display: flex;
   gap: 8px;
@@ -559,7 +609,7 @@ html, body {
   border-radius: 12px;
   overflow: hidden;
   box-shadow: 0 32px 80px rgba(0, 0, 0, 0.6);
-  max-width: 1000px;
+  max-width: 1100px;
   margin: 0 auto;
   height: 540px;
   display: flex;
@@ -818,4 +868,94 @@ html, body {
 }
 
 .lp-footer-inner a:hover { color: var(--text-secondary); }
+
+/* ── Landing diff polyfill ───────────────────────────────────── */
+.lp-diff-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #0d0d10;
+  overflow: hidden;
+}
+
+.lp-diff-filename {
+  padding: 8px 16px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-tertiary);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-panel);
+  flex-shrink: 0;
+}
+
+.lp-diff-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 0;
+}
+
+.lp-diff-line {
+  display: flex;
+  align-items: baseline;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  padding: 0 16px;
+}
+
+.lp-diff-add {
+  background: rgba(46, 160, 67, 0.1);
+}
+
+.lp-diff-gutter {
+  color: var(--green-500);
+  width: 16px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.lp-diff-code {
+  color: var(--text-primary);
+  white-space: pre;
+}
+
+/* ── Project viewer demo section ─────────────────────────── */
+.lp-project-demo-section {
+  padding: 90px 24px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.lp-project-demo-text {
+  max-width: 600px;
+  margin: 0 auto 48px;
+  text-align: center;
+}
+
+.lp-project-demo-desc {
+  font-size: 15px;
+  color: var(--text-secondary);
+  line-height: 1.65;
+  margin: 0;
+}
+
+.lp-project-window {
+  max-width: 1100px;
+  height: 580px;
+}
+
+.lp-project-body {
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.lp-project-body .pv-root {
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 </style>
