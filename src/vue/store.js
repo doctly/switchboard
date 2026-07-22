@@ -48,6 +48,10 @@ export const store = reactive({
   // Main area panel visibility (Vue-owned — do not touch via innerHTML/style directly)
   showStats: false,
   showJsonl: false,
+  planViewerOpen: false,
+  memoryViewerOpen: false,
+  gridViewActive: false,
+  gridViewerCount: '',
 
   // Project avatars: projectPath → data: URL string
   avatarDataUrls: {},

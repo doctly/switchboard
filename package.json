@@ -12,6 +12,8 @@
     "dev": "npm run bundle:codemirror && npm run bundle:vue && (vite build --watch & electron .) && wait",
     "bundle:codemirror": "esbuild public/codemirror-setup.js --bundle --outfile=public/codemirror-bundle.js --format=iife --platform=browser --minify",
     "bundle:vue": "vite build",
+    "build:landing": "vite build --config vite.landing.config.js && cp build/icon.png docs/icon.png",
+    "preview:landing": "node scripts/serve-docs.mjs",
     "generate-icons": "node scripts/generate-icons.js && node scripts/generate-dmg-background.js",
     "build": "npm run bundle:codemirror && npm run bundle:vue && electron-builder",
     "build:mac": "npm run bundle:codemirror && npm run bundle:vue && electron-builder --mac && node scripts/postinstall.js && codesign --sign - --force --deep dist/mac-arm64/Switchboard.app 2>/dev/null; true",

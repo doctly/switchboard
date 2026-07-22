@@ -147,12 +147,13 @@ function showGridView() {
   terminalHeader.style.display = 'none';
 
   // Hide other viewers but keep terminal-area visible
-  planViewer.style.display = 'none';
-  memoryViewer.style.display = 'none';
   if (window.vueStore) {
+    window.vueStore.planViewerOpen = false;
+    window.vueStore.memoryViewerOpen = false;
     window.vueStore.settingsOpen = false;
     window.vueStore.showStats = false;
     window.vueStore.showJsonl = false;
+    window.vueStore.gridViewActive = true;
   }
   terminalArea.style.display = '';
 
@@ -205,11 +206,7 @@ function showGridView() {
   }
 
   // Show grid header bar with session count
-  gridViewer.style.display = 'block';
-  gridViewerCount.textContent = sessionIds.length + ' session' + (sessionIds.length !== 1 ? 's' : '');
-
-  const btn = document.getElementById('grid-toggle-btn');
-  if (btn) btn.classList.add('active');
+  if (window.vueStore) window.vueStore.gridViewerCount = sessionIds.length + ' session' + (sessionIds.length !== 1 ? 's' : '');
 
   // Fit all terminals after layout resolves
   for (const sid of sessionIds) {
@@ -246,9 +243,7 @@ function hideGridView() {
   unwrapGridCards();
   terminalsEl.classList.remove('grid-layout');
   terminalsEl.style.gridTemplateColumns = '';
-  gridViewer.style.display = 'none';
-  const btn = document.getElementById('grid-toggle-btn');
-  if (btn) btn.classList.remove('active');
+  if (window.vueStore) window.vueStore.gridViewActive = false;
 }
 
 function toggleGridView() {

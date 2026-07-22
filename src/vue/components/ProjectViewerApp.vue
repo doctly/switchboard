@@ -382,7 +382,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick, onMounted } from 'vue';
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { store } from '../store.js';
 import FileTreeNode from './FileTreeNode.vue';
 import SbButton from './SbButton.vue';
@@ -803,6 +803,20 @@ async function updateAvatar() {
   }
 }
 function newSession(e) { if (project.value) props.callbacks.newSession?.(project.value, e?.currentTarget); }
+
+// ── Periodic git refresh when active sessions are running ─────────
+let _gitRefreshTimer = null;
+
+onMounted(() => {
+  _gitRefreshTimer = setInterval(async () => {
+    const p = viewedPath.value;
+    if (!p || !activeSessions.value.length) return;
+    const det = await window.api.getProjectDetail(p).catch(() => null);
+    if (det) detail.value = det;
+  }, 30000);
+});
+
+onUnmounted(() => clearInterval(_gitRefreshTimer));
 
 // ── Expose ────────────────────────────────────────────────────────
 defineExpose({

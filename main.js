@@ -422,46 +422,46 @@ ipcMain.handle('remove-project', (_event, projectPath) => {
 // --- IPC: get-project-info (git branch/diff + docker compose, cached 1 min in SQLite) ---
 const PROJECT_INFO_TTL_MS = 60 * 1000;
 
-function fetchProjectInfoSync(projectPath) {
-  const { execSync } = require('child_process');
+const DOCKER_PATH = (process.env.PATH || '') + ':/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin';
+
+function fetchProjectInfo(projectPath) {
+  const { exec } = require('child_process');
+  const run = (cmd, opts = {}) => new Promise((resolve) => {
+    exec(cmd, { encoding: 'utf8', timeout: 10000, ...opts }, (err, stdout) => {
+      resolve(err ? null : (stdout || '').trim());
+    });
+  });
   const data = { branch: null, added: null, deleted: null, containers: null, sizeMb: null };
-  try {
-    const duOut = execSync(`du -sk "${projectPath}"`, {
-      encoding: 'utf8', timeout: 15000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    const kb = parseInt(duOut.split(/\s+/)[0]);
-    if (!isNaN(kb)) data.sizeMb = Math.round(kb / 1024);
-  } catch {}
-  try {
-    data.branch = execSync('git rev-parse --abbrev-ref HEAD', {
-      cwd: projectPath, encoding: 'utf8', timeout: 5000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    const stat = execSync('git diff --shortstat HEAD', {
-      cwd: projectPath, encoding: 'utf8', timeout: 5000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    const addM = stat.match(/(\d+) insertion/);
-    const delM = stat.match(/(\d+) deletion/);
-    if (addM) data.added = parseInt(addM[1]);
-    if (delM) data.deleted = parseInt(delM[1]);
-  } catch {}
-  try {
-    const raw = execSync('docker compose ps --format json', {
-      cwd: projectPath, encoding: 'utf8', timeout: 8000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    if (raw) {
-      data.containers = raw.split('\n').filter(Boolean).map(line => {
+  return Promise.all([
+    run(`du -sk "${projectPath}"`, { timeout: 15000 }),
+    run('git rev-parse --abbrev-ref HEAD', { cwd: projectPath, timeout: 5000 }),
+    run('git diff --shortstat HEAD', { cwd: projectPath, timeout: 5000 }),
+    run('docker compose ps --format json', {
+      cwd: projectPath, timeout: 8000,
+      env: { ...process.env, PATH: DOCKER_PATH },
+    }),
+  ]).then(([duOut, branch, stat, dockerOut]) => {
+    if (duOut) {
+      const kb = parseInt(duOut.split(/\s+/)[0]);
+      if (!isNaN(kb)) data.sizeMb = Math.round(kb / 1024);
+    }
+    if (branch) data.branch = branch;
+    if (stat) {
+      const addM = stat.match(/(\d+) insertion/);
+      const delM = stat.match(/(\d+) deletion/);
+      if (addM) data.added = parseInt(addM[1]);
+      if (delM) data.deleted = parseInt(delM[1]);
+    }
+    if (dockerOut) {
+      data.containers = dockerOut.split('\n').filter(Boolean).map(line => {
         try {
           const c = JSON.parse(line);
           return { name: c.Service || c.Name, state: (c.State || '').toLowerCase(), status: c.Status || '' };
         } catch { return null; }
       }).filter(Boolean);
     }
-  } catch {}
-  return data;
+    return data;
+  });
 }
 
 ipcMain.handle('get-project-info', (_event, projectPath) => {
@@ -470,21 +470,14 @@ ipcMain.handle('get-project-info', (_event, projectPath) => {
   const cached = getSetting(cacheKey);
   const fresh = cached && cached.fetchedAt && (Date.now() - cached.fetchedAt) < PROJECT_INFO_TTL_MS;
   if (fresh) return cached.data;
-  // Stale: return old data immediately, refresh in background
-  if (cached && cached.data) {
-    setImmediate(() => {
-      const data = fetchProjectInfoSync(projectPath);
-      setSetting(cacheKey, { data, fetchedAt: Date.now() });
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('project-info-updated', projectPath, data);
-      }
-    });
-    return cached.data;
-  }
-  // No cache yet: fetch synchronously (first visit)
-  const data = fetchProjectInfoSync(projectPath);
-  setSetting(cacheKey, { data, fetchedAt: Date.now() });
-  return data;
+  // Return stale (or null on first visit), always refresh in background
+  fetchProjectInfo(projectPath).then(data => {
+    setSetting(cacheKey, { data, fetchedAt: Date.now() });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('project-info-updated', projectPath, data);
+    }
+  }).catch(() => {});
+  return cached?.data || null;
 });
 
 // --- IPC: get-project-detail (full git log + docker details, no cache) ---
@@ -581,6 +574,7 @@ ipcMain.handle('get-project-detail', (_event, projectPath) => {
     const raw = execSync('docker compose ps --format json', {
       cwd: projectPath, encoding: 'utf8', timeout: 8000,
       stdio: ['ignore', 'pipe', 'ignore'],
+      env: { ...process.env, PATH: DOCKER_PATH },
     }).trim();
     if (raw) {
       detail.containers = raw.split('\n').filter(Boolean).map(line => {
@@ -592,7 +586,10 @@ ipcMain.handle('get-project-detail', (_event, projectPath) => {
       }).filter(Boolean);
     }
   } catch {}
-  try { setProjectGitCache(projectPath, detail); } catch {}
+  try {
+    setProjectGitCache(projectPath, detail);
+    notifyRendererProjectsChanged();
+  } catch {}
   return detail;
 });
 

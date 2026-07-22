@@ -29,7 +29,7 @@
         <button id="today-toggle" :class="{ active: store.showTodayOnly }" data-tooltip="Show today's sessions only" @click="toggleFilter('showTodayOnly')" v-html="TODAY_SVG"></button>
         <button id="archive-toggle" :class="{ active: store.showArchived }" data-tooltip="Show archived sessions" @click="toggleFilter('showArchived')" v-html="ARCHIVE_SVG"></button>
         <span id="loading-status" v-show="store.loadingStatus">{{ store.loadingStatus }}</span>
-        <button id="grid-toggle-btn" data-tooltip="Session overview" @click="onToggleGrid" v-html="GRID_SVG"></button>
+        <button id="grid-toggle-btn" :class="{ active: store.gridViewActive }" data-tooltip="Session overview" @click="onToggleGrid" v-html="GRID_SVG"></button>
         <button id="resort-btn" data-tooltip="Re-sort sessions" @click="onResort" v-html="RESORT_SVG"></button>
         <button id="add-project-btn" data-tooltip="Add project" @click="onAddProject" v-html="ADD_PROJECT_SVG"></button>
       </div>
@@ -100,8 +100,26 @@
       </div>
       <StatsApp ref="statsRef" />
     </div>
-    <div id="memory-viewer" style="display:none;"></div>
-    <div id="plan-viewer" style="display:none;"></div>
+    <div id="memory-viewer" v-show="store.memoryViewerOpen">
+      <ViewerContentApp
+        ref="memoryViewerRef"
+        language="markdown"
+        storage-key="markdownPreviewMode"
+        :show-copy-path="true"
+        :show-copy-content="true"
+        :on-save="memoryOnSave"
+      />
+    </div>
+    <div id="plan-viewer" v-show="store.planViewerOpen">
+      <ViewerContentApp
+        ref="planViewerRef"
+        language="markdown"
+        storage-key="markdownPreviewMode"
+        :show-copy-path="true"
+        :show-copy-content="true"
+        :on-save="planOnSave"
+      />
+    </div>
     <SettingsPanelApp v-if="store.settingsOpen" />
     <div id="project-viewer" style="display:none;">
       <ProjectViewerApp ref="projectViewerRef" :callbacks="projectViewerCallbacks" />
@@ -129,10 +147,10 @@
           </button>
         </div>
       </div>
-      <div id="grid-viewer" style="display:none;">
+      <div id="grid-viewer" v-show="store.gridViewActive">
         <div id="grid-viewer-header">
           <span id="grid-viewer-title">Session Overview</span>
-          <span id="grid-viewer-count"></span>
+          <span id="grid-viewer-count">{{ store.gridViewerCount }}</span>
         </div>
       </div>
       <div id="terminals"></div>
@@ -146,6 +164,9 @@
   <Teleport to="#vue-grid-cards">
     <GridCardsApp ref="gridCardsRef" />
   </Teleport>
+
+  <!-- Dialogs (overlays + popover, rendered via Teleport to body inside the component) -->
+  <DialogsApp ref="dialogsRef" />
 </template>
 
 <script setup>
@@ -164,6 +185,8 @@ import SettingsPanelApp from './SettingsPanelApp.vue';
 import ProjectViewerApp from './ProjectViewerApp.vue';
 import StatsApp from './StatsApp.vue';
 import JsonlViewerApp from './JsonlViewerApp.vue';
+import ViewerContentApp from './ViewerContentApp.vue';
+import DialogsApp from './DialogsApp.vue';
 
 // ── Template refs ────────────────────────────────────────────────
 const plansRef = ref(null);
@@ -176,6 +199,12 @@ const gridCardsRef = ref(null);
 const projectViewerRef = ref(null);
 const statsRef = ref(null);
 const jsonlRef = ref(null);
+const planViewerRef = ref(null);
+const memoryViewerRef = ref(null);
+const dialogsRef = ref(null);
+
+const planOnSave = (filePath, content) => window.api.savePlan(filePath, content);
+const memoryOnSave = (filePath, content) => window.api.saveMemory(filePath, content);
 
 // ── Tab config ───────────────────────────────────────────────────
 const TABS = [
@@ -375,12 +404,27 @@ onMounted(async () => {
     invalidate: () => statsRef.value?.invalidate(),
   };
   window.vueJsonlViewer = { open: (s) => jsonlRef.value?.open(s) };
+  Object.assign(window.vueDialogs, {
+    openNewSession: (...args) => dialogsRef.value?.openNewSession(...args),
+    openResumeSession: (...args) => dialogsRef.value?.openResumeSession(...args),
+    openAddProject: (...args) => dialogsRef.value?.openAddProject(...args),
+    openPopover: (...args) => dialogsRef.value?.openPopover(...args),
+  });
+
+  Object.assign(window.vuePlanViewer, {
+    open: (...args) => planViewerRef.value?.open(...args),
+  });
+  Object.assign(window.vueMemoryViewer, {
+    open: (...args) => memoryViewerRef.value?.open(...args),
+  });
 
   // Settings panel — exposed so app.js and vanilla JS callers can open it.
   // Hides all vanilla-managed main-area content so the xterm canvas can't
   // intercept pointer events while settings is showing.
   window.openSettingsViewer = (scope, projectPath) => {
-    const hide = ['terminal-area', 'placeholder', 'plan-viewer', 'memory-viewer', 'project-viewer'];
+    store.planViewerOpen = false;
+    store.memoryViewerOpen = false;
+    const hide = ['terminal-area', 'placeholder', 'project-viewer'];
     for (const id of hide) {
       const el = document.getElementById(id);
       if (el) el.style.display = 'none';
@@ -391,6 +435,12 @@ onMounted(async () => {
     store.settingsProjectPath = projectPath || null;
     store.settingsOpen = true;
   };
+
+  // Prevent browser "Save Page" shortcut from interfering with in-app Cmd+S save
+  document.addEventListener('keydown', (e) => {
+    const mod = /Mac|iPhone|iPad/.test(navigator.platform) ? e.metaKey : e.ctrlKey;
+    if (e.key === 's' && mod && !e.shiftKey && !e.altKey) e.preventDefault();
+  });
   window.closeSettingsViewer = () => {
     store.settingsOpen = false;
     window._restoreAfterSettings?.();
@@ -405,5 +455,71 @@ onMounted(async () => {
   store.showStarredOnly = localStorage.getItem('showStarredOnly') === '1';
   store.showTodayOnly = localStorage.getItem('showTodayOnly') === '1';
   store.showArchived = localStorage.getItem('showArchived') === '1';
+
+  // Plans & memory viewer globals (migrated from plans-memory-view.js)
+  let cachedMemoryData = { global: { files: [] }, projects: [] };
+  window.cachedPlans = [];
+
+  window.loadPlans = async () => {
+    window.cachedPlans = await window.api.getPlans();
+    window.vuePlans?.setPlans(window.cachedPlans);
+  };
+  window.renderPlans = (plans) => {
+    window.vuePlans?.setPlans(plans || window.cachedPlans);
+  };
+  window.openPlan = async (plan) => {
+    window.vuePlans?.setActive(plan.filename);
+    const result = await window.api.readPlan(plan.filename);
+    document.getElementById('placeholder').style.display = 'none';
+    document.getElementById('terminal-area').style.display = 'none';
+    document.getElementById('project-viewer').style.display = 'none';
+    window.vueProjectViewer?.close();
+    if (window.vueStore) {
+      window.vueStore.memoryViewerOpen = false;
+      window.vueStore.settingsOpen = false;
+      window.vueStore.showStats = false;
+      window.vueStore.showJsonl = false;
+      window.vueStore.planViewerOpen = true;
+    }
+    window.vuePlanViewer?.open(plan.title || plan.filename, result.filePath, result.content);
+  };
+  window.loadMemories = async () => {
+    cachedMemoryData = await window.api.getMemories();
+    window.vueMemory?.setMemories(cachedMemoryData, null);
+  };
+  window.renderMemories = (filterIds) => {
+    window.vueMemory?.setMemories(cachedMemoryData, filterIds || null);
+  };
+  window.openMemory = async (file) => {
+    window.vueMemory?.setActive(file.filePath);
+    const content = await window.api.readMemory(file.filePath);
+    document.getElementById('placeholder').style.display = 'none';
+    document.getElementById('terminal-area').style.display = 'none';
+    document.getElementById('project-viewer').style.display = 'none';
+    window.vueProjectViewer?.close();
+    if (window.vueStore) {
+      window.vueStore.planViewerOpen = false;
+      window.vueStore.settingsOpen = false;
+      window.vueStore.showStats = false;
+      window.vueStore.showJsonl = false;
+      window.vueStore.memoryViewerOpen = true;
+    }
+    window.vueMemoryViewer?.open(file.filename, file.filePath, content);
+  };
+  window.hideAllViewers = () => {
+    if (window.vueStore) {
+      window.vueStore.planViewerOpen = false;
+      window.vueStore.memoryViewerOpen = false;
+      window.vueStore.settingsOpen = false;
+      window.vueStore.showStats = false;
+      window.vueStore.showJsonl = false;
+    }
+    const pv = document.getElementById('project-viewer');
+    if (pv) pv.style.display = 'none';
+    window.vueProjectViewer?.close();
+    const ta = document.getElementById('terminal-area');
+    if (ta) ta.style.display = '';
+  };
+  window.hidePlanViewer = window.hideAllViewers;
 });
 </script>

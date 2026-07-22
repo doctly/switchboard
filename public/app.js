@@ -8,24 +8,9 @@ const terminalHeaderId = document.getElementById('terminal-header-id');
 const terminalHeaderStatus = document.getElementById('terminal-header-status');
 const terminalHeaderShell = document.getElementById('terminal-header-shell');
 const terminalStopBtn = document.getElementById('terminal-stop-btn');
-const planViewer = document.getElementById('plan-viewer');
-const planPanel = new ViewerPanel(planViewer, {
-  copyPath: true, copyContent: true,
-  language: 'markdown', storageKey: 'markdownPreviewMode',
-  onSave: (filePath, content) => window.api.savePlan(filePath, content),
-});
-
-// currentPlanContent, currentPlanFilePath, currentPlanFilename → plans-memory-view.js
-const memoryViewer = document.getElementById('memory-viewer');
-const memoryPanel = new ViewerPanel(memoryViewer, {
-  copyPath: true, copyContent: true,
-  language: 'markdown', storageKey: 'markdownPreviewMode',
-  onSave: (filePath, content) => window.api.saveMemory(filePath, content),
-});
 const terminalArea = document.getElementById('terminal-area');
 const projectViewer = document.getElementById('project-viewer');
 const gridViewer = document.getElementById('grid-viewer');
-const gridViewerCount = document.getElementById('grid-viewer-count');
 let gridViewActive = localStorage.getItem('gridViewActive') === '1';
 
 // Map<sessionId, { terminal, element, fitAddon, session, closed }>
@@ -48,7 +33,6 @@ let cachedAllProjects = [];
 let activePtyIds = new Set();
 let sortedOrder = []; // kept for grid-view.js project-heading ordering; no longer updated by sidebar
 let activeTab = 'sessions';
-let cachedPlans = [];
 let visibleSessionCount = 10;
 let sessionMaxAgeDays = 3;
 const pendingSessions = new Map(); // sessionId → { session, projectPath, folder }
@@ -230,7 +214,7 @@ window.api.onProcessExited((sessionId, exitCode) => {
     destroySession(sessionId);
   }
   if (gridViewActive) {
-    gridViewerCount.textContent = gridCards.size + ' session' + (gridCards.size !== 1 ? 's' : '');
+    if (window.vueStore) window.vueStore.gridViewerCount = gridCards.size + ' session' + (gridCards.size !== 1 ? 's' : '');
   } else if (activeSessionId === sessionId) {
     setActiveSession(null);
     terminalHeader.style.display = 'none';
@@ -323,7 +307,7 @@ function clearSearch() {
   if (activeTab === 'sessions') {
     refreshSidebar({ resort: true });
   } else if (activeTab === 'plans') {
-    renderPlans(cachedPlans);
+    renderPlans();
   } else if (activeTab === 'memory') {
     renderMemories();
   } else if (activeTab === 'projects') {
@@ -345,7 +329,7 @@ async function confirmAndStopSession(sessionId) {
   refreshSidebar();
 }
 
-window.confirmAndStopSession = (id) => confirmAndStopSession(id);
+window.confirmAndStopSession = confirmAndStopSession;
 
 // --- Terminal header controls ---
 terminalStopBtn.addEventListener('click', () => {
@@ -648,18 +632,12 @@ window.addEventListener('resize', () => {
 // Tab switching is handled by App.vue (store.activeTab).
 // App.vue calls window.__sb.onTabChange(tabName) — defined near bottom of this file.
 
-// Plans & viewer helpers → plans-memory-view.js
-
-
 // Grid view → grid-view.js
 // Initialize grid observers now that DOM refs are ready
 initGridObservers();
 
 
 // Stats view (loadStats, buildUsageSection, buildDailyBarChart, buildHeatmap, calculateStreak, buildStatsSummary) → stats-view.js
-
-// Memory viewer → plans-memory-view.js
-
 
 // Dialogs (resolveDefaultSessionOptions, forkSession, showNewSessionPopover,
 // showNewSessionDialog, showResumeSessionDialog, showAddProjectDialog, launchTerminalSession) → dialogs.js
@@ -1592,7 +1570,7 @@ window.__sb = {
       } else if (tab === 'plans') {
         const results = await window.api.search('plan', query, titlesOnly);
         const matchIds = new Set(results.map(r => r.id));
-        renderPlans(cachedPlans.filter(p => matchIds.has(p.filename)));
+        renderPlans(window.cachedPlans.filter(p => matchIds.has(p.filename)));
       } else if (tab === 'memory') {
         const results = await window.api.search('memory', query, titlesOnly);
         renderMemories(new Set(results.map(r => r.id)));

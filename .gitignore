@@ -12,3 +12,6 @@ public/vue-bundle.js
 .env
 .cache/
 dev-app-update.yml
+docs/landing.js
+docs/landing.css
+docs/icon.png

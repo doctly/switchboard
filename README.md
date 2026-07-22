@@ -1,6 +1,6 @@
 # Switchboard
 
-Your command center for Claude Code sessions.
+**[switchboard.ai](https://fortael.github.io/switchboard/)** — Your command center for Claude Code sessions.
 
 Switchboard is a desktop app that gives you a unified view of all your Claude Code sessions across every project. Launch, resume, fork, and monitor sessions from a single window — no more juggling terminal tabs or digging through `~/.claude/projects` to find that one conversation from last week.
 
@@ -18,17 +18,35 @@ Switchboard is a desktop app that gives you a unified view of all your Claude Co
 - **Activity Stats** — Heatmap of your coding activity across all projects
 - **Session Names** — Picks up session names from Claude Code's `/rename` command automatically
 
-## Installing
+## Installation
 
-Build from source for your platform — no code-signing certificate required. See **[docs/building.md](docs/building.md)** for step-by-step instructions.
+### Download
+
+Grab the latest macOS build (Apple Silicon) from the releases page:
+
+**[Download Switchboard](https://github.com/fortael/switchboard/releases/latest)**
+
+#### macOS security warning
+
+Because Switchboard is not code-signed with an Apple Developer certificate, macOS will block it on first launch with a "damaged" message. Remove the quarantine attribute after installing:
 
 ```bash
-git clone https://github.com/doctly/switchboard.git
+xattr -cr /Applications/Switchboard.app
+```
+
+Then open the app normally.
+
+### Build from source
+
+```bash
+git clone https://github.com/fortael/switchboard.git
 cd switchboard
 npm install
-make dev        # run in dev mode
-make build      # build a distributable for your platform
+npm start        # run in dev mode
+npm run build    # build a distributable for your platform
 ```
+
+See **[docs/building.md](docs/building.md)** for full build instructions and prerequisites.
 
 ## Session Grid Overview
 
@@ -71,32 +89,15 @@ Switchboard monitors all your sessions in the background and shows status indica
 | `Cmd+F` / `Ctrl+F` | Find in file (also works in terminal) |
 | `Cmd+G` / `Ctrl+G` | Go to line |
 
-## Download
-
-Grab the latest release for your platform:
-
-**[Download Switchboard](https://github.com/doctly/switchboard/releases/latest)**
-
-- **macOS**: `.dmg` (Apple Silicon & Intel)
-- **Windows**: `.exe` installer
-- **Linux**: `.AppImage` or `.deb`
-
-## Prerequisites
-
-- **Node.js** 20+
-- **npm** 10+
-- Platform build tools for native modules:
-  - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
-  - **Linux**: `build-essential`, `python3` (`sudo apt install build-essential python3`)
-  - **Windows**: Visual Studio Build Tools or `npm install -g windows-build-tools`
-
 ## Development Setup
 
-```bash
-# Install dependencies (runs postinstall automatically)
-npm install
+**Prerequisites:** Node.js 20+, npm 10+, and platform build tools for native modules:
+- **macOS**: Xcode Command Line Tools (`xcode-select --install`)
+- **Linux**: `build-essential`, `python3` (`sudo apt install build-essential python3`)
+- **Windows**: Visual Studio Build Tools or `npm install -g windows-build-tools`
 
-# Start the app
+```bash
+npm install
 npm start
 ```
 
@@ -108,14 +109,8 @@ npm run electron
 
 ## Building
 
-All build commands bundle CodeMirror first, then invoke electron-builder.
-
 ```bash
-# Current platform
-npm run build
-
-# Platform-specific
-npm run build:mac     # DMG + zip (arm64 + x64)
+npm run build:mac     # DMG (arm64)
 npm run build:win     # NSIS installer (x64 + arm64)
 npm run build:linux   # AppImage + deb (x64 + arm64)
 ```
@@ -124,38 +119,18 @@ Output goes to `dist/`.
 
 ## Releasing
 
-Releases are driven by git tags:
+Create the GitHub Release manually via the web interface, then push the matching tag:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
-The GitHub Actions workflow builds for all platforms and publishes to GitHub Releases. You can also release locally:
-
-```bash
-npm run release   # builds + publishes to GitHub Releases
-```
-
-Set `GH_TOKEN` in your environment (a GitHub personal access token with `repo` scope).
+The GitHub Actions workflow builds the macOS DMG and uploads it to the existing release.
 
 ## Auto-Updates
 
-The app uses `electron-updater` to check for updates from GitHub Releases on launch and every 4 hours. Updates are only checked in packaged builds (not during development). The flow:
-
-1. App auto-downloads updates in the background
-2. A toast notification appears when the update is ready
-3. User can restart immediately or dismiss (installs on next quit)
-
-## Code Signing
-
-For distribution, set these environment variables:
-
-- **macOS**: `CSC_LINK` (p12 certificate) and `CSC_KEY_PASSWORD`, or sign via Keychain
-- **Windows**: `CSC_LINK` and `CSC_KEY_PASSWORD` for EV/OV code signing
-- Set `CSC_IDENTITY_AUTO_DISCOVERY=false` to skip signing (CI artifact builds)
-
-The macOS build uses custom entitlements (`build/entitlements.mac.plist`) to allow JIT and unsigned memory execution, required by native modules (node-pty, better-sqlite3).
+The app checks for updates from GitHub Releases on launch and every 4 hours. A status indicator in the toolbar shows when a new version is available.
 
 ## Project Structure
 

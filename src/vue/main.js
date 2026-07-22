@@ -1,6 +1,7 @@
 import { createApp } from 'vue';
 import { store } from './store.js';
 import App from './components/App.vue';
+import ViewerContentApp from './components/ViewerContentApp.vue';
 
 // Expose store for direct mutation from app.js
 window.vueStore = store;
@@ -51,14 +52,35 @@ window.vueSidebar = {
   },
 };
 
+// Factory for mounting ViewerContentApp into a plain DOM container (used by file-panel.js)
+window.createViewerPanel = function(container, opts = {}) {
+  const app = createApp(ViewerContentApp, {
+    language: opts.language || 'markdown',
+    storageKey: opts.storageKey,
+    showCopyPath: !!opts.copyPath,
+    showCopyContent: !!opts.copyContent,
+    onSave: opts.onSave || null,
+    onClose: opts.onClose || null,
+  });
+  const instance = app.mount(container);
+  return {
+    open: (...args) => instance.open(...args),
+    destroy: () => instance.destroy(),
+    getContent: () => instance.getContent(),
+  };
+};
+
 // Stubs for component bridge APIs — App.vue onMounted fills these in
 window.vuePlans = {};
 window.vueMemory = {};
 window.vueAccounts = {};
 window.vueProjects = {};
+window.vuePlanViewer = {};
+window.vueMemoryViewer = {};
 window.vueStatusBar = {};
 window.vueAccountDropdown = {};
 window.vueGrid = {};
+window.vueDialogs = {};
 
 // Mount the single root app (synchronous — all onMounted hooks run before returning)
 createApp(App).mount('#app-container');

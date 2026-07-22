@@ -83,12 +83,21 @@ const visibleProjects = computed(() => {
       })
       .filter(Boolean);
   } else {
-    // Default: hide projects with no non-archived sessions
+    // Hide projects with no sessions surviving the active filters
     projects = projects.filter(p => {
-      const nonArchived = store.showArchived
-        ? p.sessions
-        : p.sessions.filter(s => !s.archived);
-      return nonArchived.length > 0;
+      let sessions = store.showArchived ? p.sessions : p.sessions.filter(s => !s.archived);
+      if (store.showStarredOnly) sessions = sessions.filter(s => s.starred);
+      if (store.showRunningOnly) sessions = sessions.filter(s => store.activePtyIds.has(s.sessionId));
+      if (store.showTodayOnly) {
+        const now = new Date();
+        const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        sessions = sessions.filter(s => {
+          if (!s.modified) return false;
+          const d = new Date(s.modified);
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` === todayStr;
+        });
+      }
+      return sessions.length > 0;
     });
   }
 

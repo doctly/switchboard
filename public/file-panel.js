@@ -4,12 +4,11 @@
  * Manages a collapsible panel to the right of the terminal that shows
  * files and diffs received from the MCP bridge.
  *
- * For files: delegates to a ViewerPanel instance (shared component).
+ * For files: delegates to a ViewerContentApp Vue instance (window.createViewerPanel).
  * For diffs: uses its own MergeView rendering with accept/reject.
  *
- * Globals expected: window.api, window.ViewerPanel,
- *   window.createMergeViewer, window.createUnifiedMergeViewer,
- *   window.createViewerToolbar, openSessions (from app.js)
+ * Globals expected: window.api, window.createViewerPanel,
+ *   window.createMergeViewer, window.createUnifiedMergeViewer, openSessions (from app.js)
  */
 
 // ── Per-Session State ───────────────────────────────────────────────
@@ -74,7 +73,7 @@ function initFilePanel() {
   vpContainer.style.display = 'none';
   filePanelContentEl.appendChild(vpContainer);
 
-  fpViewerPanel = new ViewerPanel(vpContainer, {
+  fpViewerPanel = window.createViewerPanel(vpContainer, {
     language: 'auto',
     onSave: (filePath, content) => window.api.saveFileForPanel(filePath, content),
     onClose: handleClose,
@@ -180,7 +179,11 @@ async function handleDiffSave() {
   const result = await window.api.saveFileForPanel(tab.filePath, content);
   if (result.ok) {
     const btn = diffToolbarEl.querySelector('.fp-save-btn');
-    if (btn) flashButtonText(btn, 'Saved!');
+    if (btn) {
+      btn.style.color = '#3ecf5a';
+      btn.style.borderColor = 'rgba(62,207,90,0.4)';
+      setTimeout(() => { btn.style.color = ''; btn.style.borderColor = ''; }, 1200);
+    }
   }
 }
 
