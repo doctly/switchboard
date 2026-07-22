@@ -122,6 +122,9 @@
               </div>
 
               <div v-else class="lp-terminal-area">
+                <div v-if="isRunning(activeSession) || isWaiting(activeSession)" class="lp-progress-bar">
+                  <div class="lp-progress-fill" :class="isWaiting(activeSession) ? 'lp-progress-wait' : ''"></div>
+                </div>
                 <div class="lp-terminal-header">
                   <div class="lp-terminal-header-info">
                     <span class="lp-terminal-name">{{ displayName(activeSession) }}</span>
@@ -132,21 +135,31 @@
                       <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><circle cx="4" cy="4" r="4"/></svg>
                       Running
                     </span>
+                    <span v-else-if="isWaiting(activeSession)" class="lp-status-waiting">
+                      <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><circle cx="4" cy="4" r="4"/></svg>
+                      Waiting for input
+                    </span>
                     <span v-else class="lp-status-done">
                       {{ activeSession.messageCount }} msgs
                     </span>
                   </div>
                 </div>
                 <div class="lp-terminal-body">
-                  <div
-                    v-for="(line, i) in terminalLines"
-                    :key="i"
-                    class="lp-term-line"
-                    :class="'lp-term-' + line.t"
-                  >
-                    <span v-if="line.t === 'spin'" class="lp-spinner">⠸</span>
-                    {{ line.v }}
-                  </div>
+                  <template v-for="(line, i) in terminalLines" :key="i">
+                    <div v-if="line.t === 'logo'" class="lp-term-logo-block">
+                      <div v-for="(art, ri) in line.logo" :key="ri" class="lp-term-line lp-term-logo-row">
+                        <span class="lp-term-logo-art">{{ art }}</span>
+                        <span class="lp-term-logo-meta" :class="'lp-logo-meta-' + ri">{{ line.info[ri] }}</span>
+                      </div>
+                    </div>
+                    <div v-else-if="line.t === 'blank'" class="lp-term-blank"></div>
+                    <div v-else-if="line.t === 'hint'" class="lp-term-line lp-term-hint">{{ line.v }}</div>
+                    <div v-else class="lp-term-line" :class="'lp-term-' + line.t">
+                      <span v-if="line.t === 'spin'" class="lp-spinner-char">{{ spinChar }}</span>
+                      <span v-else-if="line.t === 'wait'" class="lp-wait-cursor">▋</span>
+                      {{ line.v }}
+                    </div>
+                  </template>
                 </div>
               </div>
             </div>
@@ -291,9 +304,12 @@ import ProjectsApp from '../vue/components/ProjectsApp.vue';
 import PlansApp from '../vue/components/PlansApp.vue';
 import MemoryApp from '../vue/components/MemoryApp.vue';
 import ProjectViewerApp from '../vue/components/ProjectViewerApp.vue';
-import { MOCK_ACCOUNTS, MOCK_PROJECTS, MOCK_ACTIVE_PTY_IDS, MOCK_TERMINAL_LINES, MOCK_USAGE, MOCK_PLANS, MOCK_MEMORIES } from './mock-data.js';
+import { MOCK_ACCOUNTS, MOCK_PROJECTS, MOCK_ACTIVE_PTY_IDS, MOCK_WAITING_PTY_IDS, MOCK_TERMINAL_LINES, MOCK_USAGE, MOCK_PLANS, MOCK_MEMORIES } from './mock-data.js';
 
 const stars = ref(null);
+const SPIN_FRAMES = ['⠸', '⠼', '⠴', '⠦', '⠇', '⠏', '⠋', '⠙'];
+let _spinIdx = 0;
+const spinChar = ref(SPIN_FRAMES[0]);
 
 const accountDropdownRef = ref(null);
 const accountsRef = ref(null);
@@ -333,8 +349,6 @@ const demoCallbacks = {
   openAccountHomeSession: () => {},
   openPlan: () => {},
   openMemory: () => {},
-  newSession: () => {},
-  openSession: () => {},
   renameAccount: () => {},
   deleteAccount: () => {},
   createAccount: () => null,
@@ -364,7 +378,11 @@ function displayName(session) {
 }
 
 function isRunning(session) {
-  return session && MOCK_ACTIVE_PTY_IDS.has(session.sessionId);
+  return session && MOCK_ACTIVE_PTY_IDS.has(session.sessionId) && !MOCK_WAITING_PTY_IDS.has(session.sessionId);
+}
+
+function isWaiting(session) {
+  return session && MOCK_WAITING_PTY_IDS.has(session.sessionId);
 }
 
 onMounted(async () => {
@@ -373,6 +391,11 @@ onMounted(async () => {
     .then(d => { if (d.stargazers_count != null) stars.value = d.stargazers_count; })
     .catch(() => {});
 
+  setInterval(() => {
+    _spinIdx = (_spinIdx + 1) % SPIN_FRAMES.length;
+    spinChar.value = SPIN_FRAMES[_spinIdx];
+  }, 120);
+
   accountDropdownRef.value?.setAccounts(MOCK_ACCOUNTS, 'default', MOCK_USAGE);
   accountsRef.value?.setAccounts(MOCK_ACCOUNTS, 'default');
   accountsRef.value?.setUsage(MOCK_USAGE);
@@ -380,11 +403,7 @@ onMounted(async () => {
   plansRef.value?.setPlans(MOCK_PLANS);
   memoryRef.value?.setMemories(MOCK_MEMORIES);
   projectViewerRef.value?.open({ projectPath: '/Users/demo/Projects/my-api' });
-  // Click the first changed file row after project data loads to demo the diff view
-  setTimeout(() => {
-    const row = document.querySelector('.lp-project-body .pv-file-row--clickable');
-    if (row) row.click();
-  }, 900);
+  store.activeSessionId = 'sess-004';
 
   // ProjectGroup.vue uses ref(fn) for lazy collapsed init. In Vue 3.5, if the
   // lazy init resolves to a truthy function rather than a boolean, all projects
@@ -688,6 +707,42 @@ html, body {
   background: var(--surface-app);
 }
 
+.lp-progress-bar {
+  height: 2px;
+  background: var(--border-subtle);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.lp-progress-fill {
+  height: 100%;
+  width: 40%;
+  background: var(--green-500);
+  animation: lp-progress-slide 1.6s ease-in-out infinite;
+  border-radius: 1px;
+}
+
+.lp-progress-wait .lp-progress-fill,
+.lp-progress-bar:has(.lp-progress-wait) {
+  background: #f59e0b;
+}
+
+.lp-progress-fill.lp-progress-wait {
+  background: #f59e0b;
+  animation: lp-progress-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes lp-progress-slide {
+  0%   { transform: translateX(-100%); }
+  60%  { transform: translateX(250%); }
+  100% { transform: translateX(250%); }
+}
+
+@keyframes lp-progress-pulse {
+  0%, 100% { width: 60%; opacity: 1; }
+  50%       { width: 30%; opacity: 0.5; }
+}
+
 .lp-terminal-header {
   display: flex;
   align-items: center;
@@ -734,6 +789,17 @@ html, body {
   color: var(--green-500);
 }
 
+.lp-status-waiting {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #f59e0b;
+}
+
+.lp-status-waiting svg {
+  animation: lp-pulse 1.2s ease-in-out infinite;
+}
+
 .lp-status-done {
   color: var(--text-tertiary);
 }
@@ -749,25 +815,37 @@ html, body {
 }
 
 .lp-term-line { display: flex; align-items: baseline; gap: 6px; }
-.lp-term-cmd  { color: var(--gray-100); }
+.lp-term-cmd  { color: var(--gray-100); font-weight: 500; }
 .lp-term-info { color: var(--text-tertiary); }
-.lp-term-sep  { color: var(--gray-600); letter-spacing: -0.5px; }
-.lp-term-ok   { color: var(--green-500); }
+.lp-term-sep  { color: var(--border-strong); letter-spacing: -1px; }
+.lp-term-ok   { color: #4ade80; }
 .lp-term-spin { color: var(--orange-400); }
-.lp-term-done { color: var(--gray-400); }
+.lp-term-wait { color: #f59e0b; }
+.lp-term-done { color: var(--text-tertiary); }
+.lp-term-hint { color: var(--text-tertiary); padding-left: 2ch; font-size: 11px; }
+.lp-term-blank { height: 0.8em; }
+.lp-term-logo-block { margin-bottom: 2px; }
+.lp-term-logo-row { gap: 10px; }
+.lp-term-logo-art { color: #d97757; width: 11ch; flex-shrink: 0; }
+.lp-logo-meta-0 { color: var(--white); font-weight: 600; }
+.lp-logo-meta-1 { color: var(--text-secondary); }
+.lp-logo-meta-2 { color: var(--text-tertiary); }
 
-.lp-spinner {
+.lp-spinner-char {
   color: var(--orange-400);
-  animation: lp-spin-frames 0.8s linear infinite;
-  display: inline-block;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
 }
 
-@keyframes lp-spin-frames {
-  0%   { content: '⠸'; }
-  25%  { content: '⠼'; }
-  50%  { content: '⠴'; }
-  75%  { content: '⠦'; }
-  100% { content: '⠸'; }
+.lp-wait-cursor {
+  color: #f59e0b;
+  animation: lp-pulse 1s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes lp-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 
 /* ── Install ─────────────────────────────────────────────── */

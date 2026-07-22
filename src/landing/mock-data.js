@@ -3,7 +3,8 @@ const mins = (n) => new Date(now - n * 60 * 1000).toISOString();
 const hours = (n) => new Date(now - n * 60 * 60 * 1000).toISOString();
 const days = (n) => new Date(now - n * 24 * 60 * 60 * 1000).toISOString();
 
-export const MOCK_ACTIVE_PTY_IDS = new Set(['sess-001', 'sess-004']);
+export const MOCK_ACTIVE_PTY_IDS = new Set(['sess-001', 'sess-004', 'sess-006', 'sess-003']);
+export const MOCK_WAITING_PTY_IDS = new Set(['sess-003']);
 
 export const MOCK_PROJECTS = [
   {
@@ -214,47 +215,55 @@ export function getProjectAvatar(projectPath) {
   return { initials, color };
 }
 
+const LOGO = ['▐▛███▜▌ ', '▝▜█████▛▘', ' ▝▘▘ ▝▝ '];
+
 export const MOCK_TERMINAL_LINES = {
   'sess-001': [
-    { t: 'cmd', v: '$ claude code' },
-    { t: 'info', v: 'Claude Code 1.0.17' },
+    { t: 'logo', logo: LOGO, info: ['Claude Code v2.1.177', 'Opus 4.8 · Claude Max', '~/Projects/wooton-pad'] },
+    { t: 'blank' },
     { t: 'sep', v: '─'.repeat(44) },
-    { t: 'ok', v: '✓ Read src/vue/components/SidebarApp.vue' },
-    { t: 'ok', v: '✓ Read src/vue/store.js' },
-    { t: 'ok', v: '✓ Created src/landing/mock-data.js' },
-    { t: 'ok', v: '✓ Created src/landing/LandingApp.vue' },
-    { t: 'spin', v: 'Writing vite.landing.config.js' },
+    { t: 'ok', v: '✓ Read src/landing/LandingApp.vue' },
+    { t: 'ok', v: '✓ Read src/landing/mock-data.js' },
+    { t: 'ok', v: '✓ Updated MOCK_TERMINAL_LINES' },
+    { t: 'spin', v: 'Writing animation CSS…' },
+    { t: 'sep', v: '─'.repeat(44) },
+    { t: 'hint', v: '? for shortcuts · ← for agents' },
   ],
   'sess-004': [
-    { t: 'cmd', v: '$ claude code' },
-    { t: 'info', v: 'Claude Code 1.0.17' },
+    { t: 'logo', logo: LOGO, info: ['Claude Code v2.1.177', 'Opus 4.8 · Claude Max', '~/Projects/my-api'] },
+    { t: 'blank' },
     { t: 'sep', v: '─'.repeat(44) },
     { t: 'ok', v: '✓ Read src/middleware/auth.js' },
-    { t: 'ok', v: '✓ Read package.json' },
     { t: 'ok', v: '✓ Created src/middleware/rate-limit.js' },
-    { t: 'spin', v: 'Running test suite' },
+    { t: 'ok', v: '✓ Updated src/routes/api.js' },
+    { t: 'spin', v: 'Running test suite…' },
+    { t: 'sep', v: '─'.repeat(44) },
+    { t: 'hint', v: '? for shortcuts · ← for agents' },
   ],
   'sess-002': [
-    { t: 'cmd', v: '$ claude code --fork' },
-    { t: 'info', v: 'Claude Code 1.0.17' },
+    { t: 'logo', logo: LOGO, info: ['Claude Code v2.1.177', 'Opus 4.8 · Claude Max', '~/Projects/wooton-pad'] },
+    { t: 'blank' },
     { t: 'sep', v: '─'.repeat(44) },
-    { t: 'ok', v: '✓ Fixed fork detection in session-transitions.js' },
-    { t: 'ok', v: '✓ Updated JSONL parent matching logic' },
+    { t: 'ok', v: '✓ Read session-transitions.js' },
+    { t: 'ok', v: '✓ Fixed fork detection logic' },
+    { t: 'ok', v: '✓ Updated JSONL parent matching' },
     { t: 'ok', v: '✓ All 14 tests passed' },
     { t: 'done', v: '● Session ended · 38 messages' },
   ],
   'sess-003': [
-    { t: 'cmd', v: '$ claude code' },
-    { t: 'info', v: 'Claude Code 1.0.17' },
+    { t: 'logo', logo: LOGO, info: ['Claude Code v2.1.177', 'Opus 4.8 · Claude Max', '~/Projects/wooton-pad'] },
+    { t: 'blank' },
     { t: 'sep', v: '─'.repeat(44) },
-    { t: 'ok', v: '✓ Refactored auth credential handling' },
-    { t: 'ok', v: '✓ Separated account config directories' },
-    { t: 'ok', v: '✓ Updated shell-profiles.js' },
-    { t: 'done', v: '● Session ended · 94 messages' },
+    { t: 'ok', v: '✓ Read src/auth/oauth.js (3.2 KB)' },
+    { t: 'ok', v: '✓ Read src/auth/credentials.js' },
+    { t: 'ok', v: '✓ Created src/auth/multi-account.js' },
+    { t: 'wait', v: '? Write to src/auth/oauth.js? [y/n/d/s]' },
+    { t: 'sep', v: '─'.repeat(44) },
+    { t: 'hint', v: '? for shortcuts · ← for agents' },
   ],
   'sess-005': [
-    { t: 'cmd', v: '$ claude code' },
-    { t: 'info', v: 'Claude Code 1.0.17' },
+    { t: 'logo', logo: LOGO, info: ['Claude Code v2.1.177', 'Opus 4.8 · Claude Max', '~/Projects/my-api'] },
+    { t: 'blank' },
     { t: 'sep', v: '─'.repeat(44) },
     { t: 'ok', v: '✓ Created migration 0042_user_schema.sql' },
     { t: 'ok', v: '✓ Added backfill script for 50M rows' },
@@ -262,17 +271,19 @@ export const MOCK_TERMINAL_LINES = {
     { t: 'done', v: '● Session ended · 115 messages' },
   ],
   'sess-006': [
-    { t: 'cmd', v: '$ claude code' },
-    { t: 'info', v: 'Claude Code 1.0.17' },
+    { t: 'logo', logo: LOGO, info: ['Claude Code v2.1.177', 'Opus 4.8 · Claude Max', '~/Projects/blog-redesign'] },
+    { t: 'blank' },
     { t: 'sep', v: '─'.repeat(44) },
+    { t: 'ok', v: '✓ Read src/pages/index.astro' },
+    { t: 'ok', v: '✓ Read src/styles/global.css' },
     { t: 'ok', v: '✓ Designed hero layout with CSS Grid' },
-    { t: 'ok', v: '✓ Added animated gradient background' },
-    { t: 'ok', v: '✓ Responsive breakpoints for mobile' },
-    { t: 'done', v: '● Session ended · 47 messages' },
+    { t: 'spin', v: 'Writing animated gradient background…' },
+    { t: 'sep', v: '─'.repeat(44) },
+    { t: 'hint', v: '? for shortcuts · ← for agents' },
   ],
   'sess-007': [
-    { t: 'cmd', v: '$ claude code' },
-    { t: 'info', v: 'Claude Code 1.0.17' },
+    { t: 'logo', logo: LOGO, info: ['Claude Code v2.1.177', 'Opus 4.8 · Claude Max', '~/Projects/blog-redesign'] },
+    { t: 'blank' },
     { t: 'sep', v: '─'.repeat(44) },
     { t: 'ok', v: '✓ Built accessible hamburger menu' },
     { t: 'ok', v: '✓ Added focus-trap for keyboard nav' },

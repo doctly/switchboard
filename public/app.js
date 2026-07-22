@@ -317,16 +317,23 @@ function clearSearch() {
 }
 
 // --- Stop session helper (exposed globally for Vue components) ---
+let _stoppingSession = false;
 async function confirmAndStopSession(sessionId) {
-  if (!confirm('Stop this session?')) return;
-  await window.api.stopSession(sessionId);
-  activePtyIds.delete(sessionId);
-  if (!gridViewActive && activeSessionId === sessionId) {
-    setActiveSession(null);
-    terminalHeader.style.display = 'none';
-    placeholder.style.display = '';
+  if (_stoppingSession) return;
+  _stoppingSession = true;
+  try {
+    if (!confirm('Stop this session?')) return;
+    await window.api.stopSession(sessionId);
+    activePtyIds.delete(sessionId);
+    if (!gridViewActive && activeSessionId === sessionId) {
+      setActiveSession(null);
+      terminalHeader.style.display = 'none';
+      placeholder.style.display = '';
+    }
+    refreshSidebar();
+  } finally {
+    _stoppingSession = false;
   }
-  refreshSidebar();
 }
 
 window.confirmAndStopSession = confirmAndStopSession;
