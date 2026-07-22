@@ -122,27 +122,8 @@
               </div>
 
               <div v-else class="lp-terminal-area">
-                <div v-if="isRunning(activeSession) || isWaiting(activeSession)" class="lp-progress-bar">
-                  <div class="lp-progress-fill" :class="isWaiting(activeSession) ? 'lp-progress-wait' : ''"></div>
-                </div>
-                <div class="lp-terminal-header">
-                  <div class="lp-terminal-header-info">
-                    <span class="lp-terminal-name">{{ displayName(activeSession) }}</span>
-                    <span class="lp-terminal-id">{{ activeSession.sessionId }}</span>
-                  </div>
-                  <div class="lp-terminal-status">
-                    <span v-if="isRunning(activeSession)" class="lp-status-running">
-                      <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><circle cx="4" cy="4" r="4"/></svg>
-                      Running
-                    </span>
-                    <span v-else-if="isWaiting(activeSession)" class="lp-status-waiting">
-                      <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><circle cx="4" cy="4" r="4"/></svg>
-                      Waiting for input
-                    </span>
-                    <span v-else class="lp-status-done">
-                      {{ activeSession.messageCount }} msgs
-                    </span>
-                  </div>
+                <div id="vue-session-header">
+                  <SessionHeaderApp />
                 </div>
                 <div class="lp-terminal-body">
                   <template v-for="(line, i) in terminalLines" :key="i">
@@ -154,6 +135,14 @@
                     </div>
                     <div v-else-if="line.t === 'blank'" class="lp-term-blank"></div>
                     <div v-else-if="line.t === 'hint'" class="lp-term-line lp-term-hint">{{ line.v }}</div>
+                    <div v-else-if="line.t === 'todo'" class="lp-term-line lp-term-todo">{{ line.v }}</div>
+                    <div v-else-if="line.t === 'question'" class="lp-term-line lp-term-question">{{ line.v }}</div>
+                    <div v-else-if="line.t === 'opt-sel'" class="lp-term-line lp-term-opt-sel">
+                      <span class="lp-opt-cursor">❯</span>{{ line.v }}
+                    </div>
+                    <div v-else-if="line.t === 'opt-sub'" class="lp-term-line lp-term-opt-sub">{{ line.v }}</div>
+                    <div v-else-if="line.t === 'opt'" class="lp-term-line lp-term-opt">{{ line.v }}</div>
+                    <div v-else-if="line.t === 'nav'" class="lp-term-line lp-term-nav">{{ line.v }}</div>
                     <div v-else class="lp-term-line" :class="'lp-term-' + line.t">
                       <span v-if="line.t === 'spin'" class="lp-spinner-char">{{ spinChar }}</span>
                       <span v-else-if="line.t === 'wait'" class="lp-wait-cursor">▋</span>
@@ -293,10 +282,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue';
+import { ref, computed, onMounted, nextTick, watch } from 'vue';
 
 const iconUrl = 'icon.png';
 import { store } from '../vue/store.js';
+import SessionHeaderApp from '../vue/components/SessionHeaderApp.vue';
 import SidebarApp from '../vue/components/SidebarApp.vue';
 import AccountsApp from '../vue/components/AccountsApp.vue';
 import AccountDropdownApp from '../vue/components/AccountDropdownApp.vue';
@@ -304,7 +294,7 @@ import ProjectsApp from '../vue/components/ProjectsApp.vue';
 import PlansApp from '../vue/components/PlansApp.vue';
 import MemoryApp from '../vue/components/MemoryApp.vue';
 import ProjectViewerApp from '../vue/components/ProjectViewerApp.vue';
-import { MOCK_ACCOUNTS, MOCK_PROJECTS, MOCK_ACTIVE_PTY_IDS, MOCK_WAITING_PTY_IDS, MOCK_TERMINAL_LINES, MOCK_USAGE, MOCK_PLANS, MOCK_MEMORIES } from './mock-data.js';
+import { MOCK_ACCOUNTS, MOCK_PROJECTS, MOCK_TERMINAL_LINES, MOCK_USAGE, MOCK_PLANS, MOCK_MEMORIES } from './mock-data.js';
 
 const stars = ref(null);
 const SPIN_FRAMES = ['⠸', '⠼', '⠴', '⠦', '⠇', '⠏', '⠋', '⠙'];
@@ -363,27 +353,18 @@ const activeSession = computed(() => {
   if (!store.activeSessionId) return null;
   for (const p of store.projects) {
     const s = p.sessions.find(s => s.sessionId === store.activeSessionId);
-    if (s) return s;
+    if (s) return { ...s, projectPath: p.projectPath };
   }
   return null;
 });
+
+watch(activeSession, (s) => { store.headerSession = s; }, { immediate: true });
 
 const terminalLines = computed(() => {
   if (!store.activeSessionId) return [];
   return MOCK_TERMINAL_LINES[store.activeSessionId] || [];
 });
 
-function displayName(session) {
-  return session?.name || session?.summary || 'Untitled';
-}
-
-function isRunning(session) {
-  return session && MOCK_ACTIVE_PTY_IDS.has(session.sessionId) && !MOCK_WAITING_PTY_IDS.has(session.sessionId);
-}
-
-function isWaiting(session) {
-  return session && MOCK_WAITING_PTY_IDS.has(session.sessionId);
-}
 
 onMounted(async () => {
   fetch('https://api.github.com/repos/fortael/switchboard')
@@ -403,14 +384,14 @@ onMounted(async () => {
   plansRef.value?.setPlans(MOCK_PLANS);
   memoryRef.value?.setMemories(MOCK_MEMORIES);
   projectViewerRef.value?.open({ projectPath: '/Users/demo/Projects/my-api' });
-  store.activeSessionId = 'sess-004';
-
   // ProjectGroup.vue uses ref(fn) for lazy collapsed init. In Vue 3.5, if the
   // lazy init resolves to a truthy function rather than a boolean, all projects
   // appear collapsed. Click the arrows to expand all collapsed project groups.
+  // Set activeSessionId after expanding so nothing overrides it.
   await nextTick();
   setTimeout(() => {
     document.querySelectorAll('#sidebar .project-header.collapsed .arrow').forEach(el => el.click());
+    store.activeSessionId = 'sess-001';
   }, 50);
 });
 </script>
@@ -537,7 +518,7 @@ html, body {
 
 /* ── Section common ──────────────────────────────────────── */
 .lp-section-inner {
-  max-width: 1100px;
+  max-width: 1200px;
   margin: 0 auto;
   padding: 0 24px;
 }
@@ -628,7 +609,7 @@ html, body {
   border-radius: 12px;
   overflow: hidden;
   box-shadow: 0 32px 80px rgba(0, 0, 0, 0.6);
-  max-width: 1100px;
+  max-width: 1200px;
   margin: 0 auto;
   height: 540px;
   display: flex;
@@ -681,9 +662,9 @@ html, body {
 /* Override sidebar height for the demo container */
 .lp-app-body #sidebar {
   height: 100%;
-  width: 280px;
-  min-width: 180px;
-  max-width: 280px;
+  width: 340px;
+  min-width: 220px;
+  max-width: 340px;
 }
 
 .lp-app-body #main {
@@ -707,101 +688,9 @@ html, body {
   background: var(--surface-app);
 }
 
-.lp-progress-bar {
-  height: 2px;
-  background: var(--border-subtle);
+/* SessionHeaderApp handles header styles via public/style.css */
+#vue-session-header {
   flex-shrink: 0;
-  overflow: hidden;
-}
-
-.lp-progress-fill {
-  height: 100%;
-  width: 40%;
-  background: var(--green-500);
-  animation: lp-progress-slide 1.6s ease-in-out infinite;
-  border-radius: 1px;
-}
-
-.lp-progress-wait .lp-progress-fill,
-.lp-progress-bar:has(.lp-progress-wait) {
-  background: #f59e0b;
-}
-
-.lp-progress-fill.lp-progress-wait {
-  background: #f59e0b;
-  animation: lp-progress-pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes lp-progress-slide {
-  0%   { transform: translateX(-100%); }
-  60%  { transform: translateX(250%); }
-  100% { transform: translateX(250%); }
-}
-
-@keyframes lp-progress-pulse {
-  0%, 100% { width: 60%; opacity: 1; }
-  50%       { width: 30%; opacity: 0.5; }
-}
-
-.lp-terminal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 16px;
-  background: var(--surface-panel);
-  border-bottom: 1px solid var(--border-subtle);
-  flex-shrink: 0;
-}
-
-.lp-terminal-header-info {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.lp-terminal-name {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.lp-terminal-id {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  white-space: nowrap;
-}
-
-.lp-terminal-status {
-  flex-shrink: 0;
-  font-size: 12px;
-  font-family: var(--font-mono);
-}
-
-.lp-status-running {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--green-500);
-}
-
-.lp-status-waiting {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: #f59e0b;
-}
-
-.lp-status-waiting svg {
-  animation: lp-pulse 1.2s ease-in-out infinite;
-}
-
-.lp-status-done {
-  color: var(--text-tertiary);
 }
 
 .lp-terminal-body {
@@ -823,10 +712,17 @@ html, body {
 .lp-term-wait { color: #f59e0b; }
 .lp-term-done { color: var(--text-tertiary); }
 .lp-term-hint { color: var(--text-tertiary); padding-left: 2ch; font-size: 11px; }
+.lp-term-todo { color: var(--text-tertiary); }
+.lp-term-question { color: var(--white); font-weight: 500; }
+.lp-term-opt-sel { color: var(--white); }
+.lp-opt-cursor { color: #4ade80; flex-shrink: 0; }
+.lp-term-opt-sub { color: var(--text-tertiary); line-height: 1.45; }
+.lp-term-opt { color: var(--text-secondary); }
+.lp-term-nav { color: var(--text-tertiary); font-size: 11px; }
 .lp-term-blank { height: 0.8em; }
 .lp-term-logo-block { margin-bottom: 2px; }
-.lp-term-logo-row { gap: 10px; }
-.lp-term-logo-art { color: #d97757; width: 11ch; flex-shrink: 0; }
+.lp-term-logo-row { gap: 10px; line-height: 1; }
+.lp-term-logo-art { color: #d97757; display: inline-block; min-width: 10ch; flex-shrink: 0; white-space: pre; }
 .lp-logo-meta-0 { color: var(--white); font-weight: 600; }
 .lp-logo-meta-1 { color: var(--text-secondary); }
 .lp-logo-meta-2 { color: var(--text-tertiary); }
@@ -1017,7 +913,7 @@ html, body {
 }
 
 .lp-project-window {
-  max-width: 1100px;
+  max-width: 1200px;
   height: 580px;
 }
 

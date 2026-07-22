@@ -25,7 +25,7 @@ const clients = new Set();
 http.createServer((req, res) => {
   if (req.url === '/__lr') {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
-    res.write('data: ok\n\n');
+    res.write(': connected\n\n');
     clients.add(res);
     req.on('close', () => clients.delete(res));
     return;
@@ -48,20 +48,22 @@ http.createServer((req, res) => {
   });
 }).listen(PORT, () => console.log(`Landing dev → http://localhost:${PORT}  (watching for changes…)`));
 
-let reloadTimer;
-fs.watch(ROOT, { recursive: true }, (event, filename) => {
-  if (!filename || !/\.(js|css)$/.test(filename)) return;
-  clearTimeout(reloadTimer);
-  reloadTimer = setTimeout(() => {
-    for (const c of clients) c.write('data: reload\n\n');
-  }, 150);
-});
-
+// Spawn Vite with piped stdout so we can detect build completion.
+// Only send reload when Vite confirms a successful rebuild — not on fs reads.
 const vite = spawn(
   path.join(projectRoot, 'node_modules', '.bin', 'vite'),
   ['build', '--config', 'vite.landing.config.js', '--watch'],
-  { cwd: projectRoot, stdio: 'inherit' },
+  { cwd: projectRoot, stdio: ['inherit', 'pipe', 'inherit'] },
 );
+
+let firstBuild = true;
+vite.stdout.on('data', (chunk) => {
+  process.stdout.write(chunk);
+  if (chunk.toString().includes('built in')) {
+    if (firstBuild) { firstBuild = false; return; } // skip initial build on startup
+    for (const c of clients) c.write('data: reload\n\n');
+  }
+});
 
 process.on('SIGINT', () => { vite.kill(); process.exit(0); });
 process.on('SIGTERM', () => { vite.kill(); process.exit(0); });

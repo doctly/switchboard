@@ -1,7 +1,7 @@
 import { createApp } from 'vue';
 import { store } from '../vue/store.js';
 import LandingApp from './LandingApp.vue';
-import { MOCK_PROJECTS, MOCK_ACCOUNTS, MOCK_ACTIVE_PTY_IDS, MOCK_PROJECT_INFO, MOCK_PROJECT_DETAIL, getProjectAvatar } from './mock-data.js';
+import { MOCK_PROJECTS, MOCK_ACCOUNTS, MOCK_ACTIVE_PTY_IDS, MOCK_WAITING_PTY_IDS, MOCK_PROJECT_INFO, MOCK_PROJECT_DETAIL, getProjectAvatar } from './mock-data.js';
 import '../../public/style.css';
 
 const MOCK_DIFF_CONTENT = `const { RateLimiterMemory } = require('rate-limiter-flexible');
@@ -78,9 +78,14 @@ window.formatDate = (date) => {
 // Prevent confirm dialogs in the demo
 window.confirm = () => false;
 
+// Stub stop button — no-op in demo
+window.confirmAndStopSession = () => {};
+
 // Populate store with mock data
 store.projects = MOCK_PROJECTS;
 store.activePtyIds = MOCK_ACTIVE_PTY_IDS;
+store.sessionBusyState = new Map([...MOCK_ACTIVE_PTY_IDS].map(id => [id, true]));
+store.attentionSessions = MOCK_WAITING_PTY_IDS;
 store.sessionMaxAgeDays = 30;
 store.visibleSessionCount = 20;
 

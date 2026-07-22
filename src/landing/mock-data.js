@@ -215,7 +215,7 @@ export function getProjectAvatar(projectPath) {
   return { initials, color };
 }
 
-const LOGO = ['▐▛███▜▌ ', '▝▜█████▛▘', ' ▝▘▘ ▝▝ '];
+const LOGO = [' ▐▛███▜▌  ', '▝▜█████▛▘', '  ▘▘ ▝▝ '];
 
 export const MOCK_TERMINAL_LINES = {
   'sess-001': [
@@ -253,13 +253,24 @@ export const MOCK_TERMINAL_LINES = {
   'sess-003': [
     { t: 'logo', logo: LOGO, info: ['Claude Code v2.1.177', 'Opus 4.8 · Claude Max', '~/Projects/wooton-pad'] },
     { t: 'blank' },
-    { t: 'sep', v: '─'.repeat(44) },
-    { t: 'ok', v: '✓ Read src/auth/oauth.js (3.2 KB)' },
-    { t: 'ok', v: '✓ Read src/auth/credentials.js' },
-    { t: 'ok', v: '✓ Created src/auth/multi-account.js' },
-    { t: 'wait', v: '? Write to src/auth/oauth.js? [y/n/d/s]' },
-    { t: 'sep', v: '─'.repeat(44) },
-    { t: 'hint', v: '? for shortcuts · ← for agents' },
+    { t: 'sep', v: '─'.repeat(56) },
+    { t: 'todo', v: '☐ OAuth integration refactor' },
+    { t: 'blank' },
+    { t: 'question', v: 'Where should refresh_token be stored for multi-account?' },
+    { t: 'blank' },
+    { t: 'opt-sel', v: ' 1. File system' },
+    { t: 'opt-sub', v: '     ~/.claude/credentials/<account>.json — current approach.' },
+    { t: 'opt', v: '  2. System keychain' },
+    { t: 'opt-sub', v: '     macOS Keychain — secure, no CLI access needed.' },
+    { t: 'opt', v: '  3. Environment variables' },
+    { t: 'opt-sub', v: '     OAUTH_REFRESH_TOKEN — simple, but not persistent.' },
+    { t: 'opt', v: '  4. Not sure' },
+    { t: 'opt-sub', v: '     Show me options to determine the current state.' },
+    { t: 'opt', v: '  5. Type something.' },
+    { t: 'sep', v: '─'.repeat(56) },
+    { t: 'opt', v: '  6. Chat about this' },
+    { t: 'blank' },
+    { t: 'nav', v: 'Enter to select · ↑/↓ to navigate · Esc to cancel' },
   ],
   'sess-005': [
     { t: 'logo', logo: LOGO, info: ['Claude Code v2.1.177', 'Opus 4.8 · Claude Max', '~/Projects/my-api'] },
