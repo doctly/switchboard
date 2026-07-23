@@ -8,10 +8,10 @@
         <h1 class="lp-title">Wooton Pad</h1>
         <p class="lp-tagline">The session manager for Claude Code</p>
         <div class="lp-cta">
-          <a class="lp-btn-primary" href="https://github.com/fortael/switchboard/releases" target="_blank" rel="noopener">
+          <a class="lp-btn-primary" href="https://github.com/fortael/wootonpad/releases" target="_blank" rel="noopener">
             Download
           </a>
-          <a class="lp-btn-secondary" href="https://github.com/fortael/switchboard" target="_blank" rel="noopener">
+          <a class="lp-btn-secondary" href="https://github.com/fortael/wootonpad" target="_blank" rel="noopener">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
             GitHub
             <span v-if="stars !== null" class="lp-stars">★ {{ stars }}</span>
@@ -243,7 +243,7 @@
               <svg width="20" height="20" viewBox="0 0 814 1000" fill="currentColor"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76 0-103.7 40.8-165.9 40.8s-105-36.8-162.1-124.3C46.7 740.3 0 599.1 0 517.8c0-220.1 144.4-336.6 284.1-336.6 75.2 0 137.7 49.3 184.8 49.3 44.9 0 115.1-52.3 200.4-52.3zM518.3 15.3c28.5-35.3 50-84.2 50-133.1 0-6.7-.6-13.3-1.9-19.3-47.7 1.9-104.8 31.9-138.8 71.5-26.2 30.3-52.2 79.2-52.2 128.7 0 7.4 1.3 14.7 1.9 17.1 3.2.5 8.4 1.3 13.6 1.3 43.5 0 98.9-28.9 127.4-66.2z"/></svg>
               macOS
             </div>
-            <a class="lp-dl-btn" href="https://github.com/fortael/switchboard/releases" target="_blank" rel="noopener">Download .dmg</a>
+            <a class="lp-dl-btn" href="https://github.com/fortael/wootonpad/releases" target="_blank" rel="noopener">Download .dmg</a>
             <p class="lp-install-note">arm64 + x64 universal</p>
           </div>
           <div class="lp-install-card">
@@ -251,7 +251,7 @@
               <svg width="20" height="20" viewBox="0 0 88 88" fill="currentColor"><path d="M0 0h42v42H0V0zm4 4h34v34H4V4zm42-4h42v42H46V0zm4 4h34v34H50V4zM0 46h42v42H0V46zm4 4h34v34H4V50zm42-4h42v42H46V46zm4 4h34v34H50V50z"/></svg>
               Windows
             </div>
-            <a class="lp-dl-btn" href="https://github.com/fortael/switchboard/releases" target="_blank" rel="noopener">Download .exe</a>
+            <a class="lp-dl-btn" href="https://github.com/fortael/wootonpad/releases" target="_blank" rel="noopener">Download .exe</a>
             <p class="lp-install-note">NSIS installer</p>
           </div>
           <div class="lp-install-card">
@@ -259,7 +259,7 @@
               <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20.581 19.049c-.55-.446-.336-1.431-.907-1.917.553-3.365-.997-6.331-2.845-8.232a9.286 9.286 0 0 0-6.636-2.736 9.65 9.65 0 0 0-2.108.234C4.924 7.086 2 10.006 2 13.5c0 3.866 3.134 7 7 7 .295 0 .585-.019.87-.055 1.5.35 3.17.55 4.13.65.96.101 3.001.51 4.001-.24 0 0 .5-.5 1-.5s1 .5 1.5.5 1-.5 1.5-.5.5.5.5.5c0 0-.97-1.857-.92-1.806zM9 19.5c-3.309 0-6-2.691-6-6s2.691-6 6-6 6 2.691 6 6-2.691 6-6 6z"/></svg>
               Linux
             </div>
-            <a class="lp-dl-btn" href="https://github.com/fortael/switchboard/releases" target="_blank" rel="noopener">Download .AppImage</a>
+            <a class="lp-dl-btn" href="https://github.com/fortael/wootonpad/releases" target="_blank" rel="noopener">Download .AppImage</a>
             <p class="lp-install-note">AppImage + .deb</p>
           </div>
         </div>
@@ -274,7 +274,7 @@
     <footer class="lp-footer">
       <div class="lp-footer-inner">
         <span>Wooton Pad · Open source · MIT license · Fork of Switchboard</span>
-        <a href="https://github.com/fortael/switchboard" target="_blank" rel="noopener">github.com/fortael/switchboard</a>
+        <a href="https://github.com/fortael/wootonpad" target="_blank" rel="noopener">github.com/fortael/wootonpad</a>
       </div>
     </footer>
 
@@ -367,7 +367,7 @@ const terminalLines = computed(() => {
 
 
 onMounted(async () => {
-  fetch('https://api.github.com/repos/fortael/switchboard')
+  fetch('https://api.github.com/repos/fortael/wootonpad')
     .then(r => r.json())
     .then(d => { if (d.stargazers_count != null) stars.value = d.stargazers_count; })
     .catch(() => {});

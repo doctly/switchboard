@@ -2,9 +2,13 @@
 
 > **Fork of [Switchboard](https://github.com/doctly/switchboard)** — extended with multi-account support, git integration, and a project viewer panel.
 
----
+<div align="center">
 
-**[fortael.github.io/switchboard](https://fortael.github.io/switchboard/)** — Your command center for Claude Code sessions.
+[![Download](https://img.shields.io/github/v/release/fortael/wootonpad?label=Download&style=for-the-badge&logo=github)](https://github.com/fortael/wootonpad/releases/latest)
+[![macOS](https://img.shields.io/badge/macOS-arm64-black?style=for-the-badge&logo=apple)](https://github.com/fortael/wootonpad/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-orange?style=for-the-badge)](LICENSE)
+
+</div>
 
 ---
 
@@ -12,7 +16,19 @@ Wooton Pad is a desktop app that gives you a unified view of all your Claude Cod
 
 ![Wooton Pad](build/screenshot.png)
 
-### Key Features
+---
+
+<div align="center">
+
+**[Live Demo](https://fortael.github.io/wootonpad/)**
+
+*Your command center for Claude Code sessions.*
+
+</div>
+
+---
+
+## Key Features
 
 - **Session Browser** — All your Claude Code sessions, organized by project, searchable by content
 - **Built-in Terminal** — Connect to running sessions or launch new ones without leaving the app
@@ -24,13 +40,15 @@ Wooton Pad is a desktop app that gives you a unified view of all your Claude Cod
 - **Activity Stats** — Heatmap of your coding activity across all projects
 - **Session Names** — Picks up session names from Claude Code's `/rename` command automatically
 
+---
+
 ## Installation
 
 ### Download
 
 Grab the latest macOS build (Apple Silicon) from the releases page:
 
-**[Download Wooton Pad](https://github.com/fortael/switchboard/releases/latest)**
+**[Download Wooton Pad](https://github.com/fortael/wootonpad/releases/latest)**
 
 #### macOS security warning
 
@@ -45,8 +63,8 @@ Then open the app normally.
 ### Build from source
 
 ```bash
-git clone https://github.com/fortael/switchboard.git
-cd switchboard
+git clone https://github.com/fortael/wootonpad.git
+cd wootonpad
 npm install
 npm start        # run in dev mode
 npm run build    # build a distributable for your platform
@@ -54,22 +72,22 @@ npm run build    # build a distributable for your platform
 
 See **[docs/building.md](docs/building.md)** for full build instructions and prerequisites.
 
+---
+
 ## Session Grid Overview
 
 Toggle the grid overview from the sidebar for a bird's-eye view of all your open sessions at once, grouped by project.
-
-![Session Grid Overview](build/screenshot-grid.png)
 
 - **Live terminals** — Every open session renders its full terminal in a card, so you can monitor multiple Claude agents simultaneously.
 - **Status at a glance** — Each card shows a running/stopped/busy indicator dot and last-activity timestamp.
 - **Click to focus, double-click to expand** — Click a card header to focus it; double-click to switch back to single-terminal view for that session.
 - **Persistent** — Grid preference is saved across restarts.
 
+---
+
 ## File Preview Side Panel & Claude IDE MCP Emulator
 
 Wooton Pad can act as an IDE for your Claude Code sessions. When enabled, Claude's file opens and proposed edits appear in a side panel next to the terminal instead of being sent to an external editor.
-
-![IDE Emulation](build/screenshot-ide.png)
 
 - **Diff review** — When Claude proposes a file change, it shows up as a diff in the side panel. You can review the changes and accept or reject them directly.
 - **Inline & side-by-side** — Toggle between inline (unified) and side-by-side diff views. Your preference is remembered across sessions.
@@ -78,15 +96,17 @@ Wooton Pad can act as an IDE for your Claude Code sessions. When enabled, Claude
 
 To disable IDE emulation entirely (e.g. if you want Claude to use VS Code or Cursor instead), uncheck **IDE Emulation** in **Global Settings**. This stops Wooton Pad from registering as an IDE, so Claude CLI will discover and connect to your real editor. Changes take effect on new sessions — running sessions are not affected.
 
+---
+
 ## Status Notifications
 
 Wooton Pad monitors all your sessions in the background and shows status indicators in the sidebar so you can tell at a glance which sessions need attention — even when you're working in a different one.
 
-![Status Notifications](build/screenshot-notifications.png)
-
 - **Waiting for input** — A session that needs your response is highlighted so you don't miss it.
 - **Permission approval** — When Claude is blocked waiting for a permission grant, the session badge lets you know immediately.
 - **Activity indicators** — See which sessions are actively running, idle, or finished.
+
+---
 
 ## Editor
 
@@ -94,6 +114,8 @@ Wooton Pad monitors all your sessions in the background and shows status indicat
 |----------|--------|
 | `Cmd+F` / `Ctrl+F` | Find in file (also works in terminal) |
 | `Cmd+G` / `Ctrl+G` | Go to line |
+
+---
 
 ## Development Setup
 
@@ -123,29 +145,8 @@ npm run build:linux   # AppImage + deb (x64 + arm64)
 
 Output goes to `dist/`.
 
-## Releasing
-
-Create the GitHub Release manually via the web interface, then push the matching tag:
-
-```bash
-git tag v0.2.0
-git push origin v0.2.0
-```
-
-The GitHub Actions workflow builds the macOS DMG and uploads it to the existing release.
+---
 
 ## Auto-Updates
 
 The app checks for updates from GitHub Releases on launch and every 4 hours. A status indicator in the toolbar shows when a new version is available.
-
-## Project Structure
-
-```
-main.js            Electron main process
-preload.js         Context bridge (IPC bindings)
-db.js              SQLite session cache & metadata
-public/            Renderer (HTML/CSS/JS)
-scripts/           Build & postinstall scripts
-build/             Icons, entitlements, builder resources
-.github/workflows/ CI/CD
-```

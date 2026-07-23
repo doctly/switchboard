@@ -78,7 +78,7 @@
     "publish": {
       "provider": "github",
       "owner": "fortael",
-      "repo": "switchboard",
+      "repo": "wootonpad",
       "releaseType": "release"
     },
     "mac": {

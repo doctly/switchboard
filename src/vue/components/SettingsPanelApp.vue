@@ -279,7 +279,7 @@
                     v-if="newVersion"
                     class="settings-update-link"
                     href="#"
-                    @click.prevent="window.api.openExternal('https://github.com/fortael/switchboard/releases/latest')"
+                    @click.prevent="window.api.openExternal('https://github.com/fortael/wootonpad/releases/latest')"
                   >Download v{{ newVersion }} ↗</a>
                 </div>
               </div>
