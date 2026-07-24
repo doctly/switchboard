@@ -5510,6 +5510,7 @@ body.hide-avatars .grid-card-avatar {
   color: rgba(255,255,255,0.9);
 }
 .pv-git-btn:disabled { opacity: 0.35; cursor: default; }
+@keyframes pv-spin { to { transform: rotate(360deg); } }
 .pv-git-msg {
   font-size: 11.5px;
   color: rgba(255,255,255,0.45);

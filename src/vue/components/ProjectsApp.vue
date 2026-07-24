@@ -40,7 +40,7 @@
             <div class="session-info">
               <div class="session-summary">
                 <span class="project-item-name">{{ projectName(project) }}</span>
-                <span v-if="project.unpushedCount" class="project-unpushed-badge">{{ project.unpushedCount }}</span>
+                <span v-if="projectInfo[project.projectPath]?.unpushedCount ?? project.unpushedCount" class="project-unpushed-badge">{{ projectInfo[project.projectPath]?.unpushedCount ?? project.unpushedCount }}</span>
               </div>
               <div class="session-subtitle" :title="project.projectPath">{{ project.projectPath }}</div>
               <div class="session-meta">{{ baseMeta(project) }}</div>
@@ -217,6 +217,7 @@ defineExpose({
   },
   setSearch(q) { searchQuery.value = q || ''; },
   clearActive() { activeProjectPath.value = null; },
+  updateProjectInfo(path, info) { if (info) projectInfo[path] = { ...projectInfo[path], ...info }; },
 });
 
 const trashSvg = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>';

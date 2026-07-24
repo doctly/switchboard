@@ -143,6 +143,18 @@
                     <div v-else-if="line.t === 'opt-sub'" class="lp-term-line lp-term-opt-sub">{{ line.v }}</div>
                     <div v-else-if="line.t === 'opt'" class="lp-term-line lp-term-opt">{{ line.v }}</div>
                     <div v-else-if="line.t === 'nav'" class="lp-term-line lp-term-nav">{{ line.v }}</div>
+                    <div v-else-if="line.t === 'sh-prompt'" class="lp-term-line lp-term-sh-prompt">
+                      <span class="lp-sh-cwd">{{ line.cwd }}</span>
+                      <span v-if="line.branch" class="lp-sh-branch"> on <span class="lp-sh-branch-name">{{ line.branch }}</span></span>
+                    </div>
+                    <div v-else-if="line.t === 'sh-cmd'" class="lp-term-line lp-term-sh-cmd">
+                      <span class="lp-sh-arrow">❯</span> {{ line.v }}
+                    </div>
+                    <div v-else-if="line.t === 'sh-cursor'" class="lp-term-line lp-term-sh-cmd">
+                      <span class="lp-sh-arrow">❯</span> <span class="lp-sh-block-cursor">█</span>
+                    </div>
+                    <div v-else-if="line.t === 'sh-out-ok'" class="lp-term-line lp-term-sh-out-ok">{{ line.v }}</div>
+                    <div v-else-if="line.t === 'sh-out'" class="lp-term-line lp-term-sh-out">{{ line.v }}</div>
                     <div v-else class="lp-term-line" :class="'lp-term-' + line.t">
                       <span v-if="line.t === 'spin'" class="lp-spinner-char">{{ spinChar }}</span>
                       <span v-else-if="line.t === 'wait'" class="lp-wait-cursor">▋</span>
@@ -726,6 +738,17 @@ html, body {
 .lp-logo-meta-0 { color: var(--white); font-weight: 600; }
 .lp-logo-meta-1 { color: var(--text-secondary); }
 .lp-logo-meta-2 { color: var(--text-tertiary); }
+
+.lp-term-sh-prompt { color: var(--text-secondary); gap: 0; }
+.lp-sh-cwd { color: #60a5fa; }
+.lp-sh-branch { color: var(--text-tertiary); }
+.lp-sh-branch-name { color: #c084fc; }
+.lp-term-sh-cmd { color: var(--gray-100); gap: 6px; }
+.lp-sh-arrow { color: #4ade80; flex-shrink: 0; }
+.lp-sh-block-cursor { color: var(--gray-100); animation: lp-blink 1s step-end infinite; }
+@keyframes lp-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+.lp-term-sh-out { color: var(--text-secondary); padding-left: 0; }
+.lp-term-sh-out-ok { color: #4ade80; }
 
 .lp-spinner-char {
   color: var(--orange-400);

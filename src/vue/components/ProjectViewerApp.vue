@@ -106,6 +106,10 @@
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
               Branch
             </button>
+            <button class="pv-git-btn" @click="refreshStats" :disabled="statsRefreshing" title="Refresh git stats">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" :style="statsRefreshing ? 'animation:pv-spin 1s linear infinite' : ''"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+              Refresh
+            </button>
             <span v-if="gitMessage" class="pv-git-msg" :class="{ error: gitError }">{{ gitMessage }}</span>
             <span v-if="detail.totalAdded || detail.totalDeleted" class="pv-git-stats">
               <span class="pv-added" v-if="detail.totalAdded">+{{ detail.totalAdded }}</span>
@@ -563,6 +567,7 @@ watch([viewedPath, _openCount], async ([p]) => {
     window.api.getGitUserInfo(p).catch(() => null),
   ]);
   detail.value = det || detail.value;
+  if (det) _pushProjectInfo(p, det);
   branches.value = br?.ok ? br.branches : [];
   remoteBranches.value = br?.ok ? (br.remotes || []) : [];
   if (sess?.ok) sessions.value = sess.sessions;
@@ -760,6 +765,37 @@ async function reload() {
   if (!p) return;
   const det = await window.api.getProjectDetail(p).catch(() => null);
   detail.value = det;
+  _pushProjectInfo(p, det);
+}
+
+const statsRefreshing = ref(false);
+
+async function refreshStats() {
+  const p = viewedPath.value;
+  if (!p || statsRefreshing.value) return;
+  statsRefreshing.value = true;
+  try {
+    const [det, br] = await Promise.all([
+      window.api.getProjectDetail(p).catch(() => null),
+      window.api.gitBranches(p).catch(() => null),
+    ]);
+    if (det) detail.value = det;
+    if (br?.ok) { branches.value = br.branches; remoteBranches.value = br.remotes || []; }
+    _pushProjectInfo(p, det);
+  } finally {
+    statsRefreshing.value = false;
+  }
+}
+
+function _pushProjectInfo(path, det) {
+  if (!det) return;
+  window.vueProjects?.updateProjectInfo(path, {
+    branch: det.branch,
+    added: det.totalAdded,
+    deleted: det.totalDeleted,
+    unpushedCount: det.unpushedCommits?.length ?? 0,
+    containers: det.containers,
+  });
 }
 
 function setViewedPath(path) {

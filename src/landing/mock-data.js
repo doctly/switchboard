@@ -3,7 +3,7 @@ const mins = (n) => new Date(now - n * 60 * 1000).toISOString();
 const hours = (n) => new Date(now - n * 60 * 60 * 1000).toISOString();
 const days = (n) => new Date(now - n * 24 * 60 * 60 * 1000).toISOString();
 
-export const MOCK_ACTIVE_PTY_IDS = new Set(['sess-001', 'sess-004', 'sess-006', 'sess-003']);
+export const MOCK_ACTIVE_PTY_IDS = new Set(['sess-001', 'sess-004', 'sess-006', 'sess-003', 'sess-term']);
 export const MOCK_WAITING_PTY_IDS = new Set(['sess-003']);
 
 export const MOCK_PROJECTS = [
@@ -17,6 +17,14 @@ export const MOCK_PROJECTS = [
         modified: mins(28),
         messageCount: 62,
         starred: false, archived: false, type: 'claude', slug: null,
+      },
+      {
+        sessionId: 'sess-term',
+        name: 'Terminal',
+        aiTitle: '',
+        modified: mins(5),
+        messageCount: 0,
+        starred: false, archived: false, type: 'terminal', slug: null,
       },
       {
         sessionId: 'sess-002',
@@ -291,6 +299,26 @@ export const MOCK_TERMINAL_LINES = {
     { t: 'spin', v: 'Writing animated gradient background…' },
     { t: 'sep', v: '─'.repeat(44) },
     { t: 'hint', v: '? for shortcuts · ← for agents' },
+  ],
+  'sess-term': [
+    { t: 'sh-prompt', cwd: '~/Projects/wooton-pad', branch: 'main' },
+    { t: 'sh-cmd', v: 'git log --oneline -4' },
+    { t: 'sh-out', v: 'b9241113 feat: add refresh stats to project viewer' },
+    { t: 'sh-out', v: '7b1a8eb7 chore(ci): upgrade actions to v5' },
+    { t: 'sh-out', v: '9163ad2a chore: bump version to 0.2.0' },
+    { t: 'sh-out', v: 'b7c4c6b3 feat: add project avatar and multi-account UI' },
+    { t: 'sh-prompt', cwd: '~/Projects/wooton-pad', branch: 'main' },
+    { t: 'sh-cmd', v: 'npm test' },
+    { t: 'blank' },
+    { t: 'sh-out', v: '> switchboard@0.2.0 test' },
+    { t: 'sh-out', v: '> node --test' },
+    { t: 'blank' },
+    { t: 'sh-out-ok', v: '✔ folder-index-state (1.8s)' },
+    { t: 'sh-out-ok', v: '✔ session-cache (0.7s)' },
+    { t: 'sh-out-ok', v: '✔ session-transitions (0.4s)' },
+    { t: 'blank' },
+    { t: 'sh-prompt', cwd: '~/Projects/wooton-pad', branch: 'main' },
+    { t: 'sh-cursor' },
   ],
   'sess-007': [
     { t: 'logo', logo: LOGO, info: ['Claude Code v2.1.177', 'Opus 4.8 · Claude Max', '~/Projects/blog-redesign'] },

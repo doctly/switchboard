@@ -325,6 +325,27 @@ async function confirmAndStopSession(sessionId) {
     if (!confirm('Stop this session?')) return;
     await window.api.stopSession(sessionId);
     activePtyIds.delete(sessionId);
+
+    const session = sessionMap.get(sessionId);
+    if (session?.type === 'terminal') {
+      // Plain terminals are ephemeral — clean up immediately without waiting for process-exited
+      destroySession(sessionId);
+      pendingSessions.delete(sessionId);
+      for (const projList of [cachedProjects, cachedAllProjects]) {
+        for (const proj of projList) {
+          proj.sessions = proj.sessions.filter(s => s.sessionId !== sessionId);
+        }
+      }
+      sessionMap.delete(sessionId);
+      if (activeSessionId === sessionId) {
+        setActiveSession(null);
+        placeholder.style.display = '';
+      }
+      refreshSidebar();
+      pollActiveSessions();
+      return;
+    }
+
     if (!gridViewActive && activeSessionId === sessionId) {
       setActiveSession(null);
       terminalHeader.style.display = 'none';
@@ -533,6 +554,17 @@ async function launchNewSession(project, sessionOptions) {
     proj.sessions.unshift(session);
   }
   refreshSidebar();
+
+  // Switch to sessions tab and highlight the new session
+  if (window.vueStore?.activeTab !== 'sessions') {
+    window.vueApp?.setTab('sessions');
+  }
+  setActiveSession(sessionId);
+
+  // Expand the project group in sidebar if it's collapsed
+  const _folderId = 'project-' + projectPath.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const _groupHeader = document.getElementById('ph-' + _folderId);
+  if (_groupHeader?.classList.contains('collapsed')) _groupHeader.click();
 
   const entry = createTerminalEntry(session);
 

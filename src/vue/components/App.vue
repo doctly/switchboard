@@ -378,6 +378,7 @@ onMounted(async () => {
     setProjects: (list) => projectsRef.value?.setProjects(list),
     setSearch: (q) => projectsRef.value?.setSearch(q),
     clearActive: () => projectsRef.value?.clearActive(),
+    updateProjectInfo: (path, info) => projectsRef.value?.updateProjectInfo(path, info),
   });
   Object.assign(window.vueStatusBar, {
     setInfo: (text) => statusBarRef.value?.setInfo(text),
