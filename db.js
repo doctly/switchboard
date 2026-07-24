@@ -2,9 +2,17 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const os = require('os');
 
-const DATA_DIR = path.join(os.homedir(), '.switchboard');
+const DATA_DIR = path.join(os.homedir(), '.wootonpad');
 const fs = require('fs');
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+// Migrate from old .switchboard dir if .wootonpad doesn't exist yet
+const OLD_DATA_DIR = path.join(os.homedir(), '.switchboard');
+if (!fs.existsSync(DATA_DIR)) {
+  if (fs.existsSync(OLD_DATA_DIR)) {
+    try { fs.cpSync(OLD_DATA_DIR, DATA_DIR, { recursive: true }); } catch { fs.mkdirSync(DATA_DIR, { recursive: true }); }
+  } else {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+}
 
 const DB_PATH = path.join(DATA_DIR, 'switchboard.db');
 

@@ -42,6 +42,33 @@ Wooton Pad is a desktop app that gives you a unified view of all your Claude Cod
 
 ---
 
+## External Launcher Integration
+
+WootonPad registers the `wootonpad://` URL scheme so any external tool can open or resume sessions without spawning separate terminal windows.
+
+```bash
+# Open a new Claude session in a project
+open wootonpad:///path/to/project
+
+# Resume the most recent session in a project
+open wootonpad://+/path/to/project
+```
+
+When WootonPad is already running, `open wootonpad://...` delivers the URL directly to the running instance via macOS Apple Events — no server, no polling. When it isn't running, macOS launches the app and passes the URL on startup.
+
+### Silverware / custom launcher setup
+
+If you use [Silverware](https://github.com/fortael/silverware) or any tool that supports a custom terminal command template, set the template to:
+
+| Intent | Template |
+|--------|----------|
+| New session | `open wootonpad://{dir}` |
+| Resume last session | `open wootonpad://+{dir}` |
+
+`{dir}` is substituted with the project path by the launcher.
+
+---
+
 ## Installation
 
 ### Download
@@ -55,7 +82,7 @@ Grab the latest macOS build (Apple Silicon) from the releases page:
 Because Wooton Pad is not code-signed with an Apple Developer certificate, macOS will block it on first launch with a "damaged" message. Remove the quarantine attribute after installing:
 
 ```bash
-xattr -cr "/Applications/Wooton Pad.app"
+xattr -cr "/Applications/WootonPad.app"
 ```
 
 Then open the app normally.

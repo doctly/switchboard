@@ -150,6 +150,65 @@ function computeStatsFromDb(accountId) {
 const activeSessions = new Map();
 let mainWindow = null;
 
+// --- Single-instance: parse --project <path> from argv ---
+function parseProjectArg(argv) {
+  const idx = argv.indexOf('--project');
+  if (idx !== -1 && argv[idx + 1]) return argv[idx + 1];
+  return null;
+}
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, argv) => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+    const projectPath = parseProjectArg(argv);
+    if (projectPath) mainWindow.webContents.send('launch-project-session', projectPath);
+  });
+}
+
+// --- URL scheme IPC for external launchers ---
+// macOS routes wootonpad:// URLs to the running app via Apple Events — no
+// server, no polling, zero overhead. The OS resolves the handler from its
+// Launch Services registry and delivers the URL whether the app is open or not.
+//
+// New session:      open wootonpad://{dir}
+// Continue latest:  open wootonpad://+{dir}
+//
+// Events may arrive before the window is ready — queue them and flush after
+// did-finish-load.
+const pendingOpenPaths = [];
+
+// In dev, Electron is the "default app" so we pass the script path explicitly.
+if (process.defaultApp && process.argv.length >= 2) {
+  app.setAsDefaultProtocolClient('wootonpad', process.execPath, [path.resolve(process.argv[1])]);
+} else {
+  app.setAsDefaultProtocolClient('wootonpad');
+}
+
+function dispatchProjectOpen(filePath, continueSession) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+    mainWindow.webContents.send('launch-project-session', filePath, continueSession);
+  } else {
+    pendingOpenPaths.push({ filePath, continueSession });
+  }
+}
+
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  // wootonpad://+/path/to/project  →  continue last session
+  // wootonpad:///path/to/project   →  new session
+  const continueSession = url.startsWith('wootonpad://+');
+  const prefix = continueSession ? 'wootonpad://+' : 'wootonpad://';
+  const filePath = decodeURIComponent(url.slice(prefix.length));
+  if (filePath) dispatchProjectOpen(filePath, continueSession);
+});
+
 function createWindow() {
   // Restore saved window bounds
   const savedBounds = getSetting('global')?.windowBounds;
@@ -209,6 +268,12 @@ function createWindow() {
   // window.open() then sets location.href) routes through our IPC instead of
   // creating a child BrowserWindow.
   mainWindow.webContents.on('did-finish-load', () => {
+    const startupProject = parseProjectArg(process.argv);
+    if (startupProject) mainWindow.webContents.send('launch-project-session', startupProject);
+    for (const { filePath, continueSession } of pendingOpenPaths.splice(0)) {
+      mainWindow.webContents.send('launch-project-session', filePath, continueSession);
+    }
+
     mainWindow.webContents.executeJavaScript(`
       window.open = function(url) {
         if (url && /^https?:\\/\\//i.test(url)) { window.api.openExternal(url); return null; }
@@ -1354,7 +1419,7 @@ ipcMain.handle('save-accounts', (_event, accounts) => {
 ipcMain.handle('create-account', (_event, name) => {
   const { randomUUID } = require('crypto');
   const id = 'acc-' + randomUUID().replace(/-/g, '').slice(0, 12);
-  const configDir = path.join(os.homedir(), '.switchboard', 'accounts', id);
+  const configDir = path.join(os.homedir(), '.wootonpad', 'accounts', id);
   fs.mkdirSync(configDir, { recursive: true });
   const account = { id, name, configDir };
   const existing = getAccounts();
@@ -2084,6 +2149,7 @@ app.on('before-quit', () => {
     projectsWatcher.close();
     projectsWatcher = null;
   }
+
 
   // Kill all PTY processes on quit
   for (const [, session] of activeSessions) {

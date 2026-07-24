@@ -17,7 +17,7 @@
     "preview:landing": "node scripts/serve-docs.mjs",
     "generate-icons": "node scripts/generate-icons.js && node scripts/generate-dmg-background.js",
     "build": "npm run bundle:codemirror && npm run bundle:vue && electron-builder",
-    "build:mac": "npm run bundle:codemirror && npm run bundle:vue && electron-builder --mac && node scripts/postinstall.js && codesign --sign - --force --deep dist/mac-arm64/Switchboard.app 2>/dev/null; true",
+    "build:mac": "npm run bundle:codemirror && npm run bundle:vue && electron-builder --mac && node scripts/postinstall.js && codesign --sign - --force --deep dist/mac-arm64/WootonPad.app 2>/dev/null; true",
     "build:mac:arm64": "npm run bundle:vue && electron-builder --mac --arm64 2>/dev/null; true",
     "build:win": "npm run bundle:codemirror && npm run bundle:vue && electron-builder --win",
     "build:linux": "npm run bundle:codemirror && npm run bundle:vue && electron-builder --linux",
@@ -64,12 +64,28 @@
   },
   "build": {
     "appId": "ai.doctly.switchboard",
-    "productName": "Wooton Pad",
+    "productName": "WootonPad",
     "files": [
       "*.js",
       "workers/**/*",
       "public/**/*",
-      "node_modules/**/*"
+      "node_modules/**/*",
+      "!node_modules/better-sqlite3/deps/**",
+      "!node_modules/better-sqlite3/src/**",
+      "!node_modules/better-sqlite3/build/Release/obj/**",
+      "!node_modules/better-sqlite3/build/Release/test_extension.node",
+      "!node_modules/node-pty/src/**",
+      "!node_modules/node-pty/build/Release/obj/**",
+      "!node_modules/**/*.map",
+      "!node_modules/**/*.ts",
+      "!node_modules/**/test/**",
+      "!node_modules/**/tests/**",
+      "!node_modules/**/spec/**",
+      "!node_modules/**/docs/**",
+      "!node_modules/**/example/**",
+      "!node_modules/**/examples/**",
+      "!node_modules/**/.github/**",
+      "!node_modules/**/*.md"
     ],
     "asarUnpack": [
       "node_modules/better-sqlite3/**",
@@ -82,6 +98,9 @@
       "releaseType": "release"
     },
     "mac": {
+      "protocols": [
+        { "name": "WootonPad", "schemes": ["wootonpad"] }
+      ],
       "target": [
         {
           "target": "dmg",
@@ -114,6 +133,7 @@
     },
     "dmg": {
       "background": "build/dmg-background.png",
+      "writeUpdateInfo": false,
       "iconSize": 100,
       "window": {
         "width": 660,

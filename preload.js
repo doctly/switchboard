@@ -143,4 +143,7 @@ contextBridge.exposeInMainWorld('api', {
   onFileChanged: (callback) => {
     ipcRenderer.on('file-changed', (_event, filePath) => callback(filePath));
   },
+  onLaunchProjectSession: (callback) => {
+    ipcRenderer.on('launch-project-session', (_event, projectPath, continueSession) => callback(projectPath, continueSession));
+  },
 });

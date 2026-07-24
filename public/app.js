@@ -854,6 +854,20 @@ loadProjects().then(async () => {
   } catch {}
 });
 
+window.api.onLaunchProjectSession((projectPath, continueSession) => {
+  if (continueSession) {
+    const proj = cachedProjects.find(p => p.projectPath === projectPath);
+    const last = proj?.sessions?.find(s => !s.archived);
+    if (last) {
+      if (window.vueStore?.activeTab !== 'sessions') window.vueApp?.setTab('sessions');
+      setActiveSession(last.sessionId);
+      openSession(last);
+      return;
+    }
+  }
+  launchNewSession({ projectPath });
+});
+
 // Live-reload sidebar when filesystem changes are detected
 let projectsChangedTimer = null;
 let projectsChangedWhileAway = false;
