@@ -39,6 +39,15 @@ Wooton Pad is a desktop app that gives you a unified view of all your Claude Cod
 - **Plans & Memory** — Browse and edit your plan files and CLAUDE.md memory in one place
 - **Activity Stats** — Heatmap of your coding activity across all projects
 - **Session Names** — Picks up session names from Claude Code's `/rename` command automatically
+- **Fork Features**
+  - **Multi-Account** — Switch between personal and work Claude accounts in one click. Each account has its own session history, credentials, and usage tracking.
+  - **Git Integration** — Per-project panel showing current branch, added/deleted line counts, unpushed commit count, and one-click branch switching.
+  - **AI Commit Messages** — Generate commit messages with Claude from the project panel, with short/detailed/conventional style options.
+  - **Docker Container Monitoring** — See running container status for each project directly in the project panel.
+  - **GitLab Integration** — Connect a GitLab token in settings to pull avatars and enrich project metadata.
+  - **File Tree Navigation** — Browse the full project directory tree in the side panel, open any file for viewing.
+  - **Usage & Cost Tracking** — Token consumption and cost per account, refreshed on demand.
+  - **Custom Fonts** — Configure the terminal and UI font in Global Settings.
 
 ---
 

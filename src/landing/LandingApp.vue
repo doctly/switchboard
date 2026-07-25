@@ -27,7 +27,6 @@
     <section class="lp-demo-section">
       <div class="lp-section-inner">
         <h2 class="lp-section-title">Try the real interface</h2>
-        <p class="lp-section-subtitle">This is the actual Wooton Pad UI — powered by the real Vue components, with mock data. Click the tabs, browse sessions, switch views.</p>
 
         <div class="lp-app-window">
           <!-- macOS-style title bar -->
@@ -170,53 +169,124 @@
       </div>
     </section>
 
-    <!-- ── FEATURES ───────────────────────────────────────────── -->
+    <!-- ── FEATURES (BENTO) ─────────────────────────────────── -->
     <section class="lp-features">
       <div class="lp-section-inner">
         <h2 class="lp-section-title">Everything Claude Code needs</h2>
-        <div class="lp-feature-grid">
-          <div class="lp-feature-card">
-            <div class="lp-feature-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <p class="lp-section-subtitle">One window for every session, project, and tool — so you stay focused on shipping.</p>
+
+        <div class="lp-bento">
+
+          <!-- Session browser — wide -->
+          <div class="lp-bento-card lp-bento-wide lp-bento-accent-orange">
+            <div class="lp-bento-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
             </div>
-            <h3>Session Browser</h3>
-            <p>Every Claude conversation, instantly searchable. Full-text search across all your projects and sessions — find anything in seconds.</p>
+            <h3>Session Browser &amp; Full-Text Search</h3>
+            <p>Every Claude conversation organised by project and indexed for full-text search. Find any session by what was discussed — not just when it happened.</p>
+            <div class="lp-bento-pill">SQLite FTS5</div>
           </div>
-          <div class="lp-feature-card">
-            <div class="lp-feature-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="6" r="3.5"/><path d="M1.5 21c0-4 2.9-7 6.5-7s6.5 3 6.5 7"/><circle cx="17" cy="8.5" r="2.5"/><path d="M14.5 21c0-2.8 1.8-5 4.5-5s4.5 2.2 4.5 5"/></svg>
+
+          <!-- Multi-account -->
+          <div class="lp-bento-card lp-bento-accent-blue">
+            <div class="lp-bento-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="6" r="3.5"/><path d="M1.5 21c0-4 2.9-7 6.5-7s6.5 3 6.5 7"/><circle cx="17" cy="8.5" r="2.5"/><path d="M14.5 21c0-2.8 1.8-5 4.5-5s4.5 2.2 4.5 5"/></svg>
             </div>
             <h3>Multi-Account</h3>
-            <p>Switch between personal and work Claude accounts in one click. Separate credentials, separate session histories, zero friction.</p>
+            <p>Switch between personal and work accounts in one click. Separate credentials, histories, and usage quotas — no re-login.</p>
           </div>
-          <div class="lp-feature-card">
-            <div class="lp-feature-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>
+
+          <!-- IDE diff viewer -->
+          <div class="lp-bento-card lp-bento-accent-purple">
+            <div class="lp-bento-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>
             </div>
             <h3>IDE Diff Viewer</h3>
-            <p>Review every file change Claude proposes before it's applied. Accept, reject, or edit individual hunks — all with syntax highlighting.</p>
+            <p>Review every file change before it's applied. Accept, reject, or edit individual hunks with syntax highlighting.</p>
           </div>
-          <div class="lp-feature-card">
-            <div class="lp-feature-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/></svg>
+
+          <!-- Git integration -->
+          <div class="lp-bento-card lp-bento-accent-green">
+            <div class="lp-bento-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M11 18H8a2 2 0 0 1-2-2V9"/><path d="M9 3 6 6l3 3"/></svg>
+            </div>
+            <h3>Git Integration</h3>
+            <p>Branch, added/deleted lines, unpushed commits, and one-click branch switching in the project panel.</p>
+          </div>
+
+          <!-- Docker -->
+          <div class="lp-bento-card lp-bento-accent-cyan">
+            <div class="lp-bento-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12.5c0 .5-.1 1-.2 1.5H2.2A10 10 0 0 1 12 2a10 10 0 0 1 10 10.5z"/><path d="M2.2 14C3.2 18.5 7.2 22 12 22a10 10 0 0 0 9.8-8H2.2z"/><rect x="5" y="9" width="2" height="3" rx=".5"/><rect x="9" y="9" width="2" height="3" rx=".5"/><rect x="13" y="9" width="2" height="3" rx=".5"/></svg>
+            </div>
+            <h3>Docker Monitoring</h3>
+            <p>Container status per project at a glance — know if your stack is running before handing off to Claude.</p>
+          </div>
+
+          <!-- AI commit — wide -->
+          <div class="lp-bento-card lp-bento-wide lp-bento-accent-pink">
+            <div class="lp-bento-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+            </div>
+            <h3>AI Commit Messages</h3>
+            <p>Generate short, detailed, or conventional-commit messages with Claude from the project panel. One click, no context switching.</p>
+            <div class="lp-bento-pill">short · detailed · conventional</div>
+          </div>
+
+          <!-- Plans & Memory -->
+          <div class="lp-bento-card lp-bento-accent-yellow">
+            <div class="lp-bento-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/></svg>
             </div>
             <h3>Plans &amp; Memory</h3>
-            <p>Browse Claude's planning files and agent memory files. Understand what Claude is thinking, and edit memory files directly in the app.</p>
+            <p>Browse and edit Claude's planning files and CLAUDE.md memory directly in the app.</p>
           </div>
-          <div class="lp-feature-card">
-            <div class="lp-feature-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 0 1 2-2h3.17a1 1 0 0 1 .71.29L10.24 5.7A1 1 0 0 0 11 6h9a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z"/></svg>
+
+          <!-- GitLab + avatars -->
+          <div class="lp-bento-card lp-bento-accent-pink">
+            <div class="lp-bento-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="m22.65 14.39-9.217 6.519a.5.5 0 0 1-.566 0L3.65 14.39a.5.5 0 0 1-.18-.557l1.28-3.943 2.396-7.373a.246.246 0 0 1 .468 0l2.397 7.373h6.782l2.397-7.373a.246.246 0 0 1 .468 0l2.395 7.372 1.28 3.944a.5.5 0 0 1-.177.556z"/></svg>
             </div>
-            <h3>Project Dashboard</h3>
-            <p>See all your projects in one view — with git branch, uncommitted changes, Docker container status, and session history at a glance.</p>
+            <h3>GitLab &amp; Avatars</h3>
+            <p>Connect a GitLab token to pull project avatars automatically. Falls back to generated initials.</p>
           </div>
-          <div class="lp-feature-card">
-            <div class="lp-feature-icon">
-              <svg width="22" height="22" viewBox="0 0 512 512" fill="currentColor"><path d="M128 496H48V304h80zm224 0h-80V208h80zm112 0h-80V96h80zm-224 0h-80V16h80z"/></svg>
+
+          <!-- File tree -->
+          <div class="lp-bento-card lp-bento-accent-blue">
+            <div class="lp-bento-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M2 10h20"/></svg>
             </div>
-            <h3>Activity Stats</h3>
-            <p>Track your Claude Code usage with a GitHub-style activity heatmap. See your most productive days and projects at a glance.</p>
+            <h3>File Tree</h3>
+            <p>Browse the project directory and open any file in the viewer panel without leaving the app.</p>
           </div>
+
+          <!-- Activity stats — wide -->
+          <div class="lp-bento-card lp-bento-wide lp-bento-accent-orange">
+            <div class="lp-bento-icon">
+              <svg width="24" height="24" viewBox="0 0 512 512" fill="currentColor"><path d="M128 496H48V304h80zm224 0h-80V208h80zm112 0h-80V96h80zm-224 0h-80V16h80z"/></svg>
+            </div>
+            <h3>Activity Stats &amp; Usage Tracking</h3>
+            <p>GitHub-style heatmap of your coding activity across all projects. Token consumption and cost tracked per account, refreshed on demand.</p>
+          </div>
+
+          <!-- External launcher -->
+          <div class="lp-bento-card lp-bento-accent-purple">
+            <div class="lp-bento-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            </div>
+            <h3>External Launcher</h3>
+            <p><code>open wootonpad://+/path</code> opens or resumes sessions from any tool — no extra windows.</p>
+          </div>
+
+          <!-- Custom fonts -->
+          <div class="lp-bento-card lp-bento-accent-green">
+            <div class="lp-bento-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+            </div>
+            <h3>Custom Fonts</h3>
+            <p>Configure terminal and UI fonts in Global Settings to match your editor setup.</p>
+          </div>
+
         </div>
       </div>
     </section>
@@ -551,6 +621,122 @@ html, body {
   max-width: 600px;
   margin: 0 auto 48px;
   line-height: 1.6;
+}
+
+/* ── Fork features bento ─────────────────────────────────── */
+.lp-fork-section {
+  padding: 90px 24px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.lp-fork-label {
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--orange-400);
+  margin-bottom: 14px;
+}
+
+.lp-bento {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-top: 52px;
+}
+
+@media (max-width: 900px) {
+  .lp-bento { grid-template-columns: repeat(2, 1fr); }
+  .lp-bento-wide { grid-column: span 2; }
+}
+@media (max-width: 560px) {
+  .lp-bento { grid-template-columns: 1fr; }
+  .lp-bento-wide { grid-column: span 1; }
+}
+
+.lp-bento-wide { grid-column: span 2; }
+
+.lp-bento-card {
+  position: relative;
+  background: var(--surface-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  padding: 28px 28px 24px;
+  overflow: hidden;
+  transition: border-color 0.2s, transform 0.2s;
+}
+
+.lp-bento-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.lp-bento-card:hover { border-color: var(--border-default); transform: translateY(-2px); }
+.lp-bento-card:hover::before { opacity: 1; }
+
+/* Accent glow colours */
+.lp-bento-accent-blue  { --_ac: 96, 165, 250; }
+.lp-bento-accent-purple{ --_ac: 167, 139, 250; }
+.lp-bento-accent-orange{ --_ac: 251, 146, 60;  }
+.lp-bento-accent-cyan  { --_ac: 34, 211, 238;  }
+.lp-bento-accent-pink  { --_ac: 244, 114, 182; }
+.lp-bento-accent-green { --_ac: 74, 222, 128;  }
+.lp-bento-accent-yellow{ --_ac: 250, 204, 21;  }
+
+.lp-bento-card::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: rgb(var(--_ac));
+  border-radius: 14px 14px 0 0;
+  opacity: 0.7;
+}
+
+.lp-bento-card::before {
+  background: radial-gradient(ellipse at 0% 0%, rgba(var(--_ac), 0.06) 0%, transparent 60%);
+}
+
+.lp-bento-icon {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(var(--_ac), 0.12);
+  border-radius: 10px;
+  color: rgb(var(--_ac));
+  margin-bottom: 18px;
+}
+
+.lp-bento-card h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--white);
+  margin: 0 0 8px;
+}
+
+.lp-bento-card p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.65;
+  margin: 0;
+}
+
+.lp-bento-pill {
+  display: inline-block;
+  margin-top: 16px;
+  padding: 3px 10px;
+  background: rgba(var(--_ac), 0.12);
+  color: rgb(var(--_ac));
+  border-radius: 100px;
+  font-size: 11px;
+  font-weight: 500;
 }
 
 /* ── Features ────────────────────────────────────────────── */
