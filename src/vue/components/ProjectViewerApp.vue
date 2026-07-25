@@ -789,7 +789,7 @@ async function refreshStats() {
 
 function _pushProjectInfo(path, det) {
   if (!det) return;
-  window.vueProjects?.updateProjectInfo(path, {
+  window.vueProjects?.updateProjectInfo?.(path, {
     branch: det.branch,
     added: det.totalAdded,
     deleted: det.totalDeleted,

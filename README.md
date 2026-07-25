@@ -2,6 +2,8 @@
 
 > **Fork of [Switchboard](https://github.com/doctly/switchboard)** — extended with multi-account support, git integration, and a project viewer panel.
 
+---
+
 <div align="center">
 
 [![Download](https://img.shields.io/github/v/release/fortael/wootonpad?label=Download&style=for-the-badge&logo=github)](https://github.com/fortael/wootonpad/releases/latest)
@@ -22,8 +24,6 @@ Wooton Pad is a desktop app that gives you a unified view of all your Claude Cod
 
 **[Live Demo](https://fortael.github.io/wootonpad/)**
 
-*Your command center for Claude Code sessions.*
-
 </div>
 
 ---
@@ -39,33 +39,6 @@ Wooton Pad is a desktop app that gives you a unified view of all your Claude Cod
 - **Plans & Memory** — Browse and edit your plan files and CLAUDE.md memory in one place
 - **Activity Stats** — Heatmap of your coding activity across all projects
 - **Session Names** — Picks up session names from Claude Code's `/rename` command automatically
-
----
-
-## External Launcher Integration
-
-WootonPad registers the `wootonpad://` URL scheme so any external tool can open or resume sessions without spawning separate terminal windows.
-
-```bash
-# Open a new Claude session in a project
-open wootonpad:///path/to/project
-
-# Resume the most recent session in a project
-open wootonpad://+/path/to/project
-```
-
-When WootonPad is already running, `open wootonpad://...` delivers the URL directly to the running instance via macOS Apple Events — no server, no polling. When it isn't running, macOS launches the app and passes the URL on startup.
-
-### Silverware / custom launcher setup
-
-If you use [Silverware](https://github.com/fortael/silverware) or any tool that supports a custom terminal command template, set the template to:
-
-| Intent | Template |
-|--------|----------|
-| New session | `open wootonpad://{dir}` |
-| Resume last session | `open wootonpad://+{dir}` |
-
-`{dir}` is substituted with the project path by the launcher.
 
 ---
 
@@ -98,6 +71,22 @@ npm run build    # build a distributable for your platform
 ```
 
 See **[docs/building.md](docs/building.md)** for full build instructions and prerequisites.
+
+---
+
+## External Launcher Integration
+
+WootonPad registers the `wootonpad://` URL scheme so any external tool can open or resume sessions without spawning separate terminal windows.
+
+```bash
+# Open a new Claude session in a project
+open wootonpad:///path/to/project
+
+# Resume the most recent session in a project
+open wootonpad://+/path/to/project
+```
+
+When WootonPad is already running, `open wootonpad://...` delivers the URL directly to the running instance via macOS Apple Events — no server, no polling. When it isn't running, macOS launches the app and passes the URL on startup.
 
 ---
 
