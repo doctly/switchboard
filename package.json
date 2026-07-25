@@ -1,6 +1,6 @@
 {
   "name": "switchboard",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "A desktop app for browsing, searching, and managing CLI coding sessions",
   "author": "Doctly <support@doctly.ai>",
@@ -99,12 +99,19 @@
     },
     "mac": {
       "protocols": [
-        { "name": "WootonPad", "schemes": ["wootonpad"] }
+        {
+          "name": "WootonPad",
+          "schemes": [
+            "wootonpad"
+          ]
+        }
       ],
       "target": [
         {
           "target": "dmg",
-          "arch": ["arm64"]
+          "arch": [
+            "arm64"
+          ]
         }
       ],
       "entitlements": "build/entitlements.mac.plist",
