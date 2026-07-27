@@ -179,6 +179,13 @@ function createTerminalEntry(session) {
     scrollback: 10000,
     convertEol: true,
     allowProposedApi: true,
+    // A TUI that turns on full mouse tracking (CSI ?1003h) makes xterm forward every
+    // drag to the application, so normal text selection is dead. Terminal.app and
+    // iTerm2 let you hold Option to override that; xterm.js requires opting in.
+    // Without this, selecting (and therefore copying) inside such a session is
+    // impossible on macOS and Cmd+C silently leaves the previous clipboard contents
+    // in place. Windows/Linux get the same escape hatch via Shift, which needs no flag.
+    macOptionClickForcesSelection: true,
     linkHandler: {
       activate: (_event, uri) => {
         if (uri.startsWith('file://') && typeof openFileInPanel === 'function') {
