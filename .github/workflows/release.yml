@@ -46,6 +46,6 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: Upload artifacts to GitHub Release
-        run: gh release upload "${{ github.ref_name }}" dist/Switchboard-*-arm64.dmg dist/latest-mac.yml
+        run: gh release upload "${{ github.ref_name }}" dist/WootonPad-*-arm64.dmg dist/latest-mac.yml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
