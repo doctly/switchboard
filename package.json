@@ -140,7 +140,6 @@
     },
     "dmg": {
       "background": "build/dmg-background.png",
-      "writeUpdateInfo": false,
       "iconSize": 100,
       "window": {
         "width": 660,
