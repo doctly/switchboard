@@ -484,7 +484,7 @@ searchInput.addEventListener('input', () => {
         if (searchTitlesOnly) {
           const lowerQ = query.toLowerCase();
           for (const p of cachedAllProjects) {
-            const shortName = p.projectPath.split('/').filter(Boolean).slice(-2).join('/');
+            const shortName = shortProjectPath(p.projectPath);
             if (shortName.toLowerCase().includes(lowerQ)) {
               if (!searchMatchProjectPaths) searchMatchProjectPaths = new Set();
               searchMatchProjectPaths.add(p.projectPath);

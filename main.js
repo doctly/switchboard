@@ -668,8 +668,10 @@ ipcMain.handle('get-memories', () => {
         if (projectPath && hiddenProjects.has(projectPath)) continue;
 
         // Use same 2-deep short path as Sessions tab (e.g. "dev/MyClaude")
+        // Splits on both separators — `cwd` is backslash-separated on Windows,
+        // where splitting on '/' alone left the whole path as one segment.
         const shortName = projectPath
-          ? projectPath.split('/').filter(Boolean).slice(-2).join('/')
+          ? projectPath.split(/[\\/]/).filter(Boolean).slice(-2).join('/')
           : folderToShortPath(folder);
         const files = [];
         const seenPaths = new Set();
