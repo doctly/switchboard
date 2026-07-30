@@ -1,18 +1,22 @@
 const fs = require('fs');
 const path = require('path');
+const { scanLines } = require('./jsonl-scan');
 
 function extractCwdFromJsonl(filePath) {
-  try {
-    const lines = fs.readFileSync(filePath, 'utf8').split('\n');
-    for (const line of lines) {
-      if (!line) continue;
-      try {
-        const parsed = JSON.parse(line);
-        if (parsed.cwd) return parsed.cwd;
-      } catch {}
-    }
-  } catch {}
-  return null;
+  // `cwd` is on the first line in practice, so stop at the first hit rather than
+  // reading the file — this runs per folder on every index pass, and a session
+  // .jsonl can be hundreds of MB.
+  let cwd = null;
+  scanLines(filePath, 0, (line) => {
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed.cwd) {
+        cwd = parsed.cwd;
+        return false;
+      }
+    } catch {}
+  });
+  return cwd;
 }
 
 function resolveWorktreePath(cwd) {

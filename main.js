@@ -8,6 +8,7 @@ const log = require('electron-log');
 // getFolderIndexMtimeMs moved to session-cache.js
 const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer, cleanStaleLockFiles } = require('./mcp-bridge');
 const { fetchAndTransformUsage } = require('./claude-auth');
+const { readHead } = require('./jsonl-scan');
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
 log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 
@@ -260,7 +261,7 @@ sessionCache.init({
   getMainWindow: () => mainWindow,
   log,
   db: {
-    deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession,
+    deleteCachedFolder, getCachedByFolder, getCachedSession, upsertCachedSessions, deleteCachedSession,
     deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
     setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName,
   },
@@ -996,7 +997,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     if (!isNew) {
       try {
         const jsonlPath = path.join(claudeProjectDir, sessionId + '.jsonl');
-        const head = fs.readFileSync(jsonlPath, 'utf8').slice(0, 8000);
+        const head = readHead(jsonlPath, 8192);
         const firstLines = head.split('\n').filter(Boolean);
         for (const line of firstLines) {
           const entry = JSON.parse(line);

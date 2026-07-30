@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const { readHead } = require('./jsonl-scan');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
@@ -88,7 +89,9 @@ function scanSchedules(log) {
       try {
         const jsonlFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
         for (const jf of jsonlFiles) {
-          const head = fs.readFileSync(path.join(folderPath, jf), 'utf8').slice(0, 4000);
+          // Head only: this runs every minute over every project folder, and a
+          // session .jsonl can be hundreds of MB.
+          const head = readHead(path.join(folderPath, jf), 4096);
           for (const line of head.split('\n').filter(Boolean)) {
             try {
               const entry = JSON.parse(line);
