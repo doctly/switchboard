@@ -60,7 +60,7 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
 }
 const {
   getMeta, getAllMeta, toggleStar, setName, setArchived,
-  isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, upsertCachedSessions,
+  isCachePopulated, getAllCached, getCachedByFolder, getCachedByParent, getCachedFolder, getCachedSession, upsertCachedSessions,
   deleteCachedSession, deleteCachedFolder,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
@@ -413,13 +413,18 @@ ipcMain.handle('unwatch-file', (_event, filePath) => {
   return { ok: true };
 });
 
-ipcMain.handle('get-projects', (_event, showArchived) => {
+ipcMain.handle('get-projects', async (_event, showArchived) => {
   try {
     const needsPopulate = !isCachePopulated() || !isSearchIndexPopulated();
 
     if (needsPopulate) {
-      populateCacheViaWorker();
-      return [];
+      // First call after a migration that clears session_cache (e.g. v4) finds
+      // an empty cache. Returning [] immediately makes the renderer paint an
+      // empty list and rely on `notifyRendererProjectsChanged` firing later —
+      // which only triggers a reload if the user is on the Sessions tab. To
+      // avoid that race, await the scan here so the response carries the
+      // freshly-populated cache. Concurrent callers share the same Promise.
+      await populateCacheViaWorker();
     }
 
     // Pick up folders changed while the app was closed, or never indexed by an
@@ -917,6 +922,34 @@ ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
   } catch (err) {
     return { error: err.message };
   }
+});
+
+ipcMain.handle('read-subagent-jsonl', (_event, parentSessionId, agentId) => {
+  const row = getCachedSession('sub:' + parentSessionId + ':' + agentId);
+  if (!row) return { error: 'Subagent session not found in cache' };
+  const jsonlPath = path.join(PROJECTS_DIR, row.folder, parentSessionId, 'subagents', 'agent-' + agentId + '.jsonl');
+  try {
+    const content = fs.readFileSync(jsonlPath, 'utf-8');
+    const entries = [];
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue;
+      try { entries.push(JSON.parse(line)); } catch {}
+    }
+    return { entries };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('list-subagents', (_event, parentSessionId) => {
+  return getCachedByParent(parentSessionId).map(r => ({
+    sessionId: r.sessionId,
+    agentId: r.agentId,
+    subagentType: r.subagentType,
+    description: r.description,
+    modified: r.modified,
+    messageCount: r.messageCount,
+  }));
 });
 
 ipcMain.handle('archive-session', (_event, sessionId, archived) => {

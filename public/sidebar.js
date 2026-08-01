@@ -131,12 +131,15 @@ function renderProjects(projects, resort) {
   // projects are now in the correct order (data order for resort, preserved order otherwise)
 
   // Detect worktree projects and group them under their parent
-  const worktreePattern = /^(.+?)\/\.claude\/worktrees\/([^/]+)\/?$/;
+  const worktreePattern = /^(.+?)\/\.(?:claude\/worktrees|claude-worktrees|worktrees)\/([^/]+)\/?$/;
+  const allProjectPaths = new Set(projects.map(p => p.projectPath));
   const worktreeMap = new Map(); // parentPath → [worktreeProject, ...]
   const worktreeSet = new Set();
   for (const project of projects) {
     const match = project.projectPath.match(worktreePattern);
-    if (match) {
+    // Only nest when the parent project is present — worktree groups render
+    // inside their parent's group, so nesting an orphan would hide it entirely
+    if (match && allProjectPaths.has(match[1])) {
       const parentPath = match[1];
       if (!worktreeMap.has(parentPath)) worktreeMap.set(parentPath, []);
       worktreeMap.get(parentPath).push(project);

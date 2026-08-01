@@ -15,6 +15,11 @@ function extractCwdFromJsonl(filePath) {
   return null;
 }
 
+// Maps a worktree cwd to its parent repo path. Exported for callers that need
+// the parent ↔ worktree relationship. Deliberately NOT applied in
+// deriveProjectPath: the sidebar nests worktree projects under their parent by
+// matching the full worktree projectPath, so collapsing at index time would
+// erase the worktree grouping (and break worktree-scoped actions like delete).
 function resolveWorktreePath(cwd) {
   if (!cwd) return cwd;
   // Detect worktree paths: <project>/.claude-worktrees/<name>, <project>/.worktrees/<name>, or <project>/.claude/worktrees/<name>
@@ -61,4 +66,4 @@ function deriveProjectPath(folderPath) {
   return null;
 }
 
-module.exports = { deriveProjectPath };
+module.exports = { deriveProjectPath, resolveWorktreePath };

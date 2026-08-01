@@ -2385,6 +2385,29 @@ body { display: flex; flex-direction: column; }
 .jsonl-tool-diff::-webkit-scrollbar-thumb,
 .jsonl-tool-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 2px; }
 
+.jsonl-agent-expandable {
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.jsonl-agent-expandable:hover {
+  background: rgba(240, 160, 80, 0.07);
+  border-radius: 4px;
+}
+.jsonl-agent-caret {
+  display: inline-block;
+  font-family: monospace;
+  font-size: 0.8em;
+  margin-right: 3px;
+  user-select: none;
+}
+.jsonl-subagent-nested {
+  margin-left: 1.5em;
+  padding-left: 0.8em;
+  border-left: 2px solid rgba(240, 160, 80, 0.4);
+  margin-top: 2px;
+  margin-bottom: 2px;
+}
+
 .jsonl-toggle {
   font-size: 11px;
   font-weight: 500;

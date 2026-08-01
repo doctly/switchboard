@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('api', {
   openTerminal: (id, projectPath, isNew, sessionOptions) => ipcRenderer.invoke('open-terminal', id, projectPath, isNew, sessionOptions),
   search: (type, query, titleOnly) => ipcRenderer.invoke('search', type, query, titleOnly),
   readSessionJsonl: (sessionId) => ipcRenderer.invoke('read-session-jsonl', sessionId),
+  readSubagentJsonl: (parentSessionId, agentId) => ipcRenderer.invoke('read-subagent-jsonl', parentSessionId, agentId),
+  listSubagents: (parentSessionId) => ipcRenderer.invoke('list-subagents', parentSessionId),
 
   // Settings
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),

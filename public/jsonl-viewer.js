@@ -2,6 +2,12 @@
 // Depends on globals: escapeHtml (utils.js), hideAllViewers, placeholder,
 // terminalArea, jsonlViewer, jsonlViewerTitle, jsonlViewerSessionId, jsonlViewerBody (app.js)
 
+// Current viewer session — set once per showJsonlViewer call, read by Agent renderer
+let currentViewerSessionId = null;
+// Counter for matching identical (description, subagentType) blocks in fanout scenarios
+// Reset on each showJsonlViewer call. Key: "<contextSessionId>|<desc>|<type>"
+let agentMatchCounters = {};
+
 function renderJsonlText(text) {
   if (window.marked) {
     // Escape XML/HTML-like tags so they render as visible text,
@@ -211,12 +217,82 @@ const toolRenderers = {
     return toolBlock('#c090e0', 'Glob', '<code>' + escapeHtml(pattern) + '</code>', null);
   },
 
-  Agent(input) {
+  Agent(input, block) {
     const desc = input.description || '';
     const type = input.subagent_type || '';
-    const summary = (type ? '<span class="jsonl-tool-detail">' + escapeHtml(type) + '</span> ' : '')
+    const caretSpan = '<span class="jsonl-agent-caret">&#9658;</span> ';
+    const summary = caretSpan
+      + (type ? '<span class="jsonl-tool-detail">' + escapeHtml(type) + '</span> ' : '')
       + escapeHtml(desc);
-    return toolBlock('#f0a050', 'Agent', summary, null);
+    const el = toolBlock('#f0a050', 'Agent', summary, null);
+    el.classList.add('jsonl-agent-expandable');
+    // Capture context at render time
+    const parentSessionId = currentViewerSessionId;
+    if (!parentSessionId) return el;
+
+    // Determine which Nth match this block is for fanout deduplication
+    const counterKey = parentSessionId + '|' + desc + '|' + type;
+    if (agentMatchCounters[counterKey] === undefined) agentMatchCounters[counterKey] = 0;
+    const matchIndex = agentMatchCounters[counterKey]++;
+
+    let expanded = false;
+    let nestedContainer = null;
+
+    el.addEventListener('click', async () => {
+      if (expanded && nestedContainer) {
+        // Collapse
+        nestedContainer.remove();
+        nestedContainer = null;
+        expanded = false;
+        const caret = el.querySelector('.jsonl-agent-caret');
+        if (caret) caret.innerHTML = '&#9658;';
+        return;
+      }
+      // Fetch subagent list for this parent
+      const subagents = await window.api.listSubagents(parentSessionId);
+      const matches = subagents.filter(s =>
+        (s.description || '') === desc && (s.subagentType || '') === type
+      );
+      const match = matches[matchIndex] || matches[0];
+      if (!match) return;
+
+      const result = await window.api.readSubagentJsonl(parentSessionId, match.agentId);
+      if (result.error || !result.entries) return;
+
+      nestedContainer = document.createElement('div');
+      nestedContainer.className = 'jsonl-subagent-nested';
+
+      const subSessionId = match.sessionId;
+      const rawNested = result.entries;
+      const nestedEntries = mergeLocalCommandEntries(rawNested);
+
+      // Build tool result map for nested entries
+      const nestedResultMap = new Map();
+      for (const entry of nestedEntries) {
+        const blocks = entry.message?.content || entry.content;
+        if (!Array.isArray(blocks)) continue;
+        for (const b of blocks) {
+          if (b.type === 'tool_result' && b.tool_use_id) {
+            nestedResultMap.set(b.tool_use_id, b.content || b.output || '');
+          }
+        }
+      }
+
+      const prevSessionId = currentViewerSessionId;
+      currentViewerSessionId = subSessionId;
+      for (const entry of nestedEntries) {
+        const entryEl = renderJsonlEntry(entry, nestedResultMap);
+        if (entryEl) nestedContainer.appendChild(entryEl);
+      }
+      currentViewerSessionId = prevSessionId;
+
+      el.after(nestedContainer);
+      expanded = true;
+      const caret = el.querySelector('.jsonl-agent-caret');
+      if (caret) caret.innerHTML = '&#9660;';
+    });
+
+    return el;
   },
 };
 
@@ -558,6 +634,10 @@ async function showJsonlViewer(session) {
   placeholder.style.display = 'none';
   terminalArea.style.display = 'none';
   jsonlViewer.style.display = 'flex';
+
+  // Set viewer context for Agent block expansion
+  currentViewerSessionId = session.sessionId;
+  agentMatchCounters = {};
 
   const displayName = session.name || session.aiTitle || session.summary || session.sessionId;
   jsonlViewerTitle.textContent = displayName;
