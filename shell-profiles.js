@@ -160,6 +160,30 @@ function isWslShell(shellPath) {
   return base === 'wsl.exe' || base === 'wsl';
 }
 
+// Shell-quote one argv token per shell family
+function quoteArgForShell(shellPath, value) {
+  const s = value == null ? '' : String(value);
+  const base = path.basename(shellPath).toLowerCase();
+  const isBashLike = base.includes('bash') || base.includes('zsh') || base === 'sh' || base === 'dash' || base === 'ksh' || base === 'fish' || base === 'nu' || isWslShell(shellPath);
+  const isPowerShell = base.includes('powershell') || base.includes('pwsh');
+
+  if (isBashLike) {
+    // POSIX: wrap in single quotes, escape embedded single quotes as '\''
+    return "'" + s.replace(/'/g, "'\\''") + "'";
+  }
+  if (isPowerShell) {
+    // PowerShell: single-quoted string, escape ' as ''
+    return "'" + s.replace(/'/g, "''") + "'";
+  }
+  // cmd.exe: double-quote, escape " as \" and ^-escape shell metachars
+  const escaped = s.replace(/"/g, '\\"').replace(/([&|<>^%])/g, '^$1');
+  return '"' + escaped + '"';
+}
+
+function quoteArgvForShell(shellPath, argv) {
+  return argv.map(a => quoteArgForShell(shellPath, a)).join(' ');
+}
+
 // Returns spawn args appropriate for the resolved shell
 function shellArgs(shellPath, cmd, extraArgs) {
   const base = path.basename(shellPath).toLowerCase();
@@ -188,4 +212,4 @@ function shellArgs(shellPath, cmd, extraArgs) {
   return [];
 }
 
-module.exports = { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs };
+module.exports = { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgForShell, quoteArgvForShell };

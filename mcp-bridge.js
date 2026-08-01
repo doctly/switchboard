@@ -333,7 +333,8 @@ async function startMcpServer(sessionId, workspaceFolders, mainWindow, log) {
     runningInWindows: false,
     authToken,
   });
-  fs.writeFileSync(lockFilePath, lockData, 'utf8');
+  // Create lockfile only readable by user (it contains the MCP auth token)
+  fs.writeFileSync(lockFilePath, lockData, { encoding: 'utf8', mode: 0o600 });
 
   const entry = {
     sessionId,

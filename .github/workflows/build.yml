@@ -17,7 +17,13 @@ jobs:
         include:
           - os: macos-14
             platform: mac
-          - os: windows-latest
+          # Pinned, not `windows-latest`: that label has rolled over to Windows
+          # Server 2025, whose image no longer ships the Visual Studio C++
+          # toolchain node-gyp needs. On it, electron-builder's install-app-deps
+          # dies with "Could not find any Visual Studio installation to use"
+          # while rebuilding node-pty, so the Windows build never produces an
+          # artifact. 2022 still carries the toolchain.
+          - os: windows-2022
             platform: win
           # Linux is split per-arch to avoid electron-builder bundling native
           # modules from the wrong architecture. When multiple targets (AppImage
@@ -49,6 +55,10 @@ jobs:
       - name: Install setuptools (node-gyp distutils fix)
         run: python -m pip install setuptools
 
+      - name: Install pacman build tooling (Linux)
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools
+
       - name: Install dependencies
         run: npm ci
 
@@ -78,6 +88,7 @@ jobs:
             dist/*.exe.blockmap
             dist/*.AppImage
             dist/*.deb
+            dist/*.pacman
             dist/latest*.yml
           if-no-files-found: ignore
 

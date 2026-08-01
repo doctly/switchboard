@@ -1,5 +1,38 @@
 // --- Utility functions (shared across renderer modules) ---
 
+/**
+ * Shorten a project path for display: its last two segments.
+ *
+ * Splits on both separators. projectPath comes from a session's `cwd`, which on
+ * Windows is backslash-separated — splitting on '/' alone finds no separator, so
+ * every "short" label rendered the entire path.
+ */
+function shortProjectPath(projectPath) {
+  if (!projectPath) return '';
+  return projectPath.split(/[\\/]/).filter(Boolean).slice(-2).join('/');
+}
+
+/**
+ * Permission modes offered for a session, in the order they're shown.
+ *
+ * `value` is passed verbatim to `claude --permission-mode`, so each one must
+ * stay a member of that flag's choice list (as of CLI 2.1.220: acceptEdits,
+ * auto, bypassPermissions, manual, dontAsk, plan). A `null` value means we omit
+ * the flag entirely and let the CLI apply the user's own configured default.
+ *
+ * Shared by both session dialogs and the settings panel — the list used to be
+ * copy-pasted in all three, so a new mode reached only whichever copy someone
+ * remembered to edit.
+ */
+const PERMISSION_MODES = [
+  { value: null, label: 'Default', desc: 'Prompt for all actions' },
+  { value: 'auto', label: 'Auto', desc: 'Classifier allows routine work, stops for risky actions' },
+  { value: 'acceptEdits', label: 'Accept Edits', desc: 'Auto-accept file edits, prompt for others' },
+  { value: 'plan', label: 'Plan Mode', desc: 'Read-only exploration, no writes' },
+  { value: 'dontAsk', label: "Don't Ask", desc: 'Auto-deny tools not explicitly allowed' },
+  { value: 'bypassPermissions', label: 'Bypass', desc: 'Auto-accept all tool calls' },
+];
+
 // Mirror Claude CLI's project-folder naming. Must stay in sync with
 // encode-project-path.js (main process). Reverse-engineered from claude CLI 2.1.126.
 function encodeProjectPath(projectPath) {

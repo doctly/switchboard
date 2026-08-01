@@ -67,7 +67,7 @@ Grab the latest release for your platform:
 
 - **macOS**: `.dmg` (Apple Silicon & Intel)
 - **Windows**: `.exe` installer
-- **Linux**: `.AppImage` or `.deb`
+- **Linux**: `.AppImage`, `.deb`, or `.pacman` (Arch/Manjaro)
 
 ## Prerequisites
 
@@ -105,10 +105,29 @@ npm run build
 # Platform-specific
 npm run build:mac     # DMG + zip (arm64 + x64)
 npm run build:win     # NSIS installer (x64 + arm64)
-npm run build:linux   # AppImage + deb (x64 + arm64)
+npm run build:linux   # AppImage + deb + pacman (x64 + arm64)
 ```
 
 Output goes to `dist/`.
+
+### Building on Arch / Manjaro
+
+The `deb` and `pacman` targets are built via the `fpm` binary bundled by
+electron-builder, which links against `libcrypt.so.1`. Arch ships `libxcrypt`
+without that legacy ABI, so install the compat shim once:
+
+```bash
+sudo pacman -S libxcrypt-compat
+```
+
+`AppImage` builds without it.
+
+The pacman package is published as **`switchboard-doctly`** rather than
+`switchboard` because the Arch `extra` repo already ships a package named
+`switchboard` (elementary OS's Pantheon Control Center). Renaming avoids the
+file-conflict that would block installation alongside it. The app itself is
+still called Switchboard everywhere users see it — only the package identity
+changes. Uninstall later with `sudo pacman -R switchboard-doctly`.
 
 ## Releasing
 

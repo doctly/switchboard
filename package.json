@@ -12,8 +12,8 @@
     "bundle:codemirror": "esbuild public/codemirror-setup.js --bundle --outfile=public/codemirror-bundle.js --format=iife --platform=browser --minify",
     "generate-icons": "node scripts/generate-icons.js && node scripts/generate-dmg-background.js",
     "build": "npm run bundle:codemirror && electron-builder",
-    "build:mac": "npm run bundle:codemirror && electron-builder --mac && node scripts/postinstall.js && codesign --sign - --force --deep dist/mac-arm64/Switchboard.app 2>/dev/null; true",
-    "build:mac:arm64": "electron-builder --mac --arm64 2>/dev/null; true",
+    "build:mac": "npm run bundle:codemirror && electron-builder --mac && node scripts/postinstall.js",
+    "build:mac:arm64": "npm run bundle:codemirror && electron-builder --mac --arm64 && node scripts/postinstall.js",
     "build:win": "npm run bundle:codemirror && electron-builder --win",
     "build:linux": "npm run bundle:codemirror && electron-builder --linux",
     "release": "npm run bundle:codemirror && electron-builder --publish always",
@@ -86,6 +86,7 @@
           ]
         }
       ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "hardenedRuntime": true,
@@ -106,9 +107,24 @@
     "linux": {
       "target": [
         "AppImage",
-        "deb"
+        "deb",
+        "pacman"
       ],
+      "icon": "build/icons",
       "category": "Development"
+    },
+    "pacman": {
+      "packageName": "switchboard-doctly",
+      "artifactName": "switchboard-doctly-${version}.${ext}",
+      "depends": [
+        "gtk3",
+        "nss",
+        "libnotify",
+        "libxtst",
+        "libxss",
+        "xdg-utils",
+        "libsecret"
+      ]
     },
     "dmg": {
       "background": "build/dmg-background.png",
