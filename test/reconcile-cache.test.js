@@ -24,6 +24,10 @@ function makeFakeDb(metaMap) {
     db: {
       deleteCachedFolder() {},
       getCachedByFolder() { return []; },
+      // refreshFolder passes the cached row to readSessionFile as resume state.
+      // Returning null models a session with nothing indexed yet, so the read
+      // starts from byte 0 — which is what this test wants.
+      getCachedSession() { return null; },
       upsertCachedSessions(sessions) { for (const s of sessions) indexedFolders.add(s.folder); },
       deleteCachedSession() {},
       deleteSearchFolder() {},

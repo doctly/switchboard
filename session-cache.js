@@ -11,7 +11,7 @@ const { encodeProjectPath } = require('./encode-project-path');
  * Call init(ctx) once with the shared context object.
  */
 let PROJECTS_DIR, activeSessions, getMainWindow, log;
-let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession;
+let deleteCachedFolder, getCachedByFolder, getCachedSession, upsertCachedSessions, deleteCachedSession;
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
 let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName;
 
@@ -23,6 +23,7 @@ function init(ctx) {
   // DB functions
   deleteCachedFolder = ctx.db.deleteCachedFolder;
   getCachedByFolder = ctx.db.getCachedByFolder;
+  getCachedSession = ctx.db.getCachedSession;
   upsertCachedSessions = ctx.db.upsertCachedSessions;
   deleteCachedSession = ctx.db.deleteCachedSession;
   deleteSearchFolder = ctx.db.deleteSearchFolder;
@@ -106,8 +107,12 @@ function refreshFolder(folder) {
       continue; // unchanged, skip
     }
 
-    // File is new or modified — re-read it
-    const s = readSessionFile(filePath, folder, projectPath);
+    // File is new or modified — re-read it. The cached row carries the resume
+    // state, so an append costs the size of the append rather than the size of
+    // the file. Fetched per changed session on purpose: a folder holds
+    // thousands of sessions and only a couple change per flush.
+    const cachedRow = getCachedSession(sessionId);
+    const s = readSessionFile(filePath, folder, projectPath, cachedRow);
     if (s) {
       sessionsToUpsert.push(s);
       // Title precedence: user rename (session_meta.name) > JSONL custom-title > JSONL ai-title.

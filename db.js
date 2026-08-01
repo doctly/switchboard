@@ -49,7 +49,11 @@ db.exec(`
     modified TEXT,
     messageCount INTEGER DEFAULT 0,
     slug TEXT,
-    aiTitle TEXT
+    aiTitle TEXT,
+    customTitle TEXT,
+    textContent TEXT,
+    headHash TEXT,
+    indexedBytes INTEGER DEFAULT 0
   )
 `);
 
@@ -98,6 +102,19 @@ const migrations = [
     try { db.exec('ALTER TABLE session_cache ADD COLUMN aiTitle TEXT'); } catch {}
     try { db.exec('DELETE FROM session_cache'); } catch {}
     try { db.exec('DELETE FROM cache_meta'); } catch {}
+  },
+  // v4: Columns backing incremental (append-only) re-indexing. Session .jsonl
+  // files only ever grow, so an index pass can resume from the byte offset the
+  // previous pass stopped at instead of re-reading the whole file — which cost
+  // ~2x the file size in RAM on every append. The resume state needs the
+  // accumulators to survive across passes, hence customTitle/textContent.
+  // No cache wipe: indexedBytes stays NULL on existing rows, which reads as
+  // "cannot resume", so each session is fully re-read once and incrementally
+  // after that.
+  (db) => {
+    for (const col of ['customTitle TEXT', 'textContent TEXT', 'headHash TEXT', 'indexedBytes INTEGER DEFAULT 0']) {
+      try { db.exec(`ALTER TABLE session_cache ADD COLUMN ${col}`); } catch {}
+    }
   },
 ];
 
@@ -150,16 +167,25 @@ const stmts = {
   `),
   // Session cache statements
   cacheCount: db.prepare('SELECT COUNT(*) as cnt FROM session_cache'),
-  cacheGetAll: db.prepare('SELECT * FROM session_cache'),
+  // Only the columns the sidebar renders. Deliberately excludes textContent and
+  // the resume state (headHash/indexedBytes): this runs on every projects
+  // refresh, and SELECT * would drag several MB of search-index text with it.
+  cacheGetAll: db.prepare(`
+    SELECT sessionId, folder, projectPath, summary, firstPrompt, created, modified,
+           messageCount, slug, aiTitle
+    FROM session_cache
+  `),
   cacheUpsert: db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, customTitle, textContent, headHash, indexedBytes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
       folder = excluded.folder, projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
       created = excluded.created, modified = excluded.modified,
       messageCount = excluded.messageCount, slug = excluded.slug,
-      aiTitle = excluded.aiTitle
+      aiTitle = excluded.aiTitle, customTitle = excluded.customTitle,
+      textContent = excluded.textContent, headHash = excluded.headHash,
+      indexedBytes = excluded.indexedBytes
   `),
   cacheGetByFolder: db.prepare('SELECT sessionId, modified FROM session_cache WHERE folder = ?'),
   cacheGetFolder: db.prepare('SELECT folder FROM session_cache WHERE sessionId = ?'),
@@ -246,7 +272,8 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
     stmts.cacheUpsert.run(
       s.sessionId, s.folder, s.projectPath, s.summary,
       s.firstPrompt, s.created, s.modified, s.messageCount || 0,
-      s.slug || null, s.aiTitle || null
+      s.slug || null, s.aiTitle || null, s.customTitle || null,
+      s.textContent || null, s.headHash || null, s.indexedBytes || 0
     );
   }
 });
