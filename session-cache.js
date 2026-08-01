@@ -153,18 +153,32 @@ function refreshFolder(folder) {
   setFolderMeta(folder, projectPath, getFolderIndexMtimeMs(folderPath));
 }
 
-/** Populate entire cache from filesystem (cold start) */
-function populateCacheFromFilesystem() {
+/**
+ * Reconcile the cache with the filesystem.
+ *
+ * Re-indexes only folders that are new or whose newest .jsonl is newer than what
+ * we last indexed — a cheap, stat-only gate when nothing changed. This is what
+ * keeps sessions from silently going missing: a project folder that changed while
+ * the app was closed, or that predates the build which first indexed it, is
+ * otherwise never picked up, because the cold-start full scan
+ * (populateCacheViaWorker) only runs when the cache is completely empty.
+ */
+function reconcileCacheFromFilesystem() {
   try {
+    const metaMap = getAllFolderMeta();
     const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
       .filter(d => d.isDirectory() && d.name !== '.git')
       .map(d => d.name);
 
     for (const folder of folders) {
-      refreshFolder(folder);
+      const meta = metaMap.get(folder);
+      const folderPath = path.join(PROJECTS_DIR, folder);
+      if (!meta || getFolderIndexMtimeMs(folderPath) > (meta.indexMtimeMs || 0)) {
+        refreshFolder(folder);
+      }
     }
   } catch (err) {
-    console.error('Error populating cache:', err);
+    console.error('Error reconciling cache:', err);
   }
 }
 
@@ -383,7 +397,7 @@ module.exports = {
   readSessionFile,
   readFolderFromFilesystem,
   refreshFolder,
-  populateCacheFromFilesystem,
+  reconcileCacheFromFilesystem,
   buildProjectsFromCache,
   notifyRendererProjectsChanged,
   sendStatus,

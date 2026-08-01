@@ -74,6 +74,44 @@ function cronMatches(cronExpr, now) {
   );
 }
 
+/**
+ * Resolve a project folder name to its project path from the SQLite cache.
+ * Returns a Map<folder, projectPath>, or an empty Map if the cache is
+ * unavailable (e.g. in tests that don't load the native DB binding).
+ */
+function loadFolderMetaMap() {
+  try {
+    // Lazy require so requiring schedule-runner.js never forces the native
+    // better-sqlite3 binding to load (keeps the module test-friendly).
+    const { getAllFolderMeta } = require('./db');
+    const meta = getAllFolderMeta();
+    const map = new Map();
+    for (const [folder, row] of meta) {
+      if (row && row.projectPath) map.set(folder, row.projectPath);
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+/** Read a project folder's first JSONL just enough to extract its cwd. */
+function readProjectPathFromJsonl(folderPath) {
+  try {
+    const jsonlFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
+    for (const jf of jsonlFiles) {
+      const head = fs.readFileSync(path.join(folderPath, jf), 'utf8').slice(0, 4000);
+      for (const line of head.split('\n').filter(Boolean)) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.cwd) return entry.cwd;
+        } catch {}
+      }
+    }
+  } catch {}
+  return null;
+}
+
 /** Scan all projects for schedule-*.md files and return parsed schedule objects. */
 function scanSchedules(log) {
   const schedules = [];
@@ -82,22 +120,17 @@ function scanSchedules(log) {
     const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
       .filter(d => d.isDirectory());
 
+    // Prefer the cached folder→projectPath mapping; only read JSONLs for
+    // folders genuinely missing from the cache. This avoids re-reading 4KB of
+    // every JSONL of every project on each 60s tick.
+    const folderMeta = loadFolderMetaMap();
+
     for (const folder of folders) {
       const folderPath = path.join(PROJECTS_DIR, folder.name);
-      let projectPath = null;
-      try {
-        const jsonlFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
-        for (const jf of jsonlFiles) {
-          const head = fs.readFileSync(path.join(folderPath, jf), 'utf8').slice(0, 4000);
-          for (const line of head.split('\n').filter(Boolean)) {
-            try {
-              const entry = JSON.parse(line);
-              if (entry.cwd) { projectPath = entry.cwd; break; }
-            } catch {}
-          }
-          if (projectPath) break;
-        }
-      } catch {}
+      let projectPath = folderMeta.get(folder.name) || null;
+      if (!projectPath) {
+        projectPath = readProjectPathFromJsonl(folderPath);
+      }
       if (!projectPath) continue;
 
       const commandsDir = path.join(projectPath, '.claude', 'commands');
@@ -146,24 +179,56 @@ function createScheduleSession(schedule) {
   return { sessionId, jsonlPath };
 }
 
-/** Build a claude CLI command string for a scheduled task. */
-function buildScheduleCommand(sessionId, schedule) {
-  let cmd = `claude --resume "${sessionId}" -p "Run the scheduled task"`;
+// Defense-in-depth: reject control chars in frontmatter values (shell-quoter is the real defense)
+function isSafeScalar(s) {
+  if (s == null) return true;
+  return !/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(String(s));
+}
 
-  const cli = schedule.cli;
-  cmd += ` --permission-mode "${cli['permission-mode'] || 'acceptEdits'}"`;
-  if (cli.model) cmd += ` --model "${cli.model}"`;
-  if (cli['max-budget-usd']) cmd += ` --max-budget-usd ${cli['max-budget-usd']}`;
-  const allowedTools = cli['allowed-tools'] || 'Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch';
-  cmd += ` --allowedTools "${allowedTools}"`;
-  if (cli['append-system-prompt']) cmd += ` --append-system-prompt "${cli['append-system-prompt'].replace(/"/g, '\\"')}"`;
+function assertSafe(field, value) {
+  if (!isSafeScalar(value)) {
+    throw new Error(`Schedule field "${field}" contains unsafe characters`);
+  }
+  return value;
+}
+
+/**
+ * Build the argv for a scheduled claude invocation.
+ * Returns `{ claudeArgs: string[] }` — a plain argv array, with zero shell interpretation.
+ * The caller is responsible for shell-quoting when constructing a shell command string.
+ */
+function buildScheduleCommand(sessionId, schedule) {
+  const cli = schedule.cli || {};
+  const args = [
+    '--resume', assertSafe('sessionId', sessionId),
+    '-p', 'Run the scheduled task',
+    '--permission-mode', assertSafe('permission-mode', cli['permission-mode'] || 'acceptEdits'),
+  ];
+
+  if (cli.model) args.push('--model', assertSafe('model', cli.model));
+  if (cli['max-budget-usd']) {
+    const budget = String(cli['max-budget-usd']).trim();
+    if (!/^\d+(\.\d+)?$/.test(budget)) {
+      throw new Error(`Schedule field "max-budget-usd" must be a number, got: ${cli['max-budget-usd']}`);
+    }
+    args.push('--max-budget-usd', budget);
+  }
+  args.push('--allowedTools', assertSafe('allowed-tools', cli['allowed-tools'] || 'Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch'));
+  if (cli['append-system-prompt']) {
+    // Allow newlines in prompt text, but not control chars other than \n, \r, \t
+    const prompt = String(cli['append-system-prompt']);
+    if (/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(prompt)) {
+      throw new Error('Schedule field "append-system-prompt" contains unsafe characters');
+    }
+    args.push('--append-system-prompt', prompt);
+  }
   if (cli['add-dirs']) {
-    for (const dir of cli['add-dirs'].split(',').map(d => d.trim()).filter(Boolean)) {
-      cmd += ` --add-dir "${dir}"`;
+    for (const dir of String(cli['add-dirs']).split(',').map(d => d.trim()).filter(Boolean)) {
+      args.push('--add-dir', assertSafe('add-dirs', dir));
     }
   }
 
-  return cmd;
+  return { claudeArgs: args };
 }
 
 /**
@@ -192,10 +257,10 @@ function startScheduler(log, runCommand) {
       log.info(`[schedule] Triggering: ${schedule.name} (${schedule.cron})`);
       try {
         const { sessionId } = createScheduleSession(schedule);
-        const cmd = buildScheduleCommand(sessionId, schedule);
+        const { claudeArgs } = buildScheduleCommand(sessionId, schedule);
 
         runningTasks.add(taskKey);
-        runCommand(cmd, schedule.projectPath, schedule.name, () => {
+        runCommand(claudeArgs, schedule.projectPath, schedule.name, () => {
           runningTasks.delete(taskKey);
         });
       } catch (err) {

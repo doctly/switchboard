@@ -204,9 +204,9 @@ function init(log, runCommand) {
       };
 
       const { sessionId } = createScheduleSession(schedule);
-      const cmd = buildScheduleCommand(sessionId, schedule);
+      const { claudeArgs } = buildScheduleCommand(sessionId, schedule);
 
-      runCommand(cmd, projectPath, `Manual run ${schedule.name}`, () => {});
+      runCommand(claudeArgs, projectPath, `Manual run ${schedule.name}`, () => {});
 
       log.info(`[schedule] Manual run triggered: ${schedule.name} (session ${sessionId})`);
       return { ok: true, sessionId };
