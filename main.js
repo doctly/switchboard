@@ -1,5 +1,6 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } = require('electron');
 const { Worker } = require('worker_threads');
+const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -61,7 +62,7 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
 }
 const {
   getMeta, getAllMeta, toggleStar, setName, setArchived,
-  isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, upsertCachedSessions,
+  isCachePopulated, getAllCached, getCachedByFolder, getCachedByParent, getCachedFolder, getCachedSession, upsertCachedSessions,
   deleteCachedSession, deleteCachedFolder,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
@@ -79,6 +80,10 @@ const MAX_BUFFER_SIZE = 256 * 1024;
 // Active PTY sessions
 const activeSessions = new Map();
 let mainWindow = null;
+
+// Subagent live-tail watchers (watchId → { filePath, parentSessionId, agentId })
+const subagentWatchers = new Map();
+let subagentWatcherSeq = 0;
 
 function createWindow() {
   // Restore saved window bounds
@@ -104,11 +109,12 @@ function createWindow() {
     }
   }
 
+  const appTitle = app.isPackaged ? 'Switchboard' : 'Switchboard (dev)';
   mainWindow = new BrowserWindow({
     ...bounds,
     minWidth: 800,
     minHeight: 500,
-    title: 'Switchboard',
+    title: appTitle,
     icon: path.join(__dirname, 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -202,6 +208,11 @@ function createWindow() {
       }
       activeSessions.delete(id);
     }
+    // Release all subagent file watchers
+    for (const [, entry] of subagentWatchers) {
+      try { fs.unwatchFile(entry.filePath); } catch {}
+    }
+    subagentWatchers.clear();
     mainWindow = null;
   });
 }
@@ -342,6 +353,84 @@ ipcMain.handle('remove-project', (_event, projectPath) => {
   }
 });
 
+// --- IPC: delete-worktree ---
+// Validated path pattern: <project>/.<segment>/[worktrees/]<name>
+// Matches .claude/worktrees/<n>, .claude-worktrees/<n>, .worktrees/<n>
+const WORKTREE_PATH_RE = /^(.+?)\/\.(?:claude\/worktrees|claude-worktrees|worktrees)\/([^/]+)\/?$/;
+
+ipcMain.handle('delete-worktree', (_event, worktreePath) => {
+  return new Promise((resolve) => {
+    // Normalize trailing slash
+    const normalizedPath = worktreePath.replace(/\/$/, '');
+
+    // Validate path matches a known worktree layout
+    const match = normalizedPath.match(WORKTREE_PATH_RE);
+    if (!match) {
+      return resolve({ ok: false, error: 'Path does not match a recognized worktree layout' });
+    }
+    const parentRepo = match[1];
+
+    // Helper: run git worktree remove, optionally double-force
+    function runRemove(doubleForce, callback) {
+      const args = ['-C', parentRepo, 'worktree', 'remove', '-f'];
+      if (doubleForce) args.push('-f');
+      args.push('--', normalizedPath);
+      execFile('git', args, (err, _stdout, stderr) => callback(err, stderr));
+    }
+
+    runRemove(false, (err, stderr) => {
+      if (err && /locked/i.test(stderr || err.message || '')) {
+        // Retry with double force for locked worktrees
+        runRemove(true, (err2, stderr2) => {
+          if (err2) return resolve({ ok: false, error: (stderr2 || err2.message || String(err2)).trim() });
+          afterRemove();
+        });
+      } else if (err) {
+        return resolve({ ok: false, error: (stderr || err.message || String(err)).trim() });
+      } else {
+        afterRemove();
+      }
+    });
+
+    function afterRemove() {
+      // Clean up DB cache: delete all sessions whose projectPath matches worktreePath
+      let removed = 0;
+      try {
+        const allRows = getAllCached();
+        for (const row of allRows) {
+          if (row.projectPath === normalizedPath) {
+            deleteCachedSession(row.sessionId);
+            deleteSearchSession(row.sessionId);
+            removed++;
+          }
+        }
+      } catch (dbErr) {
+        log.warn('[delete-worktree] DB cleanup error:', dbErr.message);
+      }
+
+      // Remove from hiddenProjects if present
+      try {
+        const global = getSetting('global') || {};
+        if (Array.isArray(global.hiddenProjects) && global.hiddenProjects.includes(normalizedPath)) {
+          global.hiddenProjects = global.hiddenProjects.filter(p => p !== normalizedPath);
+          setSetting('global', global);
+        }
+      } catch {}
+
+      // Also clean up folder meta
+      try {
+        const folder = encodeProjectPath(normalizedPath);
+        deleteCachedFolder(folder);
+        deleteSearchFolder(folder);
+      } catch {}
+
+      log.info(`[delete-worktree] removed=${normalizedPath} sessions=${removed}`);
+      notifyRendererProjectsChanged();
+      resolve({ ok: true, removed });
+    }
+  });
+});
+
 // --- IPC: get-projects ---
 ipcMain.handle('open-external', (_event, url) => {
   log.info('[open-external IPC]', url);
@@ -407,13 +496,18 @@ ipcMain.handle('unwatch-file', (_event, filePath) => {
   return { ok: true };
 });
 
-ipcMain.handle('get-projects', (_event, showArchived) => {
+ipcMain.handle('get-projects', async (_event, showArchived) => {
   try {
     const needsPopulate = !isCachePopulated() || !isSearchIndexPopulated();
 
     if (needsPopulate) {
-      populateCacheViaWorker();
-      return [];
+      // First call after a migration that clears session_cache (e.g. v4) finds
+      // an empty cache. Returning [] immediately makes the renderer paint an
+      // empty list and rely on `notifyRendererProjectsChanged` firing later —
+      // which only triggers a reload if the user is on the Sessions tab. To
+      // avoid that race, await the scan here so the response carries the
+      // freshly-populated cache. Concurrent callers share the same Promise.
+      await populateCacheViaWorker();
     }
 
     return buildProjectsFromCache(showArchived);
@@ -909,6 +1003,85 @@ ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
   }
 });
 
+ipcMain.handle('read-subagent-jsonl', (_event, parentSessionId, agentId) => {
+  const row = getCachedSession('sub:' + parentSessionId + ':' + agentId);
+  if (!row) return { error: 'Subagent session not found in cache' };
+  const jsonlPath = path.join(PROJECTS_DIR, row.folder, parentSessionId, 'subagents', 'agent-' + agentId + '.jsonl');
+  try {
+    const content = fs.readFileSync(jsonlPath, 'utf-8');
+    const entries = [];
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue;
+      try { entries.push(JSON.parse(line)); } catch {}
+    }
+    return { entries };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('list-subagents', (_event, parentSessionId) => {
+  return getCachedByParent(parentSessionId).map(r => ({
+    sessionId: r.sessionId,
+    agentId: r.agentId,
+    subagentType: r.subagentType,
+    description: r.description,
+    modified: r.modified,
+    messageCount: r.messageCount,
+  }));
+});
+
+// ── Subagent live-tail watchers ──────────────────────────────────────────────
+
+ipcMain.handle('start-subagent-watch', (_event, parentSessionId, agentId) => {
+  const row = getCachedSession('sub:' + parentSessionId + ':' + agentId);
+  if (!row) return { error: 'Subagent not found in cache' };
+  const filePath = path.join(PROJECTS_DIR, row.folder, parentSessionId, 'subagents', 'agent-' + agentId + '.jsonl');
+
+  const watchId = ++subagentWatcherSeq;
+  let offset = 0;
+  // Seek to EOF so we only deliver *new* lines
+  try { offset = fs.statSync(filePath).size; } catch {}
+
+  function readNewEntries() {
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.size <= offset) return;
+      const buf = Buffer.alloc(stat.size - offset);
+      const fd = fs.openSync(filePath, 'r');
+      const bytesRead = fs.readSync(fd, buf, 0, buf.length, offset);
+      fs.closeSync(fd);
+      if (bytesRead <= 0) return;
+      offset += bytesRead;
+      const text = buf.toString('utf8', 0, bytesRead);
+      const entries = [];
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue;
+        try { entries.push(JSON.parse(line)); } catch {}
+      }
+      if (entries.length > 0 && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('subagent-watch-event', { parentSessionId, agentId, entries });
+      }
+    } catch {}
+  }
+
+  // fs.watchFile gives reliable polling on Linux where inotify can be unreliable for JSONL appends
+  fs.watchFile(filePath, { interval: 1000, persistent: false }, readNewEntries);
+
+  subagentWatchers.set(watchId, { filePath, parentSessionId, agentId });
+  log.info(`[subagent-watch] start watchId=${watchId} parent=${parentSessionId} agentId=${agentId}`);
+  return { watchId };
+});
+
+ipcMain.handle('stop-subagent-watch', (_event, watchId) => {
+  const entry = subagentWatchers.get(watchId);
+  if (!entry) return { ok: false };
+  fs.unwatchFile(entry.filePath);
+  subagentWatchers.delete(watchId);
+  log.info(`[subagent-watch] stop watchId=${watchId}`);
+  return { ok: true };
+});
+
 ipcMain.handle('archive-session', (_event, sessionId, archived) => {
   const val = archived ? 1 : 0;
   setArchived(sessionId, val);
@@ -1386,6 +1559,12 @@ ipcMain.handle('updater-install', () => {
 });
 
 // --- App lifecycle ---
+// Differentiate the dev build from the released binary in the OS task switcher,
+// dock, and About menu by suffixing the app name. No-op in packaged builds.
+if (!app.isPackaged) {
+  app.setName('Switchboard (dev)');
+}
+
 app.whenReady().then(() => {
   buildMenu();
   createWindow();
