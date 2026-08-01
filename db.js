@@ -48,7 +48,8 @@ db.exec(`
     created TEXT,
     modified TEXT,
     messageCount INTEGER DEFAULT 0,
-    slug TEXT
+    slug TEXT,
+    aiTitle TEXT
   )
 `);
 
@@ -84,6 +85,19 @@ const migrations = [
     try { db.exec('DELETE FROM search_map'); } catch {}
     try { db.exec('DROP TABLE IF EXISTS search_fts'); } catch {}
     searchFtsRecreated = true;
+  },
+  // v3: Add aiTitle column for AI-generated session titles. Clear cache so a
+  // re-index repopulates the column. Also clear session_meta.name entries that
+  // were clobbered by AI titles in v0.0.29 (when ai-title was written into the
+  // user-name column). We cannot tell with certainty which names came from an
+  // AI title vs a manual rename, but the safe heuristic is: drop names whose
+  // value matches the JSONL aiTitle on next index. That post-index cleanup is
+  // not done here — instead we accept that any pre-fix AI-title pollution
+  // remains until the user renames manually, and only future indexes are clean.
+  (db) => {
+    try { db.exec('ALTER TABLE session_cache ADD COLUMN aiTitle TEXT'); } catch {}
+    try { db.exec('DELETE FROM session_cache'); } catch {}
+    try { db.exec('DELETE FROM cache_meta'); } catch {}
   },
 ];
 
@@ -138,13 +152,14 @@ const stmts = {
   cacheCount: db.prepare('SELECT COUNT(*) as cnt FROM session_cache'),
   cacheGetAll: db.prepare('SELECT * FROM session_cache'),
   cacheUpsert: db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
       folder = excluded.folder, projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
       created = excluded.created, modified = excluded.modified,
-      messageCount = excluded.messageCount, slug = excluded.slug
+      messageCount = excluded.messageCount, slug = excluded.slug,
+      aiTitle = excluded.aiTitle
   `),
   cacheGetByFolder: db.prepare('SELECT sessionId, modified FROM session_cache WHERE folder = ?'),
   cacheGetFolder: db.prepare('SELECT folder FROM session_cache WHERE sessionId = ?'),
@@ -231,7 +246,7 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
     stmts.cacheUpsert.run(
       s.sessionId, s.folder, s.projectPath, s.summary,
       s.firstPrompt, s.created, s.modified, s.messageCount || 0,
-      s.slug || null
+      s.slug || null, s.aiTitle || null
     );
   }
 });

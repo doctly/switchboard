@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('api', {
   addProject: (projectPath) => ipcRenderer.invoke('add-project', projectPath),
   removeProject: (projectPath) => ipcRenderer.invoke('remove-project', projectPath),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  writeClipboard: (text) => ipcRenderer.invoke('clipboard-write-text', text),
 
   // Send (fire-and-forget)
   sendInput: (id, data) => ipcRenderer.send('terminal-input', id, data),

@@ -49,7 +49,7 @@ async function launchScheduleCreator(project) {
   };
 
   // Inject into sidebar
-  const folder = project.projectPath.replace(/[/_]/g, '-').replace(/^-/, '-');
+  const folder = encodeProjectPath(project.projectPath);
   pendingSessions.set(result.sessionId, { session, projectPath: project.projectPath, folder });
   sessionMap.set(result.sessionId, session);
   for (const projList of [cachedProjects, cachedAllProjects]) {
@@ -141,7 +141,7 @@ async function launchTerminalSession(project) {
   };
 
   // Track as pending
-  const folder = projectPath.replace(/[/_]/g, '-').replace(/^-/, '-');
+  const folder = encodeProjectPath(projectPath);
   pendingSessions.set(sessionId, { session, projectPath, folder });
 
   // Inject into cached project data
@@ -181,13 +181,7 @@ async function showNewSessionDialog(project) {
   let selectedMode = effective.permissionMode || null;
   let dangerousSkip = effective.dangerouslySkipPermissions || false;
 
-  const modes = [
-    { value: null, label: 'Default', desc: 'Prompt for all actions' },
-    { value: 'acceptEdits', label: 'Accept Edits', desc: 'Auto-accept file edits, prompt for others' },
-    { value: 'plan', label: 'Plan Mode', desc: 'Read-only exploration, no writes' },
-    { value: 'dontAsk', label: "Don't Ask", desc: 'Auto-deny tools not explicitly allowed' },
-    { value: 'bypassPermissions', label: 'Bypass', desc: 'Auto-accept all tool calls' },
-  ];
+  const modes = PERMISSION_MODES;
 
   function renderModeGrid() {
     return modes.map(m => {
@@ -198,7 +192,7 @@ async function showNewSessionDialog(project) {
   }
 
   dialog.innerHTML = `
-    <h3>New Session — ${escapeHtml(project.projectPath.split('/').filter(Boolean).slice(-2).join('/'))}</h3>
+    <h3>New Session — ${escapeHtml(shortProjectPath(project.projectPath))}</h3>
     <div class="settings-field">
       <div class="settings-label">Permission Mode</div>
       <div class="permission-grid" id="nsd-mode-grid">${renderModeGrid()}</div>
@@ -315,13 +309,7 @@ async function showResumeSessionDialog(session) {
   let selectedMode = effective.permissionMode || null;
   let dangerousSkip = effective.dangerouslySkipPermissions || false;
 
-  const modes = [
-    { value: null, label: 'Default', desc: 'Prompt for all actions' },
-    { value: 'acceptEdits', label: 'Accept Edits', desc: 'Auto-accept file edits, prompt for others' },
-    { value: 'plan', label: 'Plan Mode', desc: 'Read-only exploration, no writes' },
-    { value: 'dontAsk', label: "Don't Ask", desc: 'Auto-deny tools not explicitly allowed' },
-    { value: 'bypassPermissions', label: 'Bypass', desc: 'Auto-accept all tool calls' },
-  ];
+  const modes = PERMISSION_MODES;
 
   function renderModeGrid() {
     return modes.map(m => {
@@ -331,7 +319,7 @@ async function showResumeSessionDialog(session) {
     `<button class="permission-option dangerous${dangerousSkip ? ' selected' : ''}" data-mode="dangerous-skip"><span class="perm-name">Dangerous Skip</span><span class="perm-desc">Skip all safety prompts (use with caution)</span></button>`;
   }
 
-  const sessionName = session.name || session.summary || session.sessionId.slice(0, 8);
+  const sessionName = session.name || session.aiTitle || session.summary || session.sessionId.slice(0, 8);
 
   dialog.innerHTML = `
     <h3>Resume Session — ${escapeHtml(sessionName)}</h3>

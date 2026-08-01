@@ -484,7 +484,7 @@ searchInput.addEventListener('input', () => {
         if (searchTitlesOnly) {
           const lowerQ = query.toLowerCase();
           for (const p of cachedAllProjects) {
-            const shortName = p.projectPath.split('/').filter(Boolean).slice(-2).join('/');
+            const shortName = shortProjectPath(p.projectPath);
             if (shortName.toLowerCase().includes(lowerQ)) {
               if (!searchMatchProjectPaths) searchMatchProjectPaths = new Set();
               searchMatchProjectPaths.add(p.projectPath);
@@ -531,6 +531,22 @@ terminalStopBtn.addEventListener('click', () => {
 
 
 // --- Poll for active PTY sessions ---
+// Adaptive cadence: poll fast (3s) only while PTYs are running; when idle, back
+// off to 30s. Every renderer path that starts a session (launchNewSession,
+// openSession, launchTerminalSession, onSessionDetected/Forked) calls
+// pollActiveSessions() explicitly, which re-arms the fast cadence immediately.
+// The 30s idle floor still catches sessions started outside the renderer
+// (scheduler-spawned PTYs, other windows) within at most 30s.
+const POLL_FAST_MS = 3000;
+const POLL_IDLE_MS = 30000;
+let pollTimer = null;
+
+function scheduleActiveSessionsPoll() {
+  if (pollTimer) clearTimeout(pollTimer);
+  const delay = activePtyIds.size > 0 ? POLL_FAST_MS : POLL_IDLE_MS;
+  pollTimer = setTimeout(pollActiveSessions, delay);
+}
+
 async function pollActiveSessions() {
   try {
     const ids = await window.api.getActiveSessions();
@@ -538,6 +554,7 @@ async function pollActiveSessions() {
     updateRunningIndicators();
     updateTerminalHeader();
   } catch {}
+  scheduleActiveSessionsPoll();
 }
 
 function updateRunningIndicators() {
@@ -592,10 +609,11 @@ function updatePtyTitle() {
   terminalHeaderPtyTitle.style.display = title ? '' : 'none';
 }
 
-setInterval(pollActiveSessions, 3000);
+scheduleActiveSessionsPoll();
 
 // Refresh sidebar timeago labels every 30s so "just now" ticks forward
 setInterval(() => {
+  if (lastActivityTime.size === 0) return;
   for (const [sessionId, time] of lastActivityTime) {
     const item = document.getElementById('si-' + sessionId);
     if (!item) continue;
@@ -670,7 +688,7 @@ async function loadProjects({ resort = false } = {}) {
     const activeTerminals = await window.api.getActiveTerminals();
     for (const { sessionId, projectPath } of activeTerminals) {
       if (pendingSessions.has(sessionId)) continue; // already tracked
-      const folder = projectPath.replace(/[/_]/g, '-').replace(/^-/, '-');
+      const folder = encodeProjectPath(projectPath);
       // Find the session object already injected by the backend
       let session;
       for (const proj of cachedAllProjects) {
@@ -709,7 +727,7 @@ async function launchNewSession(project, sessionOptions) {
   };
 
   // Track as pending (no .jsonl yet)
-  const folder = projectPath.replace(/[/_]/g, '-').replace(/^-/, '-');
+  const folder = encodeProjectPath(projectPath);
   pendingSessions.set(sessionId, { session, projectPath, folder });
 
   // Inject into cached project data so it appears in sidebar immediately
@@ -745,7 +763,7 @@ function openNewSession(project) {
 }
 
 async function showTerminalHeader(session) {
-  const displayName = cleanDisplayName(session.name || session.summary);
+  const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary);
   terminalHeaderName.textContent = displayName;
   terminalHeaderId.textContent = session.sessionId;
   terminalHeader.style.display = '';

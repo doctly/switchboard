@@ -74,6 +74,44 @@ function cronMatches(cronExpr, now) {
   );
 }
 
+/**
+ * Resolve a project folder name to its project path from the SQLite cache.
+ * Returns a Map<folder, projectPath>, or an empty Map if the cache is
+ * unavailable (e.g. in tests that don't load the native DB binding).
+ */
+function loadFolderMetaMap() {
+  try {
+    // Lazy require so requiring schedule-runner.js never forces the native
+    // better-sqlite3 binding to load (keeps the module test-friendly).
+    const { getAllFolderMeta } = require('./db');
+    const meta = getAllFolderMeta();
+    const map = new Map();
+    for (const [folder, row] of meta) {
+      if (row && row.projectPath) map.set(folder, row.projectPath);
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+/** Read a project folder's first JSONL just enough to extract its cwd. */
+function readProjectPathFromJsonl(folderPath) {
+  try {
+    const jsonlFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
+    for (const jf of jsonlFiles) {
+      const head = fs.readFileSync(path.join(folderPath, jf), 'utf8').slice(0, 4000);
+      for (const line of head.split('\n').filter(Boolean)) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.cwd) return entry.cwd;
+        } catch {}
+      }
+    }
+  } catch {}
+  return null;
+}
+
 /** Scan all projects for schedule-*.md files and return parsed schedule objects. */
 function scanSchedules(log) {
   const schedules = [];
@@ -82,22 +120,17 @@ function scanSchedules(log) {
     const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
       .filter(d => d.isDirectory());
 
+    // Prefer the cached folder→projectPath mapping; only read JSONLs for
+    // folders genuinely missing from the cache. This avoids re-reading 4KB of
+    // every JSONL of every project on each 60s tick.
+    const folderMeta = loadFolderMetaMap();
+
     for (const folder of folders) {
       const folderPath = path.join(PROJECTS_DIR, folder.name);
-      let projectPath = null;
-      try {
-        const jsonlFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
-        for (const jf of jsonlFiles) {
-          const head = fs.readFileSync(path.join(folderPath, jf), 'utf8').slice(0, 4000);
-          for (const line of head.split('\n').filter(Boolean)) {
-            try {
-              const entry = JSON.parse(line);
-              if (entry.cwd) { projectPath = entry.cwd; break; }
-            } catch {}
-          }
-          if (projectPath) break;
-        }
-      } catch {}
+      let projectPath = folderMeta.get(folder.name) || null;
+      if (!projectPath) {
+        projectPath = readProjectPathFromJsonl(folderPath);
+      }
       if (!projectPath) continue;
 
       const commandsDir = path.join(projectPath, '.claude', 'commands');

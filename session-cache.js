@@ -4,6 +4,7 @@ const { Worker } = require('worker_threads');
 const { getFolderIndexMtimeMs } = require('./folder-index-state');
 const { deriveProjectPath } = require('./derive-project-path');
 const { readSessionFile } = require('./read-session-file');
+const { encodeProjectPath } = require('./encode-project-path');
 
 /**
  * Session cache module.
@@ -12,7 +13,7 @@ const { readSessionFile } = require('./read-session-file');
 let PROJECTS_DIR, activeSessions, getMainWindow, log;
 let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession;
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
-let setFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName;
+let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -28,6 +29,7 @@ function init(ctx) {
   deleteSearchSession = ctx.db.deleteSearchSession;
   upsertSearchEntries = ctx.db.upsertSearchEntries;
   setFolderMeta = ctx.db.setFolderMeta;
+  getAllFolderMeta = ctx.db.getAllFolderMeta;
   getAllMeta = ctx.db.getAllMeta;
   getAllCached = ctx.db.getAllCached;
   getSetting = ctx.db.getSetting;
@@ -108,7 +110,10 @@ function refreshFolder(folder) {
     const s = readSessionFile(filePath, folder, projectPath);
     if (s) {
       sessionsToUpsert.push(s);
-      const name = s.customTitle || getMeta(s.sessionId)?.name || '';
+      // Title precedence: user rename (session_meta.name) > JSONL custom-title > JSONL ai-title.
+      // Only customTitle (Claude /title) promotes to session_meta.name — AI titles must NEVER
+      // be written there or they'd overwrite the user's UI rename on the next index pass.
+      const name = getMeta(s.sessionId)?.name || s.customTitle || s.aiTitle || '';
       searchEntriesToUpsert.push({
         id: s.sessionId, type: 'session', folder: s.folder,
         title: (name ? name + ' ' : '') + s.summary, body: s.textContent,
@@ -148,18 +153,32 @@ function refreshFolder(folder) {
   setFolderMeta(folder, projectPath, getFolderIndexMtimeMs(folderPath));
 }
 
-/** Populate entire cache from filesystem (cold start) */
-function populateCacheFromFilesystem() {
+/**
+ * Reconcile the cache with the filesystem.
+ *
+ * Re-indexes only folders that are new or whose newest .jsonl is newer than what
+ * we last indexed — a cheap, stat-only gate when nothing changed. This is what
+ * keeps sessions from silently going missing: a project folder that changed while
+ * the app was closed, or that predates the build which first indexed it, is
+ * otherwise never picked up, because the cold-start full scan
+ * (populateCacheViaWorker) only runs when the cache is completely empty.
+ */
+function reconcileCacheFromFilesystem() {
   try {
+    const metaMap = getAllFolderMeta();
     const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
       .filter(d => d.isDirectory() && d.name !== '.git')
       .map(d => d.name);
 
     for (const folder of folders) {
-      refreshFolder(folder);
+      const meta = metaMap.get(folder);
+      const folderPath = path.join(PROJECTS_DIR, folder);
+      if (!meta || getFolderIndexMtimeMs(folderPath) > (meta.indexMtimeMs || 0)) {
+        refreshFolder(folder);
+      }
     }
   } catch (err) {
-    console.error('Error populating cache:', err);
+    console.error('Error reconciling cache:', err);
   }
 }
 
@@ -170,13 +189,17 @@ function buildProjectsFromCache(showArchived) {
   const global = getSetting('global') || {};
   const hiddenProjects = new Set(global.hiddenProjects || []);
 
-  // Group by folder (worktree sessions appear as separate projects)
+  // Group by projectPath, not on-disk folder name. Multiple ~/.claude/projects/<folder>/
+  // directories can resolve to the same projectPath (Claude Code's folder-name encoding
+  // scheme has changed over time, leaving legacy stragglers around), so we merge them into
+  // a single sidebar group to avoid duplicate-id collisions in the morphdom render.
+  // Only insert a project entry once we have a session that survives the archive filter —
+  // otherwise folders whose sessions are all archived would appear in the sidebar as
+  // undismissable phantom entries.
   const projectMap = new Map();
   for (const row of cachedRows) {
+    if (!row.projectPath) continue;
     if (hiddenProjects.has(row.projectPath)) continue;
-    if (!projectMap.has(row.folder)) {
-      projectMap.set(row.folder, { folder: row.folder, projectPath: row.projectPath, sessions: [] });
-    }
     const meta = metaMap.get(row.sessionId);
     const s = {
       sessionId: row.sessionId,
@@ -187,24 +210,45 @@ function buildProjectsFromCache(showArchived) {
       messageCount: row.messageCount,
       projectPath: row.projectPath,
       slug: row.slug || null,
+      aiTitle: row.aiTitle || null,
       name: meta?.name || null,
       starred: meta?.starred || 0,
       archived: meta?.archived || 0,
     };
     if (!showArchived && s.archived) continue;
-    projectMap.get(row.folder).sessions.push(s);
+    if (!projectMap.has(row.projectPath)) {
+      projectMap.set(row.projectPath, {
+        folder: encodeProjectPath(row.projectPath),
+        projectPath: row.projectPath,
+        sessions: [],
+      });
+    }
+    projectMap.get(row.projectPath).sessions.push(s);
   }
 
-  // Include empty project directories (no sessions yet)
+  // Include empty project directories (no sessions yet). Resolve folder→projectPath
+  // through cache_meta (populated by the indexer) instead of re-reading a JSONL off
+  // disk for every directory on every render. Fall back to deriveProjectPath only
+  // for folders the indexer hasn't seen yet, and backfill cache_meta so subsequent
+  // renders are pure DB reads.
   try {
+    const folderMeta = getAllFolderMeta();
     const dirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
       .filter(d => d.isDirectory() && d.name !== '.git');
     for (const d of dirs) {
-      if (!projectMap.has(d.name)) {
-        const projectPath = deriveProjectPath(path.join(PROJECTS_DIR, d.name), d.name);
-        if (projectPath && !hiddenProjects.has(projectPath)) {
-          projectMap.set(d.name, { folder: d.name, projectPath, sessions: [] });
-        }
+      let projectPath = folderMeta.get(d.name)?.projectPath;
+      if (!projectPath) {
+        projectPath = deriveProjectPath(path.join(PROJECTS_DIR, d.name), d.name);
+        if (projectPath) setFolderMeta(d.name, projectPath, 0);
+      }
+      if (!projectPath) continue;
+      if (hiddenProjects.has(projectPath)) continue;
+      if (!projectMap.has(projectPath)) {
+        projectMap.set(projectPath, {
+          folder: encodeProjectPath(projectPath),
+          projectPath,
+          sessions: [],
+        });
       }
     }
   } catch {}
@@ -212,12 +256,16 @@ function buildProjectsFromCache(showArchived) {
   // Inject active plain terminal sessions so they participate in sorting
   for (const [sessionId, session] of activeSessions) {
     if (session.exited || !session.isPlainTerminal) continue;
-    const folder = session.projectPath.replace(/[/_]/g, '-').replace(/^-/, '-');
+    if (!session.projectPath) continue;
     if (hiddenProjects.has(session.projectPath)) continue;
-    if (!projectMap.has(folder)) {
-      projectMap.set(folder, { folder, projectPath: session.projectPath, sessions: [] });
+    if (!projectMap.has(session.projectPath)) {
+      projectMap.set(session.projectPath, {
+        folder: encodeProjectPath(session.projectPath),
+        projectPath: session.projectPath,
+        sessions: [],
+      });
     }
-    const proj = projectMap.get(folder);
+    const proj = projectMap.get(session.projectPath);
     if (!proj.sessions.some(s => s.sessionId === sessionId)) {
       proj.sessions.push({
         sessionId, summary: 'Terminal', firstPrompt: '', projectPath: session.projectPath,
@@ -300,11 +348,13 @@ function populateCacheViaWorker() {
         sessionCount += sessions.length;
         upsertCachedSessions(sessions);
         for (const s of sessions) {
+          // Only JSONL custom-title (genuine user title) promotes to the DB name column.
+          // AI titles must not — see refreshFolder for the rationale.
           if (s.customTitle) setName(s.sessionId, s.customTitle);
         }
         upsertSearchEntries(sessions.map(s => {
-          // customTitle comes from jsonl; fall back to session_meta.name (set via rename)
-          const name = s.customTitle || getMeta(s.sessionId)?.name || '';
+          // Search title precedence matches the sidebar: user rename > custom-title > ai-title.
+          const name = getMeta(s.sessionId)?.name || s.customTitle || s.aiTitle || '';
           return {
             id: s.sessionId, type: 'session', folder: s.folder,
             title: (name ? name + ' ' : '') + s.summary,
@@ -347,7 +397,7 @@ module.exports = {
   readSessionFile,
   readFolderFromFilesystem,
   refreshFolder,
-  populateCacheFromFilesystem,
+  reconcileCacheFromFilesystem,
   buildProjectsFromCache,
   notifyRendererProjectsChanged,
   sendStatus,

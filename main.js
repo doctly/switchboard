@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, shell } = require('electron');
 const { Worker } = require('worker_threads');
 const path = require('path');
 const fs = require('fs');
@@ -28,6 +28,7 @@ const cleanPtyEnv = Object.fromEntries(
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
 const { startScheduler } = require('./schedule-runner');
+const { encodeProjectPath } = require('./encode-project-path');
 
 
 
@@ -261,10 +262,10 @@ sessionCache.init({
   db: {
     deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession,
     deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
-    setFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName,
+    setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName,
   },
 });
-const { readSessionFile, readFolderFromFilesystem, refreshFolder, populateCacheFromFilesystem,
+const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCacheFromFilesystem,
         buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker } = sessionCache;
 
 
@@ -293,7 +294,7 @@ ipcMain.handle('add-project', (_event, projectPath) => {
     }
 
     // Create the corresponding folder in ~/.claude/projects/ so it persists
-    const folder = projectPath.replace(/[/_]/g, '-').replace(/^-/, '-');
+    const folder = encodeProjectPath(projectPath);
     const folderPath = path.join(PROJECTS_DIR, folder);
     if (!fs.existsSync(folderPath)) {
       fs.mkdirSync(folderPath, { recursive: true });
@@ -329,7 +330,7 @@ ipcMain.handle('remove-project', (_event, projectPath) => {
     setSetting('global', global);
 
     // Clean up DB cache and search index for this folder
-    const folder = projectPath.replace(/[/_]/g, '-').replace(/^-/, '-');
+    const folder = encodeProjectPath(projectPath);
     deleteCachedFolder(folder);
     deleteSearchFolder(folder);
     deleteSetting('project:' + projectPath);
@@ -345,6 +346,14 @@ ipcMain.handle('remove-project', (_event, projectPath) => {
 ipcMain.handle('open-external', (_event, url) => {
   log.info('[open-external IPC]', url);
   if (/^https?:\/\//i.test(url)) return shell.openExternal(url);
+});
+
+// --- IPC: clipboard write ---
+// The renderer's navigator.clipboard.writeText is gated on focus/user-activation and
+// is flaky-to-dead on Linux/Wayland (Ozone). The main-process clipboard has no such
+// strings attached, so all terminal copies go through here.
+ipcMain.handle('clipboard-write-text', (_event, text) => {
+  if (typeof text === 'string') clipboard.writeText(text);
 });
 
 // --- IPC: MCP bridge ---
@@ -415,6 +424,10 @@ ipcMain.handle('get-projects', (_event, showArchived) => {
       return [];
     }
 
+    // Pick up folders changed while the app was closed, or never indexed by an
+    // older build, so sessions/worktrees don't silently go missing. Stat-gated,
+    // so it's cheap when nothing has changed.
+    reconcileCacheFromFilesystem();
     return buildProjectsFromCache(showArchived);
   } catch (err) {
     console.error('Error listing projects:', err);
@@ -667,8 +680,10 @@ ipcMain.handle('get-memories', () => {
         if (projectPath && hiddenProjects.has(projectPath)) continue;
 
         // Use same 2-deep short path as Sessions tab (e.g. "dev/MyClaude")
+        // Splits on both separators — `cwd` is backslash-separated on Windows,
+        // where splitting on '/' alone left the whole path as one segment.
         const shortName = projectPath
-          ? projectPath.split('/').filter(Boolean).slice(-2).join('/')
+          ? projectPath.split(/[\\/]/).filter(Boolean).slice(-2).join('/')
           : folderToShortPath(folder);
         const files = [];
         const seenPaths = new Set();
@@ -981,7 +996,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
 
   if (!isPlainTerminal) {
     // Snapshot existing .jsonl files before spawning (for new session + fork/plan detection)
-    projectFolder = projectPath.replace(/[/_]/g, '-').replace(/^-/, '-');
+    projectFolder = encodeProjectPath(projectPath);
     const claudeProjectDir = path.join(PROJECTS_DIR, projectFolder);
     if (fs.existsSync(claudeProjectDir)) {
       try {
@@ -1051,7 +1066,13 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         } else if (sessionOptions.permissionMode) {
           claudeArgs.push('--permission-mode', String(sessionOptions.permissionMode));
         }
-        if (sessionOptions.worktree) {
+        // --worktree only applies when STARTING a session — it creates a fresh
+        // isolated git worktree. Resuming (isNew === false) must reuse the
+        // session's existing directory, so ignore the worktree option on resume
+        // regardless of which call site supplied it (sidebar click, schedule
+        // creator, fork, …). Otherwise a resume tries to spin up a new worktree
+        // and fails to attach.
+        if (isNew && sessionOptions.worktree) {
           claudeArgs.push('--worktree');
           if (sessionOptions.worktreeName) {
             claudeArgs.push(String(sessionOptions.worktreeName));

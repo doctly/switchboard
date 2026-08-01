@@ -29,7 +29,7 @@ function buildSlugGroup(slug, sessions) {
     const bTime = lastActivityTime.get(b.sessionId) || new Date(b.modified);
     return bTime > aTime ? b : a;
   });
-  const displayName = cleanDisplayName(mostRecent.name || mostRecent.summary || slug);
+  const displayName = cleanDisplayName(mostRecent.name || mostRecent.aiTitle || mostRecent.summary || slug);
   const mostRecentTime = lastActivityTime.get(mostRecent.sessionId) || new Date(mostRecent.modified);
   const timeStr = formatDate(mostRecentTime);
 
@@ -284,7 +284,7 @@ function renderProjects(projects, resort) {
     const header = document.createElement('div');
     header.className = 'project-header';
     header.id = 'ph-' + fId;
-    const shortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
+    const shortName = shortProjectPath(project.projectPath);
     header.innerHTML = `<span class="arrow">&#9660;</span> <span class="project-name">${shortName}</span>`;
 
     const scheduleBtn = document.createElement('button');
@@ -460,7 +460,7 @@ function rebindSidebarEvents(projects) {
         e.stopPropagation();
         const sessions = project.sessions.filter(s => !s.archived);
         if (sessions.length === 0) return;
-        const shortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
+        const shortName = shortProjectPath(project.projectPath);
         if (!confirm(`Archive all ${sessions.length} session${sessions.length > 1 ? 's' : ''} in ${shortName}?`)) return;
         for (const s of sessions) {
           if (activePtyIds.has(s.sessionId)) {
@@ -654,7 +654,7 @@ function buildSessionItem(session) {
 
   const modified = lastActivityTime.get(session.sessionId) || new Date(session.modified);
   const timeStr = formatDate(modified);
-  const displayName = cleanDisplayName(session.name || session.summary);
+  const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary);
 
   const row = document.createElement('div');
   row.className = 'session-row';
@@ -746,7 +746,7 @@ function startRename(summaryEl, session) {
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'session-rename-input';
-  input.value = session.name || session.summary;
+  input.value = session.name || session.aiTitle || session.summary;
 
   summaryEl.replaceWith(input);
   input.focus();
@@ -754,13 +754,14 @@ function startRename(summaryEl, session) {
 
   const save = async () => {
     const newName = input.value.trim();
-    const nameToSave = (newName && newName !== session.summary) ? newName : null;
+    const fallback = session.aiTitle || session.summary;
+    const nameToSave = (newName && newName !== fallback) ? newName : null;
     await window.api.renameSession(session.sessionId, nameToSave);
     session.name = nameToSave;
 
     const newSummary = document.createElement('div');
     newSummary.className = 'session-summary';
-    newSummary.textContent = nameToSave || session.summary;
+    newSummary.textContent = nameToSave || fallback;
     newSummary.addEventListener('dblclick', (e) => {
       e.stopPropagation();
       startRename(newSummary, session);
@@ -775,7 +776,7 @@ function startRename(summaryEl, session) {
       input.removeEventListener('blur', save);
       const restored = document.createElement('div');
       restored.className = 'session-summary';
-      restored.textContent = session.name || session.summary;
+      restored.textContent = session.name || session.aiTitle || session.summary;
       restored.addEventListener('dblclick', (ev) => {
         ev.stopPropagation();
         startRename(restored, session);

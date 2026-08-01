@@ -559,7 +559,7 @@ async function showJsonlViewer(session) {
   terminalArea.style.display = 'none';
   jsonlViewer.style.display = 'flex';
 
-  const displayName = session.name || session.summary || session.sessionId;
+  const displayName = session.name || session.aiTitle || session.summary || session.sessionId;
   jsonlViewerTitle.textContent = displayName;
   jsonlViewerSessionId.textContent = session.sessionId;
   jsonlViewerBody.innerHTML = '';
