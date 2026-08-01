@@ -3,7 +3,7 @@ const fs = require('fs');
 const { Worker } = require('worker_threads');
 const { getFolderIndexMtimeMs } = require('./folder-index-state');
 const { deriveProjectPath } = require('./derive-project-path');
-const { readSessionFile } = require('./read-session-file');
+const { readSessionFile, enumerateSessionFiles, resolveJsonlPath } = require('./read-session-file');
 const { encodeProjectPath } = require('./encode-project-path');
 
 /**
@@ -46,13 +46,10 @@ function readFolderFromFilesystem(folder) {
   if (!projectPath) return { projectPath: null, sessions: [] };
   const sessions = [];
 
-  try {
-    const jsonlFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
-    for (const file of jsonlFiles) {
-      const s = readSessionFile(path.join(folderPath, file), folder, projectPath);
-      if (s) sessions.push(s);
-    }
-  } catch {}
+  for (const { filePath, parentSessionId } of enumerateSessionFiles(folderPath)) {
+    const s = readSessionFile(filePath, folder, projectPath, { parentSessionId });
+    if (s) sessions.push(s);
+  }
 
   return { projectPath, sessions };
 }
@@ -71,18 +68,17 @@ function refreshFolder(folder) {
     return;
   }
 
-  // Get what's currently cached for this folder
+  // Get what's currently cached for this folder.
+  // cachedMap: DB sessionId → { modified, filePath } so we can do mtime comparison
+  // even for subagents whose DB sessionId differs from the on-disk filename.
   const cachedSessions = getCachedByFolder(folder);
-  const cachedMap = new Map(); // sessionId → modified ISO string
+  const cachedMap = new Map(); // DB sessionId → { modified, filePath }
   for (const row of cachedSessions) {
-    cachedMap.set(row.sessionId, row.modified);
+    cachedMap.set(row.sessionId, {
+      modified: row.modified,
+      filePath: resolveJsonlPath(PROJECTS_DIR, row),
+    });
   }
-
-  // Scan current .jsonl files
-  let jsonlFiles;
-  try {
-    jsonlFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
-  } catch { return; }
 
   const currentIds = new Set();
   let changed = false;
@@ -93,22 +89,35 @@ function refreshFolder(folder) {
   const namesToSet = [];
   const sessionsToDelete = [];
 
-  for (const file of jsonlFiles) {
-    const filePath = path.join(folderPath, file);
-    const sessionId = path.basename(file, '.jsonl');
-    currentIds.add(sessionId);
-
-    // Check if file mtime changed
+  for (const { filePath, parentSessionId } of enumerateSessionFiles(folderPath)) {
+    // Check if file mtime changed.
+    // We need the DB sessionId to look up the cache, but we don't know it until after
+    // readSessionFile — for subagents it's sub:<parent>:<agentId>. Use the file path
+    // to find a matching cached entry instead.
     let fileMtime;
     try { fileMtime = fs.statSync(filePath).mtime.toISOString(); } catch { continue; }
 
-    if (cachedMap.has(sessionId) && cachedMap.get(sessionId) === fileMtime) {
+    // Find cached entry by file path (handles both top-level and subagent IDs)
+    let cachedEntry = null;
+    let cachedDbId = null;
+    for (const [dbId, entry] of cachedMap) {
+      if (entry.filePath === filePath) {
+        cachedEntry = entry;
+        cachedDbId = dbId;
+        break;
+      }
+    }
+
+    if (cachedDbId !== null) currentIds.add(cachedDbId);
+
+    if (cachedEntry && cachedEntry.modified === fileMtime) {
       continue; // unchanged, skip
     }
 
     // File is new or modified — re-read it
-    const s = readSessionFile(filePath, folder, projectPath);
+    const s = readSessionFile(filePath, folder, projectPath, { parentSessionId });
     if (s) {
+      currentIds.add(s.sessionId); // ensure we don't delete a newly-read subagent row
       sessionsToUpsert.push(s);
       // Title precedence: user rename (session_meta.name) > JSONL custom-title > JSONL ai-title.
       // Only customTitle (Claude /title) promotes to session_meta.name — AI titles must NEVER
@@ -211,6 +220,10 @@ function buildProjectsFromCache(showArchived) {
       projectPath: row.projectPath,
       slug: row.slug || null,
       aiTitle: row.aiTitle || null,
+      parentSessionId: row.parentSessionId || null,
+      agentId: row.agentId || null,
+      subagentType: row.subagentType || null,
+      description: row.description || null,
       name: meta?.name || null,
       starred: meta?.starred || 0,
       archived: meta?.archived || 0,
@@ -311,13 +324,24 @@ function sendStatus(text, type) {
   }
 }
 
-// --- Worker-based cache population (non-blocking) ---
-let populatingCache = false;
+// --- Worker-based cache population ---
+// Returns a Promise that resolves when the in-flight scan finishes. Concurrent
+// callers share the same Promise so the first get-projects after a migration
+// can await it instead of seeing an empty list.
+let populatePromise = null;
 
 function populateCacheViaWorker() {
-  if (populatingCache) return;
-  populatingCache = true;
+  if (populatePromise) return populatePromise;
   sendStatus('Scanning projects\u2026', 'active');
+
+  populatePromise = new Promise((resolve) => {
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      populatePromise = null;
+      resolve();
+    };
 
   const worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
     workerData: { projectsDir: PROJECTS_DIR },
@@ -333,7 +357,7 @@ function populateCacheViaWorker() {
     if (!msg.ok) {
       console.error('Worker scan error:', msg.error);
       sendStatus('Scan failed: ' + msg.error, 'error');
-      populatingCache = false;
+      settle();
       return;
     }
 
@@ -365,30 +389,28 @@ function populateCacheViaWorker() {
       setFolderMeta(folder, projectPath, indexMtimeMs);
     }
 
-    populatingCache = false;
     sendStatus(`Indexed ${sessionCount} sessions across ${msg.results.length} projects`, 'done');
     // Clear status after a few seconds
     setTimeout(() => sendStatus(''), 5000);
     notifyRendererProjectsChanged();
+    settle();
   });
 
   worker.on('error', (err) => {
     console.error('Worker error:', err);
     sendStatus('Worker error: ' + err.message, 'error');
-    populatingCache = false;
+    settle();
   });
 
   // If the worker exits abnormally (SIGSEGV, OOM, uncaught exception) without
   // sending a message, neither the 'message' nor 'error' handler will fire.
-  // Reset the flag here to prevent a permanent lockout where the session list
-  // stays empty because populateCacheViaWorker() returns immediately.
+  // Resolve here so awaiters aren't stuck forever and the next call can retry.
   worker.on('exit', (code) => {
-    if (populatingCache) {
-      populatingCache = false;
-      if (code !== 0) {
-        sendStatus('Scan worker exited unexpectedly', 'error');
-      }
+    if (!settled && code !== 0) {
+      sendStatus('Scan worker exited unexpectedly', 'error');
     }
+    settle();
+  });
   });
 }
 
