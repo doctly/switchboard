@@ -106,9 +106,24 @@
     "linux": {
       "target": [
         "AppImage",
-        "deb"
+        "deb",
+        "pacman"
       ],
+      "icon": "build/icons",
       "category": "Development"
+    },
+    "pacman": {
+      "packageName": "switchboard-doctly",
+      "artifactName": "switchboard-doctly-${version}.${ext}",
+      "depends": [
+        "gtk3",
+        "nss",
+        "libnotify",
+        "libxtst",
+        "libxss",
+        "xdg-utils",
+        "libsecret"
+      ]
     },
     "dmg": {
       "background": "build/dmg-background.png",

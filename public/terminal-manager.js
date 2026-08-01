@@ -13,7 +13,27 @@
 // Two layers needed:
 //   1. attachCustomKeyEventHandler returning false — blocks xterm's key pipeline (onKey/onData)
 //   2. preventDefault on capture-phase keydown — prevents browser inserting \n into textarea
-const isMac = window.api.platform === 'darwin';
+const isMac = typeof window !== 'undefined' && window.api && window.api.platform === 'darwin';
+
+// True when a keydown is being consumed by an IME (e.g. Korean/Japanese/Chinese)
+// to compose a character. Chromium reports keyCode 229 for such keydowns, and
+// sets isComposing while a composition is active. xterm's own _keyDown defers to
+// its composition helper in this state — but only if our custom handler lets the
+// event through (returns true) instead of intercepting it.
+function isImeComposing(e) {
+  return e.isComposing === true || e.keyCode === 229;
+}
+
+// Whether a Space keydown should be written straight to the PTY (the push-to-talk
+// key-repeat path from #22) rather than left to xterm. It must NOT fire during IME
+// composition: preventDefault-ing the Space there drops the in-progress syllable
+// (e.g. Korean "녕 " came out as " 녕" or lost the syllable entirely).
+function shouldSendSpaceDirectly(e) {
+  return e.key === ' '
+    && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey
+    && !isImeComposing(e);
+}
+
 function setupTerminalKeyBindings(terminal, container, getSessionId, { onFind } = {}) {
   terminal.attachCustomKeyEventHandler((e) => {
     // Cmd/Ctrl+F → open terminal search bar
@@ -76,7 +96,10 @@ function setupTerminalKeyBindings(terminal, container, getSessionId, { onFind } 
     // for key-repeat events. This fixes Claude Code's "Hold Space to record"
     // push-to-talk voice feature, which depends on rapid key-repeat characters
     // arriving at stdin to detect a held key.
-    if (e.key === ' ' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+    // Skips IME composition (isImeComposing): during Korean/Japanese/Chinese
+    // composition, Space commits the pending syllable, so it must fall through
+    // to xterm's composition helper instead of being sent raw.
+    if (shouldSendSpaceDirectly(e)) {
       if (e.type === 'keydown') {
         e.preventDefault();
         window.api.sendInput(getSessionId(), ' ');
@@ -179,6 +202,13 @@ function createTerminalEntry(session) {
     scrollback: 10000,
     convertEol: true,
     allowProposedApi: true,
+    // A TUI that turns on full mouse tracking (CSI ?1003h) makes xterm forward every
+    // drag to the application, so normal text selection is dead. Terminal.app and
+    // iTerm2 let you hold Option to override that; xterm.js requires opting in.
+    // Without this, selecting (and therefore copying) inside such a session is
+    // impossible on macOS and Cmd+C silently leaves the previous clipboard contents
+    // in place. Windows/Linux get the same escape hatch via Shift, which needs no flag.
+    macOptionClickForcesSelection: true,
     linkHandler: {
       activate: (_event, uri) => {
         if (uri.startsWith('file://') && typeof openFileInPanel === 'function') {
@@ -383,4 +413,10 @@ function setupDragAndDrop(container, getSessionId) {
     const paths = Array.from(files).map(f => shellEscape(window.api.getPathForFile(f)));
     window.api.sendInput(getSessionId(), paths.join(' '));
   });
+}
+
+// Expose pure key-handling predicates to Node for unit testing. No-op in the
+// browser, where this file is loaded as a plain <script> and `module` is undefined.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { isImeComposing, shouldSendSpaceDirectly };
 }

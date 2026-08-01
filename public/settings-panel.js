@@ -31,7 +31,7 @@
     const globalSettings = isProject ? ((await window.api.getSetting('global')) || {}) : {};
 
     const shortName = isProject
-      ? projectPath.split('/').filter(Boolean).slice(-2).join('/')
+      ? shortProjectPath(projectPath)
       : 'Global';
 
     settingsViewerTitle.textContent = (isProject ? 'Project Settings — ' : 'Global Settings — ') + shortName;

@@ -198,7 +198,7 @@ async function showNewSessionDialog(project) {
   }
 
   dialog.innerHTML = `
-    <h3>New Session — ${escapeHtml(project.projectPath.split('/').filter(Boolean).slice(-2).join('/'))}</h3>
+    <h3>New Session — ${escapeHtml(shortProjectPath(project.projectPath))}</h3>
     <div class="settings-field">
       <div class="settings-label">Permission Mode</div>
       <div class="permission-grid" id="nsd-mode-grid">${renderModeGrid()}</div>

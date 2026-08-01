@@ -49,6 +49,10 @@ jobs:
       - name: Install setuptools (node-gyp distutils fix)
         run: python -m pip install setuptools
 
+      - name: Install pacman build tooling (Linux)
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools
+
       - name: Install dependencies
         run: npm ci
 
@@ -78,6 +82,7 @@ jobs:
             dist/*.exe.blockmap
             dist/*.AppImage
             dist/*.deb
+            dist/*.pacman
             dist/latest*.yml
           if-no-files-found: ignore
 
