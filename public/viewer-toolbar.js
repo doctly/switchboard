@@ -40,7 +40,7 @@ function flashButtonText(btn, text, duration = 1200) {
 function toggleMarkdownPreview({ editorEl, previewEl, toggleBtn, editorView, isPreview, storageKey }) {
   if (!isPreview) {
     const content = editorView ? editorView.state.doc.toString() : '';
-    previewEl.innerHTML = window.marked.parse(content);
+    previewEl.innerHTML = DOMPurify.sanitize(window.marked.parse(content));
     editorEl.style.display = 'none';
     previewEl.style.display = 'block';
     toggleBtn.classList.add('active');
