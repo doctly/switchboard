@@ -49,7 +49,11 @@ db.exec(`
     modified TEXT,
     messageCount INTEGER DEFAULT 0,
     slug TEXT,
-    aiTitle TEXT
+    aiTitle TEXT,
+    parentSessionId TEXT,
+    agentId TEXT,
+    subagentType TEXT,
+    description TEXT
   )
 `);
 
@@ -96,6 +100,20 @@ const migrations = [
   // remains until the user renames manually, and only future indexes are clean.
   (db) => {
     try { db.exec('ALTER TABLE session_cache ADD COLUMN aiTitle TEXT'); } catch {}
+    try { db.exec('DELETE FROM session_cache'); } catch {}
+    try { db.exec('DELETE FROM cache_meta'); } catch {}
+  },
+  // v4: Add subagent columns. Subagent transcripts live under
+  // <folder>/<parentSessionId>/subagents/agent-<agentId>.jsonl alongside a
+  // .meta.json sidecar holding { agentType, description }. We surface them as
+  // first-class rows in session_cache, keyed by sessionId = "sub:<parent>:<agentId>".
+  // Clear cache so subagent rows get picked up on first re-index.
+  (db) => {
+    try { db.exec('ALTER TABLE session_cache ADD COLUMN parentSessionId TEXT'); } catch {}
+    try { db.exec('ALTER TABLE session_cache ADD COLUMN agentId TEXT'); } catch {}
+    try { db.exec('ALTER TABLE session_cache ADD COLUMN subagentType TEXT'); } catch {}
+    try { db.exec('ALTER TABLE session_cache ADD COLUMN description TEXT'); } catch {}
+    try { db.exec('CREATE INDEX IF NOT EXISTS idx_session_cache_parent ON session_cache(parentSessionId)'); } catch {}
     try { db.exec('DELETE FROM session_cache'); } catch {}
     try { db.exec('DELETE FROM cache_meta'); } catch {}
   },
@@ -152,16 +170,19 @@ const stmts = {
   cacheCount: db.prepare('SELECT COUNT(*) as cnt FROM session_cache'),
   cacheGetAll: db.prepare('SELECT * FROM session_cache'),
   cacheUpsert: db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, parentSessionId, agentId, subagentType, description)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
       folder = excluded.folder, projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
       created = excluded.created, modified = excluded.modified,
       messageCount = excluded.messageCount, slug = excluded.slug,
-      aiTitle = excluded.aiTitle
+      aiTitle = excluded.aiTitle,
+      parentSessionId = excluded.parentSessionId, agentId = excluded.agentId,
+      subagentType = excluded.subagentType, description = excluded.description
   `),
-  cacheGetByFolder: db.prepare('SELECT sessionId, modified FROM session_cache WHERE folder = ?'),
+  cacheGetByParent: db.prepare('SELECT * FROM session_cache WHERE parentSessionId = ? ORDER BY created ASC'),
+  cacheGetByFolder: db.prepare('SELECT sessionId, modified, parentSessionId, agentId FROM session_cache WHERE folder = ?'),
   cacheGetFolder: db.prepare('SELECT folder FROM session_cache WHERE sessionId = ?'),
   cacheGetSession: db.prepare('SELECT * FROM session_cache WHERE sessionId = ?'),
   cacheDeleteSession: db.prepare('DELETE FROM session_cache WHERE sessionId = ?'),
@@ -246,10 +267,16 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
     stmts.cacheUpsert.run(
       s.sessionId, s.folder, s.projectPath, s.summary,
       s.firstPrompt, s.created, s.modified, s.messageCount || 0,
-      s.slug || null, s.aiTitle || null
+      s.slug || null, s.aiTitle || null,
+      s.parentSessionId || null, s.agentId || null,
+      s.subagentType || null, s.description || null
     );
   }
 });
+
+function getCachedByParent(parentSessionId) {
+  return stmts.cacheGetByParent.all(parentSessionId);
+}
 
 function upsertCachedSessions(sessions) {
   upsertCachedSessionsBatch(sessions);
@@ -376,7 +403,7 @@ function closeDb() {
 
 module.exports = {
   getMeta, getAllMeta, setName, toggleStar, setArchived,
-  isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, upsertCachedSessions,
+  isCachePopulated, getAllCached, getCachedByFolder, getCachedByParent, getCachedFolder, getCachedSession, upsertCachedSessions,
   deleteCachedSession, deleteCachedFolder,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,

@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { getFolderIndexMtimeMs } = require('../folder-index-state');
 const { deriveProjectPath } = require('../derive-project-path');
-const { readSessionFile } = require('../read-session-file');
+const { readSessionFile, enumerateSessionFiles } = require('../read-session-file');
 
 const PROJECTS_DIR = workerData.projectsDir;
 
@@ -14,13 +14,12 @@ function readFolderFromFilesystem(folder) {
   const sessions = [];
   const indexMtimeMs = getFolderIndexMtimeMs(folderPath);
 
-  try {
-    const jsonlFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
-    for (const file of jsonlFiles) {
-      const s = readSessionFile(path.join(folderPath, file), folder, projectPath);
+  for (const { filePath, parentSessionId } of enumerateSessionFiles(folderPath)) {
+    try {
+      const s = readSessionFile(filePath, folder, projectPath, { parentSessionId });
       if (s) sessions.push(s);
-    }
-  } catch {}
+    } catch {}
+  }
 
   return { folder, projectPath, sessions, indexMtimeMs };
 }

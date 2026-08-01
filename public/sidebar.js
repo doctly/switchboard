@@ -17,6 +17,82 @@ function folderId(projectPath) {
   return 'project-' + projectPath.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
+// --- Subagent localStorage helpers ---
+function getExpandedSubagents() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem('expandedSubagents') || '[]'));
+  } catch (e) { return new Set(); }
+}
+
+function saveExpandedSubagents(set) {
+  try {
+    localStorage.setItem('expandedSubagents', JSON.stringify([...set]));
+  } catch (e) {}
+}
+
+// Subagent type → accent color (background / border)
+const SUBAGENT_TYPE_COLORS = {
+  explore:   { bg: 'rgba(62,207,130,0.18)',  border: '#3ecf82' },
+  plan:      { bg: 'rgba(128,136,255,0.20)', border: '#8088ff' },
+  implement: { bg: 'rgba(255,170,64,0.18)',  border: '#ffaa40' },
+  review:    { bg: 'rgba(96,190,240,0.18)',  border: '#60bef0' },
+  test:      { bg: 'rgba(255,100,100,0.18)', border: '#ff6464' },
+  default:   { bg: 'rgba(160,160,180,0.15)', border: '#a0a0b4' },
+};
+
+function subagentTypeColor(type) {
+  const key = (type || '').toLowerCase();
+  return SUBAGENT_TYPE_COLORS[key] || SUBAGENT_TYPE_COLORS.default;
+}
+
+function buildSubagentItem(session) {
+  const item = document.createElement('div');
+  item.className = 'sidebar-subagent session-item';
+  item.id = 'si-' + session.sessionId;
+  if (activePtyIds.has(session.sessionId)) item.classList.add('has-running-pty');
+  if (attentionSessions.has(session.sessionId)) item.classList.add('needs-attention');
+  if (responseReadySessions.has(session.sessionId)) item.classList.add('response-ready');
+  if (sessionBusyState.get(session.sessionId)) item.classList.add('cli-busy');
+  item.dataset.sessionId = session.sessionId;
+  item.dataset.subagent = '1';
+
+  const { bg, border } = subagentTypeColor(session.subagentType);
+  item.style.borderLeftColor = border;
+
+  const row = document.createElement('div');
+  row.className = 'session-row';
+
+  const typePill = document.createElement('span');
+  typePill.className = 'sidebar-subagent-type';
+  typePill.textContent = session.subagentType || 'sub';
+  typePill.style.background = bg;
+  typePill.style.borderColor = border;
+
+  const dot = document.createElement('span');
+  dot.className = 'session-status-dot' + (activePtyIds.has(session.sessionId) ? ' running' : '');
+
+  const info = document.createElement('div');
+  info.className = 'session-info';
+
+  const summaryEl = document.createElement('div');
+  summaryEl.className = 'session-summary';
+  summaryEl.textContent = session.description || session.summary || session.aiTitle || session.sessionId;
+
+  const metaEl = document.createElement('div');
+  metaEl.className = 'session-meta';
+  metaEl.textContent = session.messageCount ? session.messageCount + ' msgs' : '';
+
+  info.appendChild(summaryEl);
+  info.appendChild(metaEl);
+
+  row.appendChild(typePill);
+  row.appendChild(dot);
+  row.appendChild(info);
+  item.appendChild(row);
+
+  return item;
+}
+
 function buildSlugGroup(slug, sessions) {
   const group = document.createElement('div');
   const id = slugId(slug);
@@ -146,10 +222,25 @@ function renderProjects(projects, resort) {
 
   const newSortedOrder = [];
 
+  // Build subagent child index from all sessions in this project: parentSessionId → [sessions]
+  function buildSubagentIndex(sessions) {
+    const index = new Map();
+    for (const s of sessions) {
+      if (s.parentSessionId) {
+        if (!index.has(s.parentSessionId)) index.set(s.parentSessionId, []);
+        index.get(s.parentSessionId).push(s);
+      }
+    }
+    return index;
+  }
+
   // Process a project's sessions: filter, sort, slug-group, order, and truncate.
   // Returns { filtered, visible, older, sortOrderEntry } or null if project should be skipped.
   function processProjectSessions(project, resort) {
-    let filtered = project.sessions;
+    // Separate subagents from top-level sessions
+    const allSessions = project.sessions;
+    const subagentIndex = buildSubagentIndex(allSessions);
+    let filtered = allSessions.filter(s => !s.parentSessionId);
     if (showStarredOnly) filtered = filtered.filter(s => s.starred);
     if (showRunningOnly) filtered = filtered.filter(s => activePtyIds.has(s.sessionId));
     if (showTodayOnly) {
@@ -239,17 +330,61 @@ function renderProjects(projects, resort) {
     }
 
     return {
-      filtered, visible, older,
+      filtered, visible, older, subagentIndex,
       sortOrderEntry: { projectPath: project.projectPath, itemIds: allItems.map(item => item.element.id) },
     };
   }
 
+  // Append subagent children beneath a session item element.
+  function appendSubagentChildren(parentEl, parentSessionId, subagentIndex) {
+    const children = subagentIndex && subagentIndex.get(parentSessionId);
+    if (!children || children.length === 0) return;
+
+    const expandedSet = getExpandedSubagents();
+    const caretId = 'sub-caret-' + parentSessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const isExpanded = expandedSet.has(parentSessionId);
+
+    // Caret/toggle row attached to parent item
+    const caret = document.createElement('div');
+    caret.className = 'sidebar-children-caret';
+    caret.id = caretId;
+    if (isExpanded) caret.classList.add('expanded');
+    caret.innerHTML = `<span class="caret-arrow">&#9654;</span> ${children.length} subagent${children.length !== 1 ? 's' : ''}`;
+
+    const childrenContainer = document.createElement('div');
+    childrenContainer.className = 'sidebar-subagents-container';
+    childrenContainer.id = 'subc-' + parentSessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    childrenContainer.style.display = isExpanded ? '' : 'none';
+
+    for (const child of children) {
+      childrenContainer.appendChild(buildSubagentItem(child));
+    }
+
+    caret.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = childrenContainer.style.display !== 'none';
+      childrenContainer.style.display = open ? 'none' : '';
+      caret.classList.toggle('expanded', !open);
+      const set = getExpandedSubagents();
+      if (open) { set.delete(parentSessionId); } else { set.add(parentSessionId); }
+      saveExpandedSubagents(set);
+    });
+
+    parentEl.after(caret);
+    caret.after(childrenContainer);
+  }
+
   // Build the sessions list DOM (shared between projects and worktrees)
-  function buildSessionsList(fId, visible, older) {
+  function buildSessionsList(fId, visible, older, subagentIndex) {
     const sessionsList = document.createElement('div');
     sessionsList.className = 'project-sessions';
     sessionsList.id = 'sessions-' + fId;
-    for (const item of visible) sessionsList.appendChild(item.element);
+    for (const item of visible) {
+      sessionsList.appendChild(item.element);
+      // Attach subagent children for top-level sessions
+      const sid = item.element.dataset && item.element.dataset.sessionId;
+      if (sid) appendSubagentChildren(item.element, sid, subagentIndex);
+    }
     if (older.length > 0) {
       const moreBtn = document.createElement('div');
       moreBtn.className = 'sessions-more-toggle';
@@ -259,10 +394,38 @@ function renderProjects(projects, resort) {
       olderList.className = 'sessions-older';
       olderList.id = 'older-list-' + fId;
       olderList.style.display = 'none';
-      for (const item of older) olderList.appendChild(item.element);
+      for (const item of older) {
+        olderList.appendChild(item.element);
+        const sid = item.element.dataset && item.element.dataset.sessionId;
+        if (sid) appendSubagentChildren(item.element, sid, subagentIndex);
+      }
       sessionsList.appendChild(moreBtn);
       sessionsList.appendChild(olderList);
     }
+
+    // Orphan subagents: children whose parentSessionId has no top-level session in this project
+    if (subagentIndex) {
+      const allTopLevelIds = new Set([...visible, ...older].map(i => i.element.dataset && i.element.dataset.sessionId).filter(Boolean));
+      const orphans = [];
+      for (const [parentId, kids] of subagentIndex) {
+        if (!allTopLevelIds.has(parentId)) {
+          for (const k of kids) orphans.push(k);
+        }
+      }
+      if (orphans.length > 0) {
+        const orphanGroup = document.createElement('div');
+        orphanGroup.className = 'sidebar-orphan-subagents';
+        const orphanLabel = document.createElement('div');
+        orphanLabel.className = 'sidebar-orphan-label';
+        orphanLabel.textContent = 'Orphan subagents';
+        orphanGroup.appendChild(orphanLabel);
+        for (const orphan of orphans) {
+          orphanGroup.appendChild(buildSubagentItem(orphan));
+        }
+        sessionsList.appendChild(orphanGroup);
+      }
+    }
+
     return sessionsList;
   }
 
@@ -311,7 +474,7 @@ function renderProjects(projects, resort) {
     newBtn.title = 'New session';
     header.appendChild(newBtn);
 
-    const sessionsList = buildSessionsList(fId, visible, older);
+    const sessionsList = buildSessionsList(fId, visible, older, subagentIndex);
 
     // Auto-collapse if most recent session is older than threshold, or project matched with no sessions
     if (project._projectMatchedOnly) {
@@ -357,7 +520,7 @@ function renderProjects(projects, resort) {
       wtNewBtn.title = 'New session in worktree';
       wtHeader.appendChild(wtNewBtn);
 
-      const wtSessionsList = buildSessionsList(wtFId, wtResult.visible, wtResult.older);
+      const wtSessionsList = buildSessionsList(wtFId, wtResult.visible, wtResult.older, wtResult.subagentIndex);
       wtSessionsList.className = 'worktree-sessions';
 
       // Auto-collapse worktree if stale
@@ -401,6 +564,20 @@ function renderProjects(projects, resort) {
           toEl.classList.add('collapsed');
         } else {
           toEl.classList.remove('collapsed');
+        }
+      }
+      if (fromEl.classList.contains('sidebar-children-caret')) {
+        if (fromEl.classList.contains('expanded')) {
+          toEl.classList.add('expanded');
+        } else {
+          toEl.classList.remove('expanded');
+        }
+      }
+      if (fromEl.classList.contains('sidebar-subagents-container')) {
+        if (fromEl.style.display !== 'none') {
+          toEl.style.display = '';
+        } else {
+          toEl.style.display = 'none';
         }
       }
       if (fromEl.classList.contains('sessions-older') && fromEl.style.display !== 'none') {
@@ -559,6 +736,9 @@ function rebindSidebarEvents(projects) {
     if (!session) return;
 
     item.onclick = () => openSession(session);
+
+    // Subagent items are read-only: skip pin, rename, stop, fork, archive, jsonl, launchConfig
+    if (item.dataset.subagent) return;
 
     const pin = item.querySelector('.session-pin');
     if (pin) {
