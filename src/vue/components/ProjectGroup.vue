@@ -242,27 +242,31 @@ const allItems = computed(() => {
 
   for (const s of ungrouped) {
     const running = props.activePtyIds.has(s.sessionId);
-    items.push({ type: 'session', session: s, sortTime: new Date(s.modified).getTime(), pinned: !!s.starred, running });
+    const sortName = (s.name || s.summary || s.sessionId).toLowerCase();
+    const sortTime = new Date(s.modified).getTime();
+    items.push({ type: 'session', session: s, sortName, sortTime, pinned: !!s.starred, running });
   }
 
   for (const [slug, slugSessions] of slugMap) {
     if (slugSessions.length === 1) {
       const s = slugSessions[0];
-      items.push({ type: 'session', session: s, sortTime: new Date(s.modified).getTime(), pinned: !!s.starred, running: props.activePtyIds.has(s.sessionId) });
+      const sortName = (s.name || s.summary || s.sessionId).toLowerCase();
+      const sortTime = new Date(s.modified).getTime();
+      items.push({ type: 'session', session: s, sortName, sortTime, pinned: !!s.starred, running: props.activePtyIds.has(s.sessionId) });
     } else {
-      const mostRecentTime = Math.max(...slugSessions.map(s => new Date(s.modified).getTime()));
       const hasRunning = slugSessions.some(s => props.activePtyIds.has(s.sessionId));
       const hasPinned = slugSessions.some(s => s.starred);
-      items.push({ type: 'slug', slug, sessions: slugSessions, sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning });
+      const mostRecentTime = Math.max(...slugSessions.map(s => new Date(s.modified).getTime()));
+      items.push({ type: 'slug', slug, sessions: slugSessions, sortName: slug.toLowerCase(), sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning });
     }
   }
 
-  // Sort: running+pinned > running > pinned > recency
+  // Sort: running+pinned > running > pinned > alphabetical (stable, no reordering during active sessions)
   items.sort((a, b) => {
     const aPri = (a.pinned && a.running ? 3 : a.running ? 2 : a.pinned ? 1 : 0);
     const bPri = (b.pinned && b.running ? 3 : b.running ? 2 : b.pinned ? 1 : 0);
     if (aPri !== bPri) return bPri - aPri;
-    return b.sortTime - a.sortTime;
+    return a.sortName.localeCompare(b.sortName);
   });
 
   return items;

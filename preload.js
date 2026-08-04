@@ -97,6 +97,9 @@ contextBridge.exposeInMainWorld('api', {
   onProjectInfoUpdated: (callback) => {
     ipcRenderer.on('project-info-updated', (_event, path, data) => callback(path, data));
   },
+  onProjectInfoLoading: (callback) => {
+    ipcRenderer.on('project-info-loading', (_event, path) => callback(path));
+  },
   onStatusUpdate: (callback) => {
     ipcRenderer.on('status-update', (_event, text, type) => callback(text, type));
   },

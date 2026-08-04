@@ -5811,6 +5811,21 @@ body.hide-avatars .grid-card-avatar {
   min-width: 0;
 }
 
+.project-syncing-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+  flex-shrink: 0;
+  animation: project-sync-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes project-sync-pulse {
+  0%, 100% { opacity: 0.15; transform: scale(0.75); }
+  50%       { opacity: 0.8;  transform: scale(1); }
+}
+
 /* ── Sessions tab ───────────────────────────────────────────────── */
 .pv-active-sessions { display: flex; flex-direction: column; gap: 2px; }
 .pv-asession-row {

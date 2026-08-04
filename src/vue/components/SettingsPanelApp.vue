@@ -279,7 +279,7 @@
                     v-if="newVersion"
                     class="settings-update-link"
                     href="#"
-                    @click.prevent="window.api.openExternal('https://github.com/fortael/wootonpad/releases/latest')"
+                    @click.prevent="openReleasesPage"
                   >Download v{{ newVersion }} ↗</a>
                 </div>
               </div>
@@ -488,7 +488,7 @@ function close() {
 // ── Remove project ────────────────────────────────────────────────
 async function removeProject() {
   const shortName = projectPath.value?.split('/').filter(Boolean).slice(-2).join('/') || projectPath.value;
-  if (!confirm(`Hide project "${shortName}" from Switchboard?\n\nThis hides the project from the sidebar. Your session files are not deleted.`)) return;
+  if (!confirm(`Hide project "${shortName}" from WootonPad?\n\nThis hides the project from the sidebar. Your session files are not deleted.`)) return;
   await window.api.removeProject(projectPath.value);
   store.settingsOpen = false;
   if (typeof loadProjects === 'function') loadProjects();
@@ -496,6 +496,7 @@ async function removeProject() {
 
 // ── Updates ───────────────────────────────────────────────────────
 function checkUpdates() { window.api.updaterCheck(); }
+function openReleasesPage() { window.api.openExternal('https://github.com/fortael/wootonpad/releases/latest'); }
 
 // ── Lifecycle ─────────────────────────────────────────────────────
 onMounted(async () => {

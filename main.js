@@ -190,7 +190,7 @@ if (process.defaultApp && process.argv.length >= 2) {
 }
 
 function dispatchProjectOpen(filePath, continueSession) {
-  if (mainWindow && !mainWindow.isDestroyed()) {
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
     mainWindow.webContents.send('launch-project-session', filePath, continueSession);
@@ -454,6 +454,8 @@ ipcMain.handle('add-project', (_event, projectPath) => {
     // Immediately index the new folder so it's in cache before frontend renders
     refreshFolder(folder);
     notifyRendererProjectsChanged();
+    // Kick off du -sk once on add; subsequent refreshes use the long random TTL
+    cacheProjectSize(projectPath);
 
     return { ok: true, folder, projectPath };
   } catch (err) {
@@ -484,10 +486,17 @@ ipcMain.handle('remove-project', (_event, projectPath) => {
   }
 });
 
-// --- IPC: get-project-info (git branch/diff + docker compose, cached 1 min in SQLite) ---
+// --- IPC: get-project-info (git branch/diff + docker compose, cached with jittered TTL) ---
 const PROJECT_INFO_TTL_MS = 60 * 1000;
+// du -sk is expensive; cache with a random long TTL so projects don't all expire at once
+const SIZE_TTL_OPTIONS_MS = [3 * 3600000, 20 * 3600000, 24 * 3600000];
 
 const DOCKER_PATH = (process.env.PATH || '') + ':/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin';
+
+// ±30 s jitter so projects cached at the same time don't all expire simultaneously
+function infoJitter() {
+  return PROJECT_INFO_TTL_MS + (Math.random() * 60000 - 30000);
+}
 
 function fetchProjectInfo(projectPath) {
   const { exec } = require('child_process');
@@ -496,20 +505,15 @@ function fetchProjectInfo(projectPath) {
       resolve(err ? null : (stdout || '').trim());
     });
   });
-  const data = { branch: null, added: null, deleted: null, containers: null, sizeMb: null };
+  const data = { branch: null, added: null, deleted: null, containers: null };
   return Promise.all([
-    run(`du -sk "${projectPath}"`, { timeout: 15000 }),
     run('git rev-parse --abbrev-ref HEAD', { cwd: projectPath, timeout: 5000 }),
     run('git diff --shortstat HEAD', { cwd: projectPath, timeout: 5000 }),
     run('docker compose ps --format json', {
       cwd: projectPath, timeout: 8000,
       env: { ...process.env, PATH: DOCKER_PATH },
     }),
-  ]).then(([duOut, branch, stat, dockerOut]) => {
-    if (duOut) {
-      const kb = parseInt(duOut.split(/\s+/)[0]);
-      if (!isNaN(kb)) data.sizeMb = Math.round(kb / 1024);
-    }
+  ]).then(([branch, stat, dockerOut]) => {
     if (branch) data.branch = branch;
     if (stat) {
       const addM = stat.match(/(\d+) insertion/);
@@ -529,20 +533,58 @@ function fetchProjectInfo(projectPath) {
   });
 }
 
+// du -sk: only run on add-project and when the long-TTL size cache expires
+function fetchProjectSize(projectPath) {
+  const { exec } = require('child_process');
+  return new Promise((resolve) => {
+    exec(`du -sk "${projectPath}"`, { encoding: 'utf8', timeout: 15000 }, (err, stdout) => {
+      if (err || !stdout) return resolve(null);
+      const kb = parseInt((stdout || '').split(/\s+/)[0]);
+      resolve(isNaN(kb) ? null : Math.round(kb / 1024));
+    });
+  });
+}
+
+function cacheProjectSize(projectPath) {
+  fetchProjectSize(projectPath).then(sizeMb => {
+    if (sizeMb === null) return;
+    const ttl = SIZE_TTL_OPTIONS_MS[Math.floor(Math.random() * SIZE_TTL_OPTIONS_MS.length)];
+    setSetting('project-size:' + projectPath, { sizeMb, fetchedAt: Date.now(), ttl });
+  }).catch(() => {});
+}
+
 ipcMain.handle('get-project-info', (_event, projectPath) => {
   if (!projectPath || !fs.existsSync(projectPath)) return null;
   const cacheKey = 'project-info:' + projectPath;
   const cached = getSetting(cacheKey);
-  const fresh = cached && cached.fetchedAt && (Date.now() - cached.fetchedAt) < PROJECT_INFO_TTL_MS;
-  if (fresh) return cached.data;
-  // Return stale (or null on first visit), always refresh in background
-  fetchProjectInfo(projectPath).then(data => {
-    setSetting(cacheKey, { data, fetchedAt: Date.now() });
+  const cachedSize = getSetting('project-size:' + projectPath);
+
+  const gitFresh = cached && cached.fetchedAt && (Date.now() - cached.fetchedAt) < (cached.ttl || PROJECT_INFO_TTL_MS);
+  const sizeFresh = cachedSize && cachedSize.fetchedAt && (Date.now() - cachedSize.fetchedAt) < (cachedSize.ttl || SIZE_TTL_OPTIONS_MS[0]);
+  const sizeMb = cachedSize?.sizeMb ?? null;
+
+  if (!gitFresh) {
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('project-info-updated', projectPath, data);
+      mainWindow.webContents.send('project-info-loading', projectPath);
     }
-  }).catch(() => {});
-  return cached?.data || null;
+    fetchProjectInfo(projectPath).then(data => {
+      const merged = sizeMb !== null ? { ...data, sizeMb } : data;
+      setSetting(cacheKey, { data: merged, fetchedAt: Date.now(), ttl: infoJitter() });
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('project-info-updated', projectPath, merged);
+      }
+    }).catch(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('project-info-updated', projectPath, null);
+      }
+    });
+  }
+
+  // Refresh size in background if its long-TTL has expired
+  if (!sizeFresh) cacheProjectSize(projectPath);
+
+  const base = cached?.data ?? null;
+  return base && sizeMb !== null ? { ...base, sizeMb } : base;
 });
 
 // --- IPC: get-project-detail (full git log + docker details, no cache) ---
@@ -713,10 +755,10 @@ ipcMain.handle('git-pull', (_event, projectPath) => {
 });
 
 ipcMain.handle('git-commit', (_event, projectPath, message) => {
-  const { execSync } = require('child_process');
+  const { execFileSync } = require('child_process');
   try {
-    execSync('git add -A', { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
-    execSync(`git commit -m ${JSON.stringify(message)}`, { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+    execFileSync('git', ['add', '-A'], { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+    execFileSync('git', ['commit', '-m', message], { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
     return { ok: true };
   } catch (e) { return { ok: false, error: e.stderr || e.message }; }
 });
@@ -816,7 +858,8 @@ ipcMain.handle('git-generate-commit-msg', async (_event, projectPath, style = 's
       child.on('error', err => { clearTimeout(timer); reject(err); });
     });
     if (!msg) return { ok: false, error: 'No output from claude' };
-    return { ok: true, message: msg };
+    const clean = msg.replace(/^```[a-z]*\n?/, '').replace(/\n?```$/, '').trim();
+    return { ok: true, message: clean };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 

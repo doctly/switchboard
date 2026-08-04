@@ -32,7 +32,7 @@
           v-for="project in filteredProjects"
           :key="project.projectPath"
           class="session-item project-item"
-          :class="{ active: project.projectPath === activeProjectPath }"
+          :class="{ active: project.projectPath === activeProjectPath, syncing: loadingPaths.has(project.projectPath) }"
           @click="openProject(project)"
         >
           <div class="session-row">
@@ -41,6 +41,7 @@
               <div class="session-summary">
                 <span class="project-item-name">{{ projectName(project) }}</span>
                 <span v-if="projectInfo[project.projectPath]?.unpushedCount ?? project.unpushedCount" class="project-unpushed-badge">{{ projectInfo[project.projectPath]?.unpushedCount ?? project.unpushedCount }}</span>
+                <span v-if="loadingPaths.has(project.projectPath)" class="project-syncing-dot"></span>
               </div>
               <div class="session-subtitle" :title="project.projectPath">{{ project.projectPath }}</div>
               <div class="session-meta">{{ baseMeta(project) }}</div>
@@ -124,10 +125,27 @@ const searchQuery = ref('');
 const sortOrder = ref('name');
 const showContainers = ref(true);
 const projectInfo = reactive({});
+const loadingPaths = reactive(new Set());
 const activeProjectPath = ref(null);
 const sortOptions = [['name', 'Name'], ['changes', 'Changes']];
 
 let queueGen = 0;
+
+// Batch reactive updates into one rAF flush to avoid per-project re-renders
+let pendingInfoUpdates = {};
+let flushScheduled = false;
+function scheduleInfoFlush() {
+  if (flushScheduled) return;
+  flushScheduled = true;
+  requestAnimationFrame(() => {
+    flushScheduled = false;
+    for (const [path, info] of Object.entries(pendingInfoUpdates)) {
+      projectInfo[path] = projectInfo[path] ? { ...projectInfo[path], ...info } : info;
+      loadingPaths.delete(path);
+    }
+    pendingInfoUpdates = {};
+  });
+}
 
 const WORKTREE_RE = /\/\.claude\/worktrees\/[^/]+\/?$/;
 
@@ -195,17 +213,33 @@ async function runInfoQueue(gen, list) {
   for (const project of list) {
     if (queueGen !== gen) break;
     if (projectInfo[project.projectPath]) continue; // already loaded, skip
+    loadingPaths.add(project.projectPath);
     try {
       const info = await window.api.getProjectInfo(project.projectPath);
       if (queueGen !== gen) break;
-      if (info) projectInfo[project.projectPath] = info;
-    } catch {}
+      if (info) {
+        pendingInfoUpdates[project.projectPath] = info;
+        scheduleInfoFlush();
+      } else {
+        loadingPaths.delete(project.projectPath);
+      }
+    } catch {
+      loadingPaths.delete(project.projectPath);
+    }
   }
 }
 
 onMounted(() => {
+  window.api.onProjectInfoLoading?.((path) => {
+    loadingPaths.add(path);
+  });
   window.api.onProjectInfoUpdated?.((path, info) => {
-    if (info) projectInfo[path] = info;
+    if (info) {
+      pendingInfoUpdates[path] = info;
+      scheduleInfoFlush();
+    } else {
+      loadingPaths.delete(path);
+    }
   });
 });
 
@@ -217,7 +251,12 @@ defineExpose({
   },
   setSearch(q) { searchQuery.value = q || ''; },
   clearActive() { activeProjectPath.value = null; },
-  updateProjectInfo(path, info) { if (info) projectInfo[path] = { ...projectInfo[path], ...info }; },
+  updateProjectInfo(path, info) {
+    if (info) {
+      pendingInfoUpdates[path] = info;
+      scheduleInfoFlush();
+    }
+  },
 });
 
 const trashSvg = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>';

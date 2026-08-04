@@ -1,0 +1,17 @@
+
+.project-syncing-dot[data-v-7d18c5c1] {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+  flex-shrink: 0;
+  animation: project-sync-pulse-7d18c5c1 1.4s ease-in-out infinite;
+}
+@keyframes project-sync-pulse-7d18c5c1 {
+0%, 100% { opacity: 0.15; transform: scale(0.75);
+}
+50%       { opacity: 0.8;  transform: scale(1);
+}
+}
+/*$vite$:1*/

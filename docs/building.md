@@ -1,4 +1,4 @@
-# Building Switchboard from source
+# Building WootonPad from source
 
 No Apple Developer account or code-signing certificate is required. The build scripts handle ad-hoc signing automatically.
 
@@ -28,8 +28,8 @@ sudo dnf install gcc-c++ make python3      # Fedora/RHEL
 ## Build
 
 ```bash
-git clone https://github.com/doctly/switchboard.git
-cd switchboard
+git clone https://github.com/fortael/wootonpad.git
+cd wootonpad
 npm install
 ```
 
@@ -54,7 +54,7 @@ Output goes to the `dist/` folder.
 
 ### macOS
 
-The `.dmg` is in `dist/`. Open it, drag **Switchboard.app** to Applications.
+The `.dmg` is in `dist/`. Open it, drag **WootonPad.app** to Applications.
 
 On first launch macOS will block the app because it isn't notarized by Apple. To open it anyway:
 
@@ -62,8 +62,8 @@ On first launch macOS will block the app because it isn't notarized by Apple. To
 
 **Option B** — remove the quarantine flag, then open normally:
 ```bash
-xattr -cr /Applications/Switchboard.app
-open /Applications/Switchboard.app
+xattr -cr /Applications/WootonPad.app
+open /Applications/WootonPad.app
 ```
 
 **Option C** — after a blocked launch attempt: **System Settings → Privacy & Security → Open Anyway**.
@@ -72,11 +72,11 @@ open /Applications/Switchboard.app
 
 ```bash
 # AppImage
-chmod +x dist/Switchboard-*.AppImage
-./dist/Switchboard-*.AppImage
+chmod +x dist/WootonPad-*.AppImage
+./dist/WootonPad-*.AppImage
 
 # deb
-sudo dpkg -i dist/switchboard-*.deb
+sudo dpkg -i dist/wootonpad-*.deb
 ```
 
 ### Windows

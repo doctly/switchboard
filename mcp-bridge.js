@@ -129,7 +129,7 @@ function handleMessage(entry, raw, log) {
       return sendResult(entry, id, {
         protocolVersion: '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'Switchboard', version: '1.0.0' },
+        serverInfo: { name: 'WootonPad', version: '1.0.0' },
       });
 
     case 'tools/list':
@@ -328,7 +328,7 @@ async function startMcpServer(sessionId, workspaceFolders, mainWindow, log) {
   const lockData = JSON.stringify({
     pid: process.pid,
     workspaceFolders,
-    ideName: 'Switchboard',
+    ideName: 'WootonPad',
     transport: 'ws',
     runningInWindows: false,
     authToken,
@@ -463,7 +463,7 @@ function cleanStaleLockFiles(log) {
       const lockPath = path.join(IDE_DIR, file);
       try {
         const data = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
-        if (data.ideName === 'Switchboard' && data.pid === process.pid) {
+        if ((data.ideName === 'WootonPad' || data.ideName === 'Switchboard') && data.pid === process.pid) {
           // Our PID but we didn't start it — stale from crash
           fs.unlinkSync(lockPath);
           if (log) log.info(`[mcp] Cleaned stale lock file: ${file}`);
