@@ -10,7 +10,7 @@ window.vueStore = store;
 // These run synchronously during app.mount(), before any other script executes.
 window.vueSidebar = {
   store,
-  setProjects(projects) { store.projects = [...projects]; },
+  setProjects(projects) { store.projects = projects.map(p => ({ ...p })); },
   setActivePtyIds(ids) { store.activePtyIds = new Set(ids); },
   setActiveSession(id) { store.activeSessionId = id; },
   setBusy(sessionId, busy) {

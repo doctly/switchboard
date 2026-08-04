@@ -1089,12 +1089,20 @@ body { display: flex; flex-direction: column; }
   color: #8088ff;
 }
 
+.project-header.has-active-session {
+  background: linear-gradient(45deg, #111e1c, #17171b);
+}
+
+.project-header.has-active-session .arrow {
+  color: #4caf7d;
+}
+
 .project-header.collapsed .arrow {
   transform: rotate(-90deg);
 }
 
 .project-sessions {
-  padding: 0 0 8px;
+  padding: 0.5rem 0 0.5rem;
 }
 
 .project-header.collapsed + .project-sessions {

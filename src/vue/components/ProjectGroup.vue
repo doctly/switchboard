@@ -10,7 +10,7 @@
     </div>
 
     <!-- Project header -->
-    <div v-else class="project-header" :class="{ collapsed }" :id="'ph-' + folderId" @click.self="toggle">
+    <div v-else class="project-header" :class="{ collapsed, 'has-active-session': hasActiveSession }" :id="'ph-' + folderId" @click.self="toggle">
       <span class="arrow" @click.stop="toggle">&#9660;</span>
       <ProjectAvatar class="project-header-avatar" :project-path="project.projectPath" @click.stop="toggle" />
       <span class="project-name" @click.stop="toggle">{{ shortName }}</span>
@@ -183,6 +183,10 @@ const avatar = computed(() =>
 
 const shortName = computed(() =>
   props.project.projectPath.split('/').filter(Boolean).slice(-2).join('/')
+);
+
+const hasActiveSession = computed(() =>
+  !!props.activeSessionId && (props.project.sessions || []).some(s => s.sessionId === props.activeSessionId)
 );
 
 const worktreeName = computed(() => {
