@@ -1,4 +1,4 @@
-name: Release (Mac)
+name: Release
 
 on:
   push:
@@ -47,5 +47,34 @@ jobs:
 
       - name: Upload artifacts to GitHub Release
         run: gh release upload "${{ github.ref_name }}" dist/WootonPad-*-arm64.dmg dist/latest-mac.yml
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-win:
+    needs: test
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Bundle assets
+        run: npm run bundle:codemirror && npm run bundle:vue
+
+      # x64 only: the arm64 target needs the MSVC ARM64 toolset to cross-compile
+      # better-sqlite3. Drop --x64 to build both archs declared in package.json.
+      - name: Build Windows app
+        run: npx electron-builder --win --x64 --publish never
+
+      - name: Upload artifacts to GitHub Release
+        shell: bash
+        run: gh release upload "${{ github.ref_name }}" dist/*.exe dist/*.exe.blockmap dist/latest.yml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
