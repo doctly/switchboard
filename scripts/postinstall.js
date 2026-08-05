@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -25,7 +25,7 @@ if (process.platform !== 'win32') {
     const nodeModules = path.join(__dirname, '..', 'node_modules');
     findFiles(nodeModules, '.node').forEach(file => {
       try {
-        execSync(`codesign --sign - --force "${file}"`, { stdio: 'ignore' });
+        execFileSync('codesign', ['--sign', '-', '--force', file], { stdio: 'ignore' });
       } catch {}
     });
   } catch {}
@@ -48,10 +48,11 @@ function findFiles(dir, suffix) {
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
-      const full = path.join(dir, entry.name);
+      const safeName = entry.name.replace(/[\\/]/g, '');
+      const full = dir + path.sep + safeName;
       if (entry.isDirectory()) {
         results.push(...findFiles(full, suffix));
-      } else if (entry.name.endsWith(suffix)) {
+      } else if (safeName.endsWith(suffix)) {
         results.push(full);
       }
     }
