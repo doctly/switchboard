@@ -94,10 +94,20 @@ function setupCombinedDom() {
   window.setTimeout = (fn, delay) => { scheduled.push({ fn, delay }); return scheduled.length; };
   window.clearTimeout = () => {};
 
+  // Fully replace Date.now() so production's own real-clock reads (sidebar.js
+  // map.set(agentId, Date.now()), scheduleSubagentTtlTick's Date.now()) can
+  // never observe wall-clock jitter between statements. See
+  // .ai/contexts/subagent-observability.md.
+  let fakeNow = Date.parse('2026-05-22T10:00:00.000Z');
+  window.Date.now = () => fakeNow;
+
   return {
     window,
     document: window.document,
     scheduled,
+    now() { return fakeNow; },
+    setNow(ms) { fakeNow = ms; },
+    advanceTime(ms) { fakeNow += ms; },
     runScheduled() {
       const pending = scheduled.splice(0, scheduled.length);
       for (const { fn } of pending) fn();
@@ -111,15 +121,23 @@ const PARENT = 'parent-1';
 const AGENT = 'agent-1';
 const AGENT2 = 'agent-2';
 const TTL_MS = 60000;
+// sidebar.js/grid-view.js compute delay as `oldest + TTL_MS + 1 - now()`: the
+// +1 keeps the re-arm strictly after the deadline (see the boundary test).
+const ARM_GRACE_MS = 1;
 
-/** Every armed timer must be due at the entry's deadline, not on a poll. */
+/**
+ * Every armed timer must be due at the entry's deadline, not on a poll.
+ * The clock is fully injected (setupCombinedDom), so `delay` is deterministic
+ * integer arithmetic, not a wall-clock sample — callers pass the exact
+ * expected value, with no slack for OS scheduling jitter.
+ */
 function assertArmedAt(ctx, expected, what) {
   assert.ok(ctx.scheduled.length > 0, `expected an armed timer (${what})`);
   for (const { delay } of ctx.scheduled) {
     assert.ok(Number.isFinite(delay) && delay >= 1,
       `${what}: a tick must never be armed at ${delay} — a non-positive delay spins on setTimeout(0)`);
-    assert.ok(Math.abs(delay - expected) <= 50,
-      `${what}: expected a wakeup ~${expected}ms away (the entry's deadline), got ${delay}ms`);
+    assert.equal(delay, expected,
+      `${what}: expected a wakeup exactly ${expected}ms away (the entry's deadline), got ${delay}ms`);
   }
 }
 
@@ -156,12 +174,11 @@ test('sidebar: a stale subagent is evicted by the TTL tick with no render in bet
     assert.ok(row, 'the subagent row must be in the DOM');
     assert.ok(row.classList.contains('running'), 'the spawn lights the row');
     assert.equal(ctx.scheduled.length, 2, 'each view arms its own TTL timer on the spawn');
-    assertArmedAt(ctx, TTL_MS, 'fresh spawn');
+    assertArmedAt(ctx, TTL_MS + ARM_GRACE_MS, 'fresh spawn');
 
     // The subagent goes silent: no completion event, no heartbeat, and — the
     // point of the test — no render to piggyback the prune on.
-    const t0 = ctx.window.Date.now();
-    ctx.window.Date.now = () => t0 + 61000;
+    ctx.advanceTime(61000);
     ctx.runScheduled();
 
     assert.equal(row.classList.contains('running'), false,
@@ -191,10 +208,9 @@ test('grid: a stale subagent pill is removed by the TTL tick with no card rebuil
     const card = ctx.document.querySelector('.grid-card[data-session-id="' + PARENT + '"]');
     assert.equal(card.querySelectorAll('.grid-subagent-pill').length, 1, 'the pill renders on spawn');
     assert.equal(ctx.scheduled.length, 2, 'each view arms its own TTL timer on the spawn');
-    assertArmedAt(ctx, TTL_MS, 'fresh spawn');
+    assertArmedAt(ctx, TTL_MS + ARM_GRACE_MS, 'fresh spawn');
 
-    const t0 = ctx.window.Date.now();
-    ctx.window.Date.now = () => t0 + 61000;
+    ctx.advanceTime(61000);
     ctx.runScheduled();
 
     assert.equal(card.querySelectorAll('.grid-subagent-pill').length, 0,
@@ -210,7 +226,7 @@ test('the TTL tick re-arms while an agent is live and stops once the map is empt
     ctx.window.renderProjects([sampleProject()], true);
     ctx.emitSubagentSpawned({ parentSessionId: PARENT, agentId: AGENT, subagentType: 'explore' });
     assert.equal(ctx.scheduled.length, 2);
-    assertArmedAt(ctx, TTL_MS, 'fresh spawn');
+    assertArmedAt(ctx, TTL_MS + ARM_GRACE_MS, 'fresh spawn');
 
     // Fires while the agent is still within its TTL: nothing to prune, but the
     // timer must re-arm so the eviction still happens later.
@@ -218,10 +234,9 @@ test('the TTL tick re-arms while an agent is live and stops once the map is empt
     const row = ctx.document.getElementById('si-sub:' + PARENT + ':' + AGENT);
     assert.ok(row.classList.contains('running'), 'a fresh agent must survive the tick');
     assert.equal(ctx.scheduled.length, 2, 'the tick must re-arm while an agent is tracked');
-    assertArmedAt(ctx, TTL_MS, 're-arm for an agent still inside its TTL');
+    assertArmedAt(ctx, TTL_MS + ARM_GRACE_MS, 're-arm for an agent still inside its TTL');
 
-    const t0 = ctx.window.Date.now();
-    ctx.window.Date.now = () => t0 + 61000;
+    ctx.advanceTime(61000);
     ctx.runScheduled();
     assert.equal(row.classList.contains('running'), false);
     assert.equal(ctx.scheduled.length, 0, 'an empty map must leave no timer running');
@@ -238,23 +253,23 @@ test('two agents share one timer per view, re-armed at the survivor\'s own deadl
   const ctx = setupCombinedDom();
   try {
     ctx.window.renderProjects([sampleProject()], true);
-    const t0 = ctx.window.Date.now();
+    const t0 = ctx.now();
 
     ctx.emitSubagentSpawned({ parentSessionId: PARENT, agentId: AGENT, subagentType: 'explore' });
     assert.equal(ctx.scheduled.length, 2, 'one timer per view');
 
-    ctx.window.Date.now = () => t0 + 30000;
+    ctx.setNow(t0 + 30000);
     ctx.emitSubagentSpawned({ parentSessionId: PARENT, agentId: AGENT2, subagentType: 'plan' });
     assert.equal(ctx.scheduled.length, 2, 'a second agent must not arm a second timer per view');
-    assertArmedAt(ctx, TTL_MS, 'still armed on the older agent');
+    assertArmedAt(ctx, TTL_MS + ARM_GRACE_MS, 'still armed on the older agent');
 
     // The older agent's deadline: it is pruned, the younger one survives.
-    ctx.window.Date.now = () => t0 + TTL_MS + 1000;
+    ctx.setNow(t0 + TTL_MS + 1000);
     ctx.runScheduled();
 
     assert.equal(ctx.document.getElementById('si-sub:' + PARENT + ':' + AGENT).classList.contains('running'),
       false, 'the older agent is evicted');
-    assertArmedAt(ctx, 30000 - 1000, "re-armed at the survivor's remaining TTL");
+    assertArmedAt(ctx, 30000 - 1000 + ARM_GRACE_MS, "re-armed at the survivor's remaining TTL");
   } finally {
     ctx.destroy();
   }
@@ -267,15 +282,15 @@ test('a tick that fires exactly on the deadline still makes progress', () => {
   const ctx = setupCombinedDom();
   try {
     ctx.window.renderProjects([sampleProject()], true);
-    const t0 = ctx.window.Date.now();
+    const t0 = ctx.now();
     ctx.emitSubagentSpawned({ parentSessionId: PARENT, agentId: AGENT, subagentType: 'explore' });
 
-    ctx.window.Date.now = () => t0 + TTL_MS; // exactly on the cutoff
+    ctx.setNow(t0 + TTL_MS); // exactly on the cutoff
     ctx.runScheduled();
 
     assert.ok(ctx.document.getElementById('si-sub:' + PARENT + ':' + AGENT).classList.contains('running'),
       'an entry exactly on the cutoff is not stale yet');
-    assertArmedAt(ctx, 1, 'boundary re-arm');
+    assertArmedAt(ctx, ARM_GRACE_MS, 'boundary re-arm');
   } finally {
     ctx.destroy();
   }
