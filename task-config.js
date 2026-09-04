@@ -261,11 +261,15 @@ function worktreeParentPath(workspaceFolder) {
   return workspaceFolder.slice(0, markerIndex);
 }
 
-function taskFileForWorkspace(workspaceFolder, existsSync = fs.existsSync) {
+// A worktree without its own tasks.json inherits its parent repo's. The parent
+// is either known to the caller (a project worktree under <project>/repos/,
+// whose source repo is recorded in the database) or inferred from the
+// `.claude/worktrees/<name>` layout the Claude CLI uses.
+function taskFileForWorkspace(workspaceFolder, existsSync = fs.existsSync, knownParentPath = null) {
   const localFile = path.join(workspaceFolder, TASKS_RELATIVE_PATH);
   if (existsSync(localFile)) return { filePath: localFile, inherited: false };
 
-  const parentPath = worktreeParentPath(workspaceFolder);
+  const parentPath = knownParentPath || worktreeParentPath(workspaceFolder);
   if (!parentPath) return null;
   const parentFile = path.join(parentPath, TASKS_RELATIVE_PATH);
   if (!existsSync(parentFile)) return null;
@@ -273,7 +277,7 @@ function taskFileForWorkspace(workspaceFolder, existsSync = fs.existsSync) {
 }
 
 function loadProjectTasks(workspaceFolder, options = {}) {
-  const source = taskFileForWorkspace(workspaceFolder);
+  const source = taskFileForWorkspace(workspaceFolder, fs.existsSync, options.parentPath || null);
   if (!source) return [];
   const { filePath } = source;
   const text = fs.readFileSync(filePath, 'utf8');

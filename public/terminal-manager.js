@@ -160,10 +160,13 @@ function safeFit(entry) {
 function fitAndScroll(entry) {
   const wasAtBottom = isAtBottom(entry.terminal);
   requestAnimationFrame(() => {
-    safeFit(entry);
-    if (wasAtBottom) {
-      entry.terminal.scrollToBottom();
-    }
+    // A session stopped between the call and this frame has no renderer left;
+    // fitting or scrolling it then throws inside xterm.
+    if (!entry.element?.isConnected) return;
+    try {
+      safeFit(entry);
+      if (wasAtBottom) entry.terminal.scrollToBottom();
+    } catch {}
   });
 }
 
@@ -414,6 +417,8 @@ function showSession(sessionId) {
       fitAndScroll(entry);
     }
   }
+  // The Projects tab keeps the project around the terminal (projects-view.js).
+  if (typeof onSessionShown === 'function') onSessionShown(sessionId);
 }
 
 function setupDragAndDrop(container, getSessionId) {

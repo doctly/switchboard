@@ -31,6 +31,9 @@ function inspectDb(dataDir) {
     const db = new Database(require('path').join(process.env.SWITCHBOARD_DATA_DIR, 'switchboard.db'), { readonly: true });
     console.log(JSON.stringify({
       cols: db.prepare('PRAGMA table_info(session_cache)').all().map(c => c.name),
+      metaCols: db.prepare('PRAGMA table_info(session_meta)').all().map(c => c.name),
+      projectCols: db.prepare('PRAGMA table_info(projects)').all().map(c => c.name),
+      tables: db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map(t => t.name),
       cacheCount: db.prepare('SELECT COUNT(*) AS n FROM session_cache').get().n,
       metaCount: db.prepare('SELECT COUNT(*) AS n FROM cache_meta').get().n,
       version: db.prepare("SELECT value FROM settings WHERE key = 'db_version'").get()?.value,
@@ -40,12 +43,77 @@ function inspectDb(dataDir) {
   return JSON.parse(r.stdout.trim().split('\n').pop());
 }
 
+const PROJECT_TABLES = ['projects', 'project_folders', 'tracks'];
+
 test('fresh database gets fileMtime column', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-db-fresh-'));
   try {
     const r = loadDbModule(dir);
     assert.equal(r.status, 0, r.stderr);
-    assert.ok(inspectDb(dir).cols.includes('fileMtime'));
+    const state = inspectDb(dir);
+    assert.ok(state.cols.includes('fileMtime'));
+    for (const t of PROJECT_TABLES) assert.ok(state.tables.includes(t), `${t} table created`);
+    assert.ok(state.metaCols.includes('projectId') && state.metaCols.includes('trackId'), 'session_meta carries the assignment columns');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The project tables and the two session_meta columns are added by inspecting
+// the schema, not by db_version, so a database from before projects existed
+// gets them without losing its names, stars or archive flags.
+test('projects tables and session_meta columns are added to an older database', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-db-projects-'));
+  try {
+    const seed = runInElectronNode(`
+      const Database = require('better-sqlite3');
+      const db = new Database(require('path').join(process.env.SWITCHBOARD_DATA_DIR, 'switchboard.db'));
+      db.exec('CREATE TABLE session_meta (sessionId TEXT PRIMARY KEY, name TEXT, starred INTEGER DEFAULT 0, archived INTEGER DEFAULT 0)');
+      db.exec(\`CREATE TABLE session_cache (
+        sessionId TEXT PRIMARY KEY, folder TEXT NOT NULL, projectPath TEXT,
+        summary TEXT, firstPrompt TEXT, created TEXT, modified TEXT,
+        messageCount INTEGER DEFAULT 0, slug TEXT, aiTitle TEXT, fileMtime TEXT,
+        runtime TEXT DEFAULT 'claude', sessionFile TEXT
+      )\`);
+      db.exec('CREATE TABLE cache_meta (folder TEXT PRIMARY KEY, projectPath TEXT, indexMtimeMs REAL)');
+      db.exec('CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)');
+      db.prepare("INSERT INTO settings (key, value) VALUES ('db_version', '4')").run();
+      db.prepare("INSERT INTO session_meta (sessionId, name, starred, archived) VALUES ('s1', 'kept', 1, 0)").run();
+      // A projects table from the first Phase 1 build, before defaultCwd existed.
+      db.exec(\`CREATE TABLE projects (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, root TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active', sharedBranch INTEGER NOT NULL DEFAULT 1,
+        branchName TEXT, created TEXT NOT NULL, modified TEXT NOT NULL
+      )\`);
+      db.prepare("INSERT INTO projects (id, name, slug, root, created, modified) VALUES ('p1', 'P', 'p', '/tmp/p', 'x', 'x')").run();
+    `, dir);
+    assert.equal(seed.status, 0, seed.stderr);
+
+    const r = loadDbModule(dir);
+    assert.equal(r.status, 0, r.stderr);
+
+    const state = inspectDb(dir);
+    for (const t of PROJECT_TABLES) assert.ok(state.tables.includes(t), `${t} table created`);
+    assert.ok(state.metaCols.includes('projectId') && state.metaCols.includes('trackId'));
+    assert.ok(state.projectCols.includes('defaultCwd'), 'defaultCwd added to an existing projects table');
+
+    const after = JSON.parse(runInElectronNode(`
+      const db = require(${JSON.stringify(path.join(APP_DIR, 'db.js'))});
+      db.setSessionAssignment('s1', 'p1', null);
+      db.setSessionAssignment('s2', 'p1', 't1');
+      db.copySessionAssignment('s1', 's3');
+      db.moveSessionAssignment('s2', 's4');
+      console.log(JSON.stringify({
+        s1: db.getMeta('s1'), s2: db.getMeta('s2'), s3: db.getMeta('s3'), s4: db.getMeta('s4'),
+      }));
+    `, dir).stdout.trim().split('\n').pop());
+    assert.equal(after.s1.name, 'kept', 'assignment does not touch the name');
+    assert.equal(after.s1.starred, 1, 'assignment does not touch the star');
+    assert.equal(after.s1.projectId, 'p1');
+    assert.equal(after.s3.projectId, 'p1', 'copy creates the fork\'s row');
+    assert.equal(after.s2.projectId, null, 'move clears the temporary id');
+    assert.equal(after.s4.projectId, 'p1');
+    assert.equal(after.s4.trackId, 't1');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

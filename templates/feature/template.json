@@ -1,0 +1,5 @@
+{
+  "name": "Feature",
+  "description": "One feature across one or more repositories: plan it, build it on the project branch, review it.",
+  "tracks": ["Plan", "Build", "Review"]
+}

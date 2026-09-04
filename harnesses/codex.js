@@ -585,12 +585,25 @@ function buildLaunchArgs({ sessionId, isNew, options }) {
     if (options.codexModel) {
       args.push('--model', String(options.codexModel));
     }
-    if (options.addDirs) {
+    // --add-dir names extra writable roots, and codex refuses to start when
+    // the sandbox cannot grant them ("effective permissions do not allow
+    // additional writable roots"). Read-only, the default, can already read
+    // every path, and the bypass flag can already write everywhere, so the
+    // dirs only go on the command line for the two modes that take them.
+    const canAddDirs = !options.dangerouslySkipPermissions &&
+      (options.codexSandbox === 'workspace-write' || options.codexSandbox === 'danger-full-access');
+    if (options.addDirs && canAddDirs) {
       const dirs = String(options.addDirs).split(',').map(d => d.trim()).filter(Boolean);
       for (const dir of dirs) {
         args.push('--add-dir', dir);
       }
     }
+  }
+
+  // A first prompt, as codex's positional argument. Fresh sessions only; a
+  // resume or fork already has a conversation.
+  if (isNew && !options?.forkFrom && options?.initialPrompt) {
+    args.push(String(options.initialPrompt));
   }
 
   return args;

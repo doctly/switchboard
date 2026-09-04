@@ -374,6 +374,10 @@ function buildProjectsFromCache(showArchived) {
       name: meta?.name || null,
       starred: meta?.starred || 0,
       archived: meta?.archived || 0,
+      // Explicit filing into a project / track (projects.js). Null when the
+      // session was never filed; the tree builder then falls back to cwd.
+      projectId: meta?.projectId || null,
+      trackId: meta?.trackId || null,
     };
     if (!showArchived && s.archived) continue;
     if (!projectMap.has(row.projectPath)) {
@@ -456,10 +460,16 @@ function buildProjectsFromCache(showArchived) {
 }
 
 
-function notifyRendererProjectsChanged() {
+/**
+ * Tell the renderer the project data moved. `reason` is 'sessions' when only
+ * the session list did — a transcript write, a title, a folder rescan. That
+ * fires several times a minute while a session runs, and the project page
+ * patches itself instead of rebuilding. Anything else defaults to 'project'.
+ */
+function notifyRendererProjectsChanged(reason = 'project') {
   const mainWindow = getMainWindow();
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('projects-changed');
+    mainWindow.webContents.send('projects-changed', reason === 'sessions' ? 'sessions' : 'project');
   }
 }
 

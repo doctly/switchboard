@@ -29,7 +29,8 @@ straight away. At least one CLI always stays on.
 
 ### Key Features
 
-- **Session Browser** — All your sessions from every supported CLI, organized by project, searchable by content
+- **Session Browser** — All your sessions from every supported CLI, organized by folder, searchable by content
+- **Projects** — Group the work, not the folders: a project has a folder on disk with a brief the agent reads, a plan, a todo list, and the sessions filed under it
 - **Built-in Terminal** — Connect to running sessions or launch new ones without leaving the app
 - **Project Tasks & Server Logs** — Run `.vscode/tasks.json` commands from a compact project or worktree menu and view their live logs in the built-in terminal
 - **Status Notifications** — In-app alerts when a session is waiting for permission approval or user input
@@ -51,9 +52,11 @@ keep beside your coding sessions.
 - **Compact task launcher** — A play button appears in each project header. In
   worktree headers it appears between the hide and new-session buttons when you
   hover, and stays visible while a task is running.
-- **Live, retained logs** — Selecting a task opens its terminal in the main
-  pane. Output is retained when you switch to another session or task, and the
-  selected task view is restored after a renderer reload.
+- **Live, retained logs** — Running a task keeps the menu open and shows its
+  state on the row. Clicking a task that has run opens its terminal in the
+  main pane; inside a project it opens beside the session list. Output is
+  retained when you switch to another session or task, and the selected task
+  view is restored after a renderer reload.
 - **Independent lifecycle** — Tasks run separately from Claude and Codex
   sessions. Stop or restart them from the terminal header without altering an
   agent transcript.
@@ -101,6 +104,97 @@ directories and environment variables, platform overrides, and an optional
 variables are expanded. Debug adapters, breakpoints, VS Code command/input
 variables, and problem-matcher diagnostics are outside the current scope; the
 feature is intentionally focused on running commands and seeing their logs.
+
+## Projects
+
+The Sessions tab groups sessions by the folder they run in. The Projects tab
+groups them by the work they belong to.
+
+| | What it is |
+|---|---|
+| **Project** | A piece of work with a folder on disk. Everything else about it is optional. |
+| **Track** | A line of effort inside a project, with its own sessions. Optional. |
+| **Session** | Exactly what it is today, plus the project it belongs to. |
+| **Folder** | What the Sessions tab shows: a path on disk. A project can attach any number. |
+
+Every project gets a real folder under `~/Switchboard/` (change it under
+**Projects Folder** in Global Settings). Switchboard writes a starter brief into
+`CLAUDE.md` and `AGENTS.md` there. The brief tells the agent where the
+project's files go, and the agent creates them when it first needs them: a
+plan the user asks for goes to `plan.md` in whatever form fits,
+`plan-tracker.md` is kept beside it as phases with checkboxes so Switchboard
+can show progress, follow-ups go to `todos.md`, and anything worth remembering
+across sessions goes to `memory.md`. None of them is read at the start of a
+session, only when the plan or the todos come up. The brief also lists the
+attached folders and tells the agent to read each folder's own instructions
+before changing files there. Attaching or detaching a folder updates that
+list; the rest of the brief is yours to edit.
+
+Sessions start in the project folder by default. A project or a track can
+choose an attached folder instead. Wherever a project session starts,
+Switchboard passes the project folder and every attached folder to the CLI as
+extra directories, so the agent can read and edit all of them. Claude also
+loads the `CLAUDE.md` from each of those directories. Codex only reads
+`AGENTS.md` from the folder it starts in, so a Codex session that starts in
+an attached folder does not see the project brief. Codex also refuses to
+start with extra directories unless its sandbox is `workspace-write` or
+`danger-full-access`, so Switchboard's global default for Codex is
+`workspace-write`. Choose "Default" in Settings to hand the choice back to
+codex's own config; under read-only the extra directories are left off, since
+read-only can read every path anyway.
+
+The Projects tab lists projects only. Selecting one opens its **Overview**
+page: the brief, the plan's progress, open todos, attached folders, and one
+card per track with its latest sessions. Opening a session from there switches
+to working mode: a slim project strip on top, a session list beside the
+terminal, and the plan and todo counts at the foot of the list. The list can
+be grouped by **Time** (today, yesterday, this week...), **Track**, or
+**State** (needs input, running, idle). Each row shows the title, the track,
+the CLI, its age and message count. Right-click a project, track, or session
+for its actions. Projects and sessions are ordered by their last event: a
+session started, finished a turn, asked for something, or was opened. A
+session that is still working does not move while its transcript grows, so
+two working sessions hold their places instead of leapfrogging. Archived
+sessions sit in a closed "Archived" line at the foot of the list and under a
+track card's foot; one click opens them, dimmed, in place. The
+**Settings** tab is a list of rows: the name, the start
+folder, folders, the worktree branch, and the tracks. Changes save as you
+make them. Folder rows show the branch each folder is on, read from git when
+the page opens, and "modified" when it has uncommitted changes.
+
+- **New project** — Name it, pick a template, and attach the folders it works
+  in. The dialog shows what Create will make: the project folder and its
+  files, each worktree on its branch, and the tracks the template adds. Start
+  sessions from the overview; they are filed under the project and still show
+  under their folder in the Sessions tab.
+- **Tracks** — Optional lines of work inside a project, each with its own
+  sessions, start folder and CLI. A track card's "Resume latest" reopens its
+  most recent session; "New" starts one there.
+- **Plan tab** — The phases in `plan-tracker.md` with their items, the todos,
+  and which sessions started or finished each one. Tick items in place, or
+  start a session on a phase or a todo: it opens with that item as its first
+  prompt, filed under the project. A plan written in Claude Code's plan mode
+  can be adopted into a project from the Plans list.
+- **Templates** — New project offers Feature, Research and Customer. A
+  template is a folder under the app's data directory with a
+  `template.json` (name, description, tracks) and the files a new project
+  starts with; its `CLAUDE.md` becomes the top of the brief. Edit them or add
+  your own from Global Settings.
+- **Worktrees** — Attaching a plain folder uses it where it is. Attaching a
+  git repository asks how the project should work in it: as it is, on
+  whatever branch is checked out, or with its own checkout under the project
+  folder (`repos/<name>`), on one branch shared
+  by every worktree in the project, or one you name per repository. The
+  worktree inherits the repository's `.vscode/tasks.json`. For Codex,
+  Switchboard writes an `AGENTS.override.md` into the worktree carrying the
+  project brief (and the repository's own `AGENTS.md`), excluded from git.
+  Marking a project done offers to remove its worktrees; branches stay.
+- **Move to project** — Any session row has a move action. Nothing is filed
+  until you launch it from a project or move it there.
+- **Play button** — A project's task menu combines the `.vscode/tasks.json`
+  tasks from every attached folder.
+- **Mark as done** — Done projects drop to the bottom, collapsed. Removing a
+  project only forgets it; the folder and the sessions stay on disk.
 
 ## Session Grid Overview
 

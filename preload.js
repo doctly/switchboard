@@ -46,7 +46,37 @@ contextBridge.exposeInMainWorld('api', {
   browseFolder: () => ipcRenderer.invoke('browse-folder'),
   addProject: (projectPath) => ipcRenderer.invoke('add-project', projectPath),
   removeProject: (projectPath) => ipcRenderer.invoke('remove-project', projectPath),
+
+  // Projects (a piece of work with a folder on disk; see projects.js)
+  getProjectTree: (showArchived) => ipcRenderer.invoke('get-project-tree', showArchived),
+  createProject: (spec) => ipcRenderer.invoke('create-project', spec),
+  updateProject: (id, patch) => ipcRenderer.invoke('update-project', id, patch),
+  deleteProject: (id) => ipcRenderer.invoke('delete-project', id),
+  attachProjectFolder: (id, spec) => ipcRenderer.invoke('attach-project-folder', id, spec),
+  detachProjectFolder: (id, folderPath, opts) => ipcRenderer.invoke('detach-project-folder', id, folderPath, opts),
+  setSessionAssignment: (sessionId, projectId, trackId) => ipcRenderer.invoke('set-session-assignment', sessionId, projectId, trackId),
+  getProjectsRoot: () => ipcRenderer.invoke('get-projects-root'),
+  getProjectGitStatus: (id, opts) => ipcRenderer.invoke('get-project-git-status', id, opts),
+  getProjectGitInfo: (id) => ipcRenderer.invoke('get-project-git-info', id),
+  getProjectGitDiff: (id, folderPath, filePath) => ipcRenderer.invoke('get-project-git-diff', id, folderPath, filePath),
+  getFolderGitStatus: (folderPath) => ipcRenderer.invoke('get-folder-git-status', folderPath),
+  listEnvFiles: (folderPath) => ipcRenderer.invoke('list-env-files', folderPath),
+  saveProjectBrief: (id, content) => ipcRenderer.invoke('save-project-brief', id, content),
+  createProjectFile: (id, name, content) => ipcRenderer.invoke('create-project-file', id, name, content),
+  getProjectPlan: (id) => ipcRenderer.invoke('get-project-plan', id),
+  setPlanItem: (id, kind, line, done) => ipcRenderer.invoke('set-plan-item', id, kind, line, done),
+  appendPlanItem: (id, kind, text) => ipcRenderer.invoke('append-plan-item', id, kind, text),
+  editPlanItem: (id, kind, line, text) => ipcRenderer.invoke('edit-plan-item', id, kind, line, text),
+  adoptPlan: (id, filename, opts) => ipcRenderer.invoke('adopt-plan', id, filename, opts),
+  listTemplates: () => ipcRenderer.invoke('list-templates'),
+  onProjectPlanChanged: (callback) => {
+    ipcRenderer.on('project-plan-changed', (_event, projectId) => callback(projectId));
+  },
+  createTrack: (projectId, spec) => ipcRenderer.invoke('create-track', projectId, spec),
+  updateTrack: (id, patch) => ipcRenderer.invoke('update-track', id, patch),
+  deleteTrack: (id) => ipcRenderer.invoke('delete-track', id),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  openPath: (target) => ipcRenderer.invoke('open-path', target),
   writeClipboard: (text) => ipcRenderer.invoke('clipboard-write-text', text),
 
   // Send (fire-and-forget)
@@ -80,7 +110,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('session-forked', (_event, oldId, newId) => callback(oldId, newId));
   },
   onProjectsChanged: (callback) => {
-    ipcRenderer.on('projects-changed', () => callback());
+    ipcRenderer.on('projects-changed', (_e, reason) => callback(reason || 'project'));
   },
   onStatusUpdate: (callback) => {
     ipcRenderer.on('status-update', (_event, text, type) => callback(text, type));

@@ -391,6 +391,12 @@ function buildLaunchArgs({ sessionId, isNew, options }) {
     args.push('--append-system-prompt', String(options.appendSystemPrompt));
   }
 
+  // A first prompt, as the positional argument. Only for a brand-new session:
+  // a resume continues where it was, and a fork carries its parent's prompt.
+  if (isNew && !options?.forkFrom && options?.initialPrompt) {
+    args.push(String(options.initialPrompt));
+  }
+
   return args;
 }
 

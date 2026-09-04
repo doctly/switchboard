@@ -1,7 +1,9 @@
 // --- Dialogs & session launch helpers ---
 // Depends on globals: launchNewSession, cachedProjects, cachedAllProjects, sessionMap,
 // pendingSessions, openSessions, activePtyIds, refreshSidebar, pollActiveSessions (app.js)
-// Depends on: ICONS (icons.js)
+// Depends on: ICONS (icons.js)//
+// Dialog rule: a click on the backdrop does nothing. These hold typed work, and
+// a stray click used to throw it away. Escape and Cancel are the ways out.
 
 // --- New session dialog ---
 async function resolveDefaultSessionOptions(project) {
@@ -180,6 +182,12 @@ async function launchTerminalSession(project) {
     created: new Date().toISOString(),
     type: 'terminal',
   };
+  // Started from a project or one of its tracks: the terminal belongs there,
+  // so it shows in the project's list and not only in its own window.
+  if (project.projectId) {
+    session.projectId = project.projectId;
+    session.trackId = project.trackId || null;
+  }
 
   // Track as pending
   const folder = encodeProjectPath(projectPath);
@@ -195,6 +203,7 @@ async function launchTerminalSession(project) {
     }
     proj.sessions.unshift(session);
   }
+  if (typeof injectPendingIntoTree === 'function') injectPendingIntoTree(session);
   refreshSidebar();
 
   const entry = createTerminalEntry(session);
@@ -375,7 +384,6 @@ async function showNewSessionDialog(project, runtime = 'claude') {
 
   dialog.querySelector('.new-session-cancel-btn').onclick = close;
   dialog.querySelector('.new-session-start-btn').onclick = start;
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
   // Keyboard support
   function onKey(e) {
@@ -492,7 +500,6 @@ async function showResumeSessionDialog(session) {
 
   dialog.querySelector('.new-session-cancel-btn').onclick = close;
   dialog.querySelector('.new-session-start-btn').onclick = resume;
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
   function onKey(e) {
     if (e.key === 'Escape') close();
@@ -512,10 +519,10 @@ function showAddProjectDialog() {
   dialog.className = 'add-project-dialog';
 
   dialog.innerHTML = `
-    <h3>Add Project</h3>
-    <div class="add-project-hint">Select a folder to create a new project. To start a session in an existing project, use the + on its project header.</div>
+    <h3>Add Folder</h3>
+    <div class="add-project-hint">Select a folder. Its sessions appear in the Sessions tab. To start a session in a folder that is already listed, use the + on its header.</div>
     <div class="folder-input-row">
-      <input type="text" id="add-project-path" placeholder="/path/to/project" autocomplete="off" spellcheck="false">
+      <input type="text" id="add-project-path" placeholder="/path/to/folder" autocomplete="off" spellcheck="false">
       <button class="add-project-browse-btn">Browse</button>
     </div>
     <div class="add-project-error" id="add-project-error"></div>
@@ -563,7 +570,6 @@ function showAddProjectDialog() {
 
   dialog.querySelector('.add-project-cancel-btn').onclick = close;
   dialog.querySelector('.add-project-add-btn').onclick = addProject;
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
   function onKey(e) {
     if (e.key === 'Escape') close();

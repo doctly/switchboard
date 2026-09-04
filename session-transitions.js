@@ -5,7 +5,7 @@ const fs = require('fs');
  * Fork / plan-accept detection for active PTY sessions.
  * Call init(ctx) once with shared context.
  */
-let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer;
+let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, copySessionAssignment;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -13,6 +13,9 @@ function init(ctx) {
   getMainWindow = ctx.getMainWindow;
   log = ctx.log;
   rekeyMcpServer = ctx.rekeyMcpServer;
+  // A fork inherits its parent's project and track (db.js). Optional so the
+  // tests that exercise detection alone need not provide it.
+  copySessionAssignment = ctx.copySessionAssignment || null;
 }
 
 // --- Fork / plan-accept detection ---
@@ -182,6 +185,14 @@ function detectSessionTransitions(folder) {
         activeSessions.set(newId, session);
         // Re-key MCP server to match new session ID
         rekeyMcpServer(sessionId, newId);
+        if (copySessionAssignment) {
+          // The launch id carries the filing when the session was started from
+          // a project; otherwise a fork inherits the filing of its source.
+          try {
+            const copied = copySessionAssignment(sessionId, newId);
+            if (!copied && session.forkFrom) copySessionAssignment(session.forkFrom, newId);
+          } catch (err) { log.error?.('[session-transition] assignment copy failed', err); }
+        }
         const mainWindow = getMainWindow();
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('session-forked', sessionId, newId);
