@@ -162,6 +162,14 @@ folder, folders, the worktree branch, and the tracks. Changes save as you
 make them. Folder rows show the branch each folder is on, read from git when
 the page opens, and "modified" when it has uncommitted changes.
 
+![Project View overview](build/project-view-overview.png)
+
+![Project View session workspace](build/project-view-session.png)
+
+![Project View new session menu](build/project-view-new-session-menu.png)
+
+![Project View plan and todos](build/project-view-plan.png)
+
 - **New project** — Name it, pick a template, and attach the folders it works
   in. The dialog shows what Create will make: the project folder and its
   files, each worktree on its branch, and the tracks the template adds. Start
