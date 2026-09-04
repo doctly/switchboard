@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { shouldStartFresh } = require('../session-launch');
+const { shouldStartFresh, shouldBlockArchivedSession } = require('../session-launch');
 const claude = require('../harnesses/claude');
 
 test('a pre-seeded session resumes before the cache indexer sees it', () => {
@@ -43,5 +43,31 @@ test('a cached existing session resumes normally', () => {
     isPlainTerminal: false,
     hasCachedSession: true,
     resumeExisting: false,
+  }), false);
+});
+
+test('an archived existing session is blocked until it is unarchived', () => {
+  assert.equal(shouldBlockArchivedSession({
+    isNew: false,
+    isPlainTerminal: false,
+    archived: 1,
+  }), true);
+  assert.equal(shouldBlockArchivedSession({
+    isNew: false,
+    isPlainTerminal: false,
+    archived: 0,
+  }), false);
+});
+
+test('archive metadata does not block new or plain terminal launches', () => {
+  assert.equal(shouldBlockArchivedSession({
+    isNew: true,
+    isPlainTerminal: false,
+    archived: 1,
+  }), false);
+  assert.equal(shouldBlockArchivedSession({
+    isNew: false,
+    isPlainTerminal: true,
+    archived: 1,
   }), false);
 });

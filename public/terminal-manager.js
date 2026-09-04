@@ -177,6 +177,187 @@ const ESC_SYNC_END = '\x1b[?2026l';
 const SYNC_BUFFER_TIMEOUT = 500; // max ms to hold data waiting for sync end
 const terminalWriteBuffers = new Map(); // sessionId → { chunks, syncDepth, rafId, timerId }
 
+// A small, plain-text tail of each session's terminal survives a process/app
+// restart. It is deliberately not a terminal serialization: replaying old
+// cursor movement and alternate-screen escapes would let a stale TUI repaint
+// over the newly resumed one. Plain text can be shown safely in grey, then an
+// SGR reset hands color control back to live output.
+const TERMINAL_HISTORY_KEY = 'terminalHistory.v1';
+const TERMINAL_HISTORY_MAX_SESSIONS = 20;
+const TERMINAL_HISTORY_MAX_LINES = 120;
+const TERMINAL_HISTORY_MAX_CHARS = 48 * 1024;
+const TERMINAL_HISTORY_SAVE_DELAY = 1200;
+const PERSISTED_TERMINALS_KEY = 'persistedRawTerminals.v1';
+
+/** Extract the visible buffer tail as plain text, joining wrapped rows. */
+function terminalBufferText(buffer, maxLines = TERMINAL_HISTORY_MAX_LINES, maxChars = TERMINAL_HISTORY_MAX_CHARS) {
+  if (!buffer || !Number.isFinite(buffer.length) || typeof buffer.getLine !== 'function') return '';
+  const start = Math.max(0, buffer.length - Math.max(1, maxLines));
+  const logical = [];
+  for (let i = start; i < buffer.length; i++) {
+    const line = buffer.getLine(i);
+    if (!line || typeof line.translateToString !== 'function') continue;
+    const text = line.translateToString(true);
+    if (line.isWrapped && logical.length) logical[logical.length - 1] += text;
+    else logical.push(text);
+  }
+  while (logical.length && !logical[0].trim()) logical.shift();
+  while (logical.length && !logical[logical.length - 1].trim()) logical.pop();
+  let text = logical.join('\n');
+  if (text.length > maxChars) {
+    text = text.slice(-maxChars);
+    const firstBreak = text.indexOf('\n');
+    if (firstBreak >= 0) text = text.slice(firstBreak + 1);
+  }
+  return text;
+}
+
+/** Grey restored text followed by an explicit reset, so live output is normal. */
+function restoredTerminalHistoryAnsi(text) {
+  if (!text) return '';
+  const safe = String(text).replace(/\x1b/g, '').replace(/\r?\n/g, '\r\n');
+  return `\x1b[90m${safe}\x1b[0m\r\n\x1b[2;90m── restored terminal history ──\x1b[0m\r\n`;
+}
+
+function readTerminalHistoryStore() {
+  try {
+    const value = JSON.parse(localStorage.getItem(TERMINAL_HISTORY_KEY) || '{}');
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  } catch { return {}; }
+}
+
+function writeTerminalHistoryStore(store) {
+  try { localStorage.setItem(TERMINAL_HISTORY_KEY, JSON.stringify(store)); } catch {}
+}
+
+/** Remove retained scrollback and cancel a delayed save for this session. */
+function forgetTerminalHistory(sessionId) {
+  if (!sessionId) return;
+  if (typeof openSessions !== 'undefined') {
+    const entry = openSessions.get(sessionId);
+    if (entry) {
+      clearTimeout(entry.historySaveTimer);
+      entry.historySaveTimer = null;
+    }
+  }
+  const store = readTerminalHistoryStore();
+  if (!Object.prototype.hasOwnProperty.call(store, sessionId)) return;
+  delete store[sessionId];
+  writeTerminalHistoryStore(store);
+}
+
+function saveTerminalHistory(entry) {
+  if (!entry) return;
+  clearTimeout(entry.historySaveTimer);
+  entry.historySaveTimer = null;
+  const sessionId = entry.session?.sessionId;
+  if (entry.session?.archived) {
+    forgetTerminalHistory(sessionId);
+    return;
+  }
+  const text = terminalBufferText(entry.terminal?.buffer?.active);
+  if (!sessionId || !text) return;
+  const store = readTerminalHistoryStore();
+  store[sessionId] = { text, savedAt: Date.now() };
+  const keep = Object.entries(store)
+    .sort((a, b) => Number(b[1]?.savedAt || 0) - Number(a[1]?.savedAt || 0))
+    .slice(0, TERMINAL_HISTORY_MAX_SESSIONS);
+  writeTerminalHistoryStore(Object.fromEntries(keep));
+}
+
+function scheduleTerminalHistorySave(entry) {
+  if (!entry) return;
+  if (entry.session?.archived) {
+    forgetTerminalHistory(entry.session.sessionId);
+    return;
+  }
+  clearTimeout(entry.historySaveTimer);
+  entry.historySaveTimer = setTimeout(() => saveTerminalHistory(entry), TERMINAL_HISTORY_SAVE_DELAY);
+}
+
+function restoreTerminalHistory(entry) {
+  if (!entry) return;
+  // A renderer reload reattaches to a still-live main-process PTY, whose own
+  // buffer is replayed in full. Only add the persisted tail when a new PTY is
+  // about to resume the session, otherwise the same output appears twice.
+  if (activePtyIds.has(entry.session.sessionId)) return;
+  const saved = readTerminalHistoryStore()[entry.session.sessionId];
+  if (!saved?.text) return;
+  entry.terminal.write(restoredTerminalHistoryAnsi(saved.text));
+  entry.historyRestored = true;
+}
+
+/** The durable subset needed to reopen a raw shell after the app exits. */
+function persistedTerminalRecord(session) {
+  if (!session || session.type !== 'terminal' || !session.sessionId || !session.projectPath) return null;
+  return {
+    sessionId: String(session.sessionId),
+    summary: 'Terminal',
+    firstPrompt: '',
+    projectPath: String(session.projectPath),
+    projectId: session.projectId ? String(session.projectId) : null,
+    trackId: session.trackId ? String(session.trackId) : null,
+    name: null,
+    starred: 0,
+    archived: 0,
+    messageCount: 0,
+    modified: session.modified || new Date().toISOString(),
+    created: session.created || session.modified || new Date().toISOString(),
+    type: 'terminal',
+  };
+}
+
+function parsePersistedTerminalSessions(raw) {
+  let rows;
+  try { rows = JSON.parse(raw || '[]'); } catch { return []; }
+  if (!Array.isArray(rows)) return [];
+  const seen = new Set();
+  const sessions = [];
+  for (const row of rows) {
+    const session = persistedTerminalRecord(row);
+    if (!session || seen.has(session.sessionId)) continue;
+    seen.add(session.sessionId);
+    sessions.push(session);
+  }
+  return sessions;
+}
+
+function persistedTerminalSessions() {
+  try { return parsePersistedTerminalSessions(localStorage.getItem(PERSISTED_TERMINALS_KEY)); }
+  catch { return []; }
+}
+
+function writePersistedTerminalSessions(sessions) {
+  try { localStorage.setItem(PERSISTED_TERMINALS_KEY, JSON.stringify(sessions)); } catch {}
+}
+
+function persistTerminalSession(session) {
+  const record = persistedTerminalRecord(session);
+  if (!record) return;
+  const sessions = persistedTerminalSessions().filter(item => item.sessionId !== record.sessionId);
+  sessions.push(record);
+  writePersistedTerminalSessions(sessions);
+}
+
+function forgetPersistedTerminalSession(sessionId) {
+  if (!sessionId) return;
+  const sessions = persistedTerminalSessions();
+  const kept = sessions.filter(session => session.sessionId !== sessionId);
+  if (kept.length !== sessions.length) writePersistedTerminalSessions(kept);
+}
+
+/** Move early output saved under a temporary Codex/fork id to its real id. */
+function rekeyTerminalHistory(oldId, newId) {
+  if (!oldId || !newId || oldId === newId) return;
+  const store = readTerminalHistoryStore();
+  if (!store[oldId]) return;
+  if (!store[newId] || Number(store[oldId].savedAt || 0) > Number(store[newId].savedAt || 0)) {
+    store[newId] = store[oldId];
+  }
+  delete store[oldId];
+  writeTerminalHistoryStore(store);
+}
+
 function flushTerminalBuffer(sessionId) {
   const buf = terminalWriteBuffers.get(sessionId);
   if (!buf) return;
@@ -191,6 +372,7 @@ function flushTerminalBuffer(sessionId) {
   const wasAtBottom = isAtBottom(entry.terminal);
   const savedViewportY = entry.terminal.buffer.active.viewportY;
   entry.terminal.write(data, () => {
+    scheduleTerminalHistorySave(entry);
     if (sessionId !== activeSessionId) return;
     if (wasAtBottom) {
       entry.terminal.scrollToBottom();
@@ -332,6 +514,7 @@ function createTerminalEntry(session) {
 
   const entry = { terminal, element: container, fitAddon, searchAddon, openSearchBar, closeSearchBar, session, closed: false };
   openSessions.set(sessionId, entry);
+  restoreTerminalHistory(entry);
 
   // Wire up IPC (use entry.session.sessionId so fork re-keying works)
   terminal.onData(data => {
@@ -365,15 +548,32 @@ function wasIntentionalExit({ exitCode, signal, userStopped }) {
 }
 
 // Clean up a closed session entry (dispose terminal, remove DOM, remove from maps).
-function destroySession(sessionId) {
+function destroySession(sessionId, { forgetPersisted = true, preserveHistory = false } = {}) {
   const entry = openSessions.get(sessionId);
+  const session = entry?.session || sessionMap.get(sessionId);
+  if (preserveHistory) {
+    if (entry) saveTerminalHistory(entry);
+  } else {
+    forgetTerminalHistory(sessionId);
+  }
+  if (forgetPersisted && session?.type === 'terminal') forgetPersistedTerminalSession(sessionId);
   if (!entry) return;
   window.api.closeTerminal(sessionId);
   entry.terminal.dispose();
   entry.element.remove();
   openSessions.delete(sessionId);
+  if (typeof forgetProjectSessionState === 'function') forgetProjectSessionState(sessionId);
   const card = gridCards.get(sessionId);
   if (card) { card.remove(); gridCards.delete(sessionId); }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    for (const entry of openSessions.values()) {
+      saveTerminalHistory(entry);
+      if (entry.session?.type === 'terminal' && !entry.closed) persistTerminalSession(entry.session);
+    }
+  });
 }
 
 // Make a session visible in the current view mode (grid or single).
@@ -453,5 +653,9 @@ function setupDragAndDrop(container, getSessionId) {
 // Expose pure key-handling predicates to Node for unit testing. No-op in the
 // browser, where this file is loaded as a plain <script> and `module` is undefined.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { isImeComposing, shouldSendSpaceDirectly, decodeOsc52Payload, wasIntentionalExit };
+  module.exports = {
+    isImeComposing, shouldSendSpaceDirectly, decodeOsc52Payload, wasIntentionalExit,
+    terminalBufferText, restoredTerminalHistoryAnsi,
+    persistedTerminalRecord, parsePersistedTerminalSessions, forgetTerminalHistory,
+  };
 }

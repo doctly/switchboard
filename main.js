@@ -28,7 +28,7 @@ try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
 // LC_CTYPE when the launch environment has no locale. See pty-env.js.
 const { buildPtyEnv } = require('./pty-env');
 const cleanPtyEnv = buildPtyEnv(process.env);
-const { shouldStartFresh } = require('./session-launch');
+const { shouldStartFresh, shouldBlockArchivedSession } = require('./session-launch');
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
@@ -36,6 +36,7 @@ const { startScheduler } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { listProjectDirectory, readProjectFile } = require('./project-files');
 const { createTaskManager } = require('./task-manager');
+const { lastAssistantMessage } = require('./session-preview');
 
 
 // --- Auto-updater (only in packaged builds) ---
@@ -91,6 +92,7 @@ const MAX_BUFFER_SIZE = 256 * 1024;
 // Active PTY sessions
 const activeSessions = new Map();
 let mainWindow = null;
+let appIsQuitting = false;
 
 function createWindow() {
   // Restore saved window bounds
@@ -404,8 +406,22 @@ ipcMain.handle('update-project', guarded((id, patch) => projects.updateProject(i
 ipcMain.handle('delete-project', guarded((id) => projects.deleteProject(id)));
 ipcMain.handle('attach-project-folder', guarded((id, spec) => projects.attachFolder(id, spec || {})));
 ipcMain.handle('detach-project-folder', guarded((id, folderPath, opts) => projects.detachFolder(id, folderPath, opts || {})));
-ipcMain.handle('set-session-assignment', guarded((sessionId, projectId, trackId) =>
-  projects.assignSession(sessionId, projectId || null, trackId || null)));
+ipcMain.handle('set-session-assignment', guarded((sessionId, projectId, trackId) => {
+  const cleanProjectId = projectId || null;
+  const cleanTrackId = trackId || null;
+  const result = projects.assignSession(sessionId, cleanProjectId, cleanTrackId);
+  // Raw terminals have no transcript to rehydrate this relationship from.
+  // Keep the live PTY metadata aligned with the durable renderer descriptor so
+  // a renderer reload cannot put a moved terminal back in its old location.
+  if (!result?.error) {
+    const session = activeSessions.get(sessionId);
+    if (session?.isPlainTerminal) {
+      session.projectId = cleanProjectId;
+      session.trackId = cleanProjectId ? cleanTrackId : null;
+    }
+  }
+  return result;
+}));
 ipcMain.handle('create-track', guarded((projectId, spec) => projects.createTrack(projectId, spec || {})));
 ipcMain.handle('update-track', guarded((id, patch) => projects.updateTrack(id, patch || {})));
 ipcMain.handle('delete-track', guarded((id) => projects.deleteTrack(id)));
@@ -423,6 +439,7 @@ ipcMain.handle('list-env-files', guarded((folderPath) => ({
 })));
 ipcMain.handle('save-project-brief', guarded((id, content) => projects.saveBrief(id, content)));
 ipcMain.handle('create-project-file', guarded((id, name, content) => projects.createProjectFile(id, name, content)));
+ipcMain.handle('add-project-files', guarded((id, sourcePaths) => projects.addProjectFiles(id, sourcePaths)));
 ipcMain.handle('get-project-plan', guarded((id) => projects.readProjectPlan(id)));
 ipcMain.handle('set-plan-item', guarded((id, kind, line, done) => projects.setPlanItem(id, kind, line, done)));
 ipcMain.handle('append-plan-item', guarded((id, kind, text) => projects.appendPlanItem(id, kind, text)));
@@ -1109,7 +1126,12 @@ ipcMain.handle('get-active-terminals', () => {
   const terminals = [];
   for (const [sessionId, session] of activeSessions) {
     if (!session.exited && session.isPlainTerminal) {
-      terminals.push({ sessionId, projectPath: session.projectPath });
+      terminals.push({
+        sessionId,
+        projectPath: session.projectPath,
+        projectId: session.projectId || null,
+        trackId: session.trackId || null,
+      });
     }
   }
   return terminals;
@@ -1140,28 +1162,41 @@ ipcMain.handle('rename-session', (_event, sessionId, name) => {
   return { name: name || null };
 });
 
-// --- IPC: archive-session ---
+function readSessionViewerEntries(row) {
+  // The harness owns its transcript naming and its on-disk format. Normalize
+  // here so neither transcript consumer needs runtime-specific branches.
+  const jsonlPath = transcriptPath(row);
+  const harness = getHarness(row.runtime);
+  const content = fs.readFileSync(jsonlPath, 'utf-8');
+  const entries = [];
+  for (const line of content.split('\n')) {
+    if (!line.trim()) continue;
+    try { entries.push(JSON.parse(line)); } catch {}
+  }
+  return harness.toViewerEntries(entries);
+}
+
 ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
   const row = getCachedSession(sessionId);
   if (!row) return { error: 'Session not found in cache' };
-  // The harness owns its transcript naming — Claude uses <sessionId>.jsonl,
-  // others do not — so resolve through it rather than rebuilding the path here.
-  const jsonlPath = transcriptPath(row);
-  const harness = getHarness(row.runtime);
   try {
-    const content = fs.readFileSync(jsonlPath, 'utf-8');
-    const entries = [];
-    for (const line of content.split('\n')) {
-      if (!line.trim()) continue;
-      try { entries.push(JSON.parse(line)); } catch {}
-    }
-    // Normalised here rather than in the renderer, so the viewer never has to
-    // know which CLI wrote the transcript it is showing.
-    return { entries: harness.toViewerEntries(entries) };
+    return { entries: readSessionViewerEntries(row) };
   } catch (err) {
     return { error: err.message };
   }
 });
+
+ipcMain.handle('get-session-last-message', (_event, sessionId) => {
+  const row = getCachedSession(sessionId);
+  if (!row) return { error: 'Session not found in cache' };
+  try {
+    return { text: lastAssistantMessage(readSessionViewerEntries(row)) };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+// --- IPC: archive-session ---
 
 ipcMain.handle('archive-session', (_event, sessionId, archived) => {
   const val = archived ? 1 : 0;
@@ -1172,6 +1207,15 @@ ipcMain.handle('archive-session', (_event, sessionId, archived) => {
 // --- IPC: open-terminal ---
 ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, sessionOptions) => {
   if (!mainWindow) return { ok: false, error: 'no window' };
+
+  const isPlainTerminal = sessionOptions?.type === 'terminal';
+  if (shouldBlockArchivedSession({
+    isNew,
+    isPlainTerminal,
+    archived: getMeta(sessionId)?.archived,
+  })) {
+    return { ok: false, error: 'Session is archived. Unarchive it before resuming.' };
+  }
 
   // Reattach to existing session
   if (activeSessions.has(sessionId)) {
@@ -1202,8 +1246,6 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   if (!fs.existsSync(projectPath)) {
     return { ok: false, error: `project directory no longer exists: ${projectPath}` };
   }
-
-  const isPlainTerminal = sessionOptions?.type === 'terminal';
 
   // A session that never wrote a transcript cannot be resumed — the CLI has no
   // record of the id, and asking it to resume one produces an error the user
@@ -1329,30 +1371,21 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   try {
     if (isPlainTerminal) {
       // Plain terminal: interactive login shell, no claude command
-      // Inject a shell function to override `claude` with a helpful message
-      const claudeShim = 'claude() { echo "\\033[33mTo start a Claude session, use the + button in the sidebar.\\033[0m"; return 1; }; export -f claude 2>/dev/null;';
+      // Do not inherit Claude Code's nested-session marker if Switchboard was
+      // itself launched from Claude; this is the user's shell and `claude`
+      // should resolve normally from their profile/PATH.
+      const terminalEnv = {
+        ...cleanPtyEnv,
+        TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'iTerm.app', TERM_PROGRAM_VERSION: '3.6.6', FORCE_COLOR: '3', ITERM_SESSION_ID: '1',
+      };
+      delete terminalEnv.CLAUDECODE;
       ptyProcess = pty.spawn(shell, shellArgs(shell, undefined, shellExtraArgs), {
         name: 'xterm-256color',
         cols: 120,
         rows: 30,
         cwd: isWsl ? os.homedir() : projectPath,
-        env: {
-          ...cleanPtyEnv,
-          TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'iTerm.app', TERM_PROGRAM_VERSION: '3.6.6', FORCE_COLOR: '3', ITERM_SESSION_ID: '1',
-          CLAUDECODE: '1',
-          // ZDOTDIR trick won't work reliably; instead inject via ENV (sh/bash) or precmd
-          ENV: claudeShim,
-          BASH_ENV: claudeShim,
-        },
+        env: terminalEnv,
       });
-      // For zsh, ENV/BASH_ENV don't apply — write the function after shell starts
-      setTimeout(() => {
-        if (!ptyProcess._isDisposed) {
-          try {
-            ptyProcess.write(claudeShim + ' clear\n');
-          } catch {}
-        }
-      }, 300);
     } else {
       // Argv is built by the harness and quoted here, so a value can never be
       // spliced into the command line as shell syntax.
@@ -1418,6 +1451,11 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     projectPath, firstResize: true,
     projectFolder, knownJsonlFiles, sessionSlug,
     isPlainTerminal, runtime: runtimeId, forkFrom: sessionOptions?.forkFrom || null,
+    // Plain terminals have no transcript row to carry their project filing.
+    // Keep the launch context on the live PTY so renderer reloads can put a
+    // terminal started in an attached folder back into the same project/track.
+    projectId: sessionOptions?.projectId || null,
+    trackId: sessionOptions?.trackId || null,
     // Set for a harness whose real session id only appears once its transcript
     // does; cleared by resolvePendingLaunches when the transcript is matched.
     pendingLaunch: (harness?.needsIdDetection?.({ isNew: startFresh, options: sessionOptions })) ? {
@@ -1598,7 +1636,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     // A signal kill reports exitCode 0, so pass the signal and the
     // stop-session flag along rather than making it guess from the code.
     const stopRequested = !!session.stopRequested;
-    if (mainWindow && !mainWindow.isDestroyed()) {
+    if (!appIsQuitting && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('process-exited', realId, exitCode, signal, stopRequested);
       // If a fork/plan-accept transition re-keyed this session under realId
       // but the PTY exited before transition detection ran, also notify the
@@ -2025,6 +2063,10 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  // The renderer persists raw-terminal descriptors and scrollback during its
+  // unload. Do not report the shutdown kills as user-initiated terminal exits,
+  // or that renderer cleanup would delete the descriptors before restart.
+  appIsQuitting = true;
   // Shut down all MCP servers
   shutdownAllMcp();
   taskManager.shutdown();

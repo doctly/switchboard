@@ -551,6 +551,42 @@ test('saveBrief writes CLAUDE.md and AGENTS.md alike and restores the folder blo
   } finally { t.cleanup(); }
 });
 
+test('addProjectFiles copies dropped files into added-files and preserves duplicate names', async () => {
+  const t = setup();
+  const sources = tmpDir('switchboard-added-files-');
+  try {
+    const { project } = await projects.createProject({ name: 'Context' });
+    const firstSource = path.join(sources, 'brief.txt');
+    const secondDir = path.join(sources, 'other');
+    fs.mkdirSync(secondDir);
+    const secondSource = path.join(secondDir, 'brief.txt');
+    fs.writeFileSync(firstSource, 'first');
+    fs.writeFileSync(secondSource, 'second');
+
+    assert.deepEqual(project.addedFiles, []);
+    assert.equal(projects.listAddedFiles('missing').error, 'Project not found');
+    assert.equal((await projects.addProjectFiles(project.id, [])).error, 'No files were dropped');
+
+    const added = await projects.addProjectFiles(project.id, [firstSource, firstSource, secondSource, sources, path.join(sources, 'missing.txt'), 'relative.txt']);
+    assert.equal(added.ok, true);
+    assert.deepEqual(added.added, ['brief.txt', 'brief (2).txt']);
+    assert.equal(added.errors.length, 3, 'a directory, missing source and relative path are reported');
+    assert.equal(fs.readFileSync(path.join(project.root, 'added-files', 'brief.txt'), 'utf8'), 'first');
+    assert.equal(fs.readFileSync(path.join(project.root, 'added-files', 'brief (2).txt'), 'utf8'), 'second');
+    assert.deepEqual(added.files.map(file => [file.name, file.type]), [
+      ['brief (2).txt', 'file'],
+      ['brief.txt', 'file'],
+    ]);
+
+    const treeProject = projects.buildProjectTree(false).projects[0];
+    assert.equal(treeProject.addedFilesPath, path.join(project.root, 'added-files'));
+    assert.deepEqual(treeProject.addedFiles.map(file => file.name), ['brief (2).txt', 'brief.txt']);
+  } finally {
+    rm(sources);
+    t.cleanup();
+  }
+});
+
 test('readProjectPlan, setPlanItem, appendPlanItem and links work on the tracker and todos', async () => {
   const t = setup();
   try {

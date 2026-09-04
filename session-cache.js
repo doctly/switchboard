@@ -437,6 +437,8 @@ function buildProjectsFromCache(showArchived) {
         modified: new Date(session._openedAt).toISOString(),
         created: new Date(session._openedAt).toISOString(),
         type: 'terminal',
+        projectId: session.projectId || null,
+        trackId: session.trackId || null,
       });
     }
   }

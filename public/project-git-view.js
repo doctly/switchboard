@@ -251,7 +251,7 @@ function renderProjectGitTab(project, body) {
     if (!result?.ok) throw new Error(result?.error || 'Could not read Git information.');
     state.diffs.clear();
     state.repositories = result.repositories || [];
-    if (body.isConnected && selectedProject()?.id === project.id && projectsUi.tab === 'git') {
+    if (body.isConnected && selectedProject()?.id === project.id && projectTab(project) === 'git') {
       paintGitRepository(project, state, body);
     }
   }).catch((err) => {

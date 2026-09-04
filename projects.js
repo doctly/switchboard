@@ -25,6 +25,7 @@ const planParser = require('./public/plan-parser');
 
 const DEFAULT_ROOT_NAME = 'Switchboard';
 const REPOS_DIR = 'repos';
+const ADDED_FILES_DIR = 'added-files';
 // Codex reads AGENTS.override.md instead of AGENTS.md at the same level, and
 // only from the git root down, so a worktree gets a copy of the project brief
 // under that name (excluded from git). Claude needs nothing: it walks up.
@@ -103,7 +104,7 @@ function foldersBlock(folderPaths) {
   if (!folderPaths.length) {
     lines.push('No folders are attached yet. Attach the repos this project works in from the project settings in Switchboard.');
   } else {
-    lines.push('The project works in these folders. Before changing files in one of them, read its own instructions (CLAUDE.md or AGENTS.md at its root) and follow them there.');
+    lines.push("These attached folders are part of the project's working context. Unless the user specifies otherwise, interpret their requests—including questions, explanations, investigations, reviews, planning, and changes—in the context of these folders. Inspect the relevant attached folders to understand the request and ground your response in their contents. The project folder holds shared plans, notes, drafts, and context; it is not the full scope of the work. Before working with an attached folder, read its own instructions (CLAUDE.md or AGENTS.md at its root) and follow them there.");
     for (const p of folderPaths) lines.push(`- ${p}`);
   }
   lines.push(FOLDERS_END);
@@ -287,6 +288,95 @@ function createProjectFile(projectId, name, content) {
   return { ok: true, filePath, created: true };
 }
 
+/** Files the user has dropped into this project's durable context folder. */
+function addedFilesAtRoot(root) {
+  const dirPath = path.join(root, ADDED_FILES_DIR);
+  let entries;
+  try {
+    if (!fs.lstatSync(dirPath).isDirectory()) return { dirPath, files: [] };
+    entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  } catch { entries = []; }
+  const files = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const filePath = path.join(dirPath, entry.name);
+    let stat;
+    try { stat = fs.lstatSync(filePath); } catch { continue; }
+    files.push({
+      name: entry.name,
+      relativePath: path.join(ADDED_FILES_DIR, entry.name),
+      type: 'file',
+      size: stat.size,
+      modified: stat.mtime.toISOString(),
+    });
+  }
+  files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+  return { dirPath, files };
+}
+
+function listAddedFiles(projectId) {
+  const project = db.getProject(projectId);
+  if (!project) return { error: 'Project not found' };
+  return { ok: true, ...addedFilesAtRoot(project.root) };
+}
+
+/** Pick a non-destructive destination such as "brief (2).pdf" on collisions. */
+function uniqueAddedFilePath(dirPath, name) {
+  const first = path.join(dirPath, name);
+  if (!fs.existsSync(first)) return first;
+  const ext = path.extname(name);
+  const stem = name.slice(0, name.length - ext.length);
+  for (let n = 2; ; n++) {
+    const candidate = path.join(dirPath, `${stem} (${n})${ext}`);
+    if (!fs.existsSync(candidate)) return candidate;
+  }
+}
+
+/**
+ * Copy dropped files into <project>/added-files without overwriting anything.
+ * Source paths come from Electron's webUtils.getPathForFile; main still
+ * validates every one before touching the project folder.
+ */
+async function addProjectFiles(projectId, sourcePaths) {
+  const project = db.getProject(projectId);
+  if (!project) return { error: 'Project not found' };
+  if (!Array.isArray(sourcePaths) || !sourcePaths.length) return { error: 'No files were dropped' };
+
+  const dirPath = path.join(project.root, ADDED_FILES_DIR);
+  const added = [];
+  const errors = [];
+  const seen = new Set();
+  for (const raw of sourcePaths) {
+    const source = typeof raw === 'string' && path.isAbsolute(raw) ? path.resolve(raw) : '';
+    if (!source) {
+      errors.push(`${path.basename(String(raw || 'File')) || 'File'}: Source path must be absolute`);
+      continue;
+    }
+    if (seen.has(source)) continue;
+    seen.add(source);
+    const label = path.basename(source) || String(raw || 'File');
+    try {
+      const stat = await fs.promises.lstat(source);
+      if (!stat.isFile()) throw new Error('Only files can be added');
+      await fs.promises.mkdir(dirPath, { recursive: true });
+      const dirStat = await fs.promises.lstat(dirPath);
+      if (!dirStat.isDirectory()) throw new Error(`${ADDED_FILES_DIR} must be a regular folder`);
+      const [rootReal, dirReal] = await Promise.all([
+        fs.promises.realpath(project.root),
+        fs.promises.realpath(dirPath),
+      ]);
+      if (path.dirname(dirReal) !== rootReal) throw new Error(`${ADDED_FILES_DIR} must be inside the project folder`);
+      const destination = uniqueAddedFilePath(dirPath, label);
+      await fs.promises.copyFile(source, destination, fs.constants.COPYFILE_EXCL);
+      added.push(path.basename(destination));
+    } catch (err) {
+      errors.push(`${label}: ${err.message}`);
+    }
+  }
+  if (added.length) notifyRendererProjectsChanged();
+  return { ok: true, ...addedFilesAtRoot(project.root), added, errors };
+}
+
 /** Replace the managed block in one brief file, or append it when missing. */
 function syncBriefFile(filePath, block) {
   if (!fs.existsSync(filePath)) return false;
@@ -442,6 +532,7 @@ function trackNode(row) {
 }
 
 function projectNode(row, folderRows = [], trackRows = []) {
+  const added = addedFilesAtRoot(row.root);
   return {
     id: row.id, name: row.name, slug: row.slug, root: row.root,
     status: row.status || 'active',
@@ -450,6 +541,8 @@ function projectNode(row, folderRows = [], trackRows = []) {
     defaultCwd: row.defaultCwd || null,
     created: row.created, modified: row.modified,
     lastActivity: null, sessionCount: 0,
+    addedFilesPath: added.dirPath,
+    addedFiles: added.files,
     folders: folderRows.map(f => ({
       path: f.path, mode: f.mode || 'in-place', sourcePath: f.sourcePath || null,
       branch: f.branch || null, sortOrder: f.sortOrder || 0,
@@ -1279,8 +1372,9 @@ module.exports = {
   projectsRoot, slugify, uniqueSlug, defaultBrief,
   createProject, updateProject, deleteProject, attachFolder, detachFolder,
   folderGitStatus, folderGitInfo, projectGitInfo, projectGitDiff,
-  syncProjectBrief, saveBrief, createProjectFile, launchContext, mergeAddDirs, worktreeParentFor,
-  CODEX_BRIDGE_FILE, PROJECT_FILES,
+  syncProjectBrief, saveBrief, createProjectFile, addProjectFiles, listAddedFiles,
+  launchContext, mergeAddDirs, worktreeParentFor,
+  CODEX_BRIDGE_FILE, PROJECT_FILES, ADDED_FILES_DIR,
   readProjectPlan, setPlanItem, appendPlanItem, recordPlanLink, adoptPlan,
   initPlanWatch, refreshPlanWatchers, stopPlanWatchers,
   listTemplates, templatesRoot, renderTemplateText, editPlanItem,

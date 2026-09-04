@@ -177,6 +177,30 @@ test('hidden projects from older settings receive a baseline timestamp', () => {
   assert.equal(settings.hiddenProjectTimestamps['/tmp/legacy-hidden'], 12345);
 });
 
+test('a live plain terminal keeps its project filing across renderer reloads', () => {
+  const fake = makeFakeDb(new Map());
+  sessionCache.init({
+    PROJECTS_DIR: os.tmpdir(),
+    activeSessions: new Map([['terminal-1', {
+      exited: false,
+      isPlainTerminal: true,
+      projectPath: '/tmp/attached-repo',
+      projectId: 'project-1',
+      trackId: 'track-1',
+      _openedAt: 12345,
+    }]]),
+    getMainWindow: () => null,
+    log: console,
+    db: fake.db,
+  });
+
+  const projects = sessionCache.buildProjectsFromCache(false);
+  const terminal = projects.flatMap(project => project.sessions)
+    .find(session => session.sessionId === 'terminal-1');
+  assert.equal(terminal.projectId, 'project-1');
+  assert.equal(terminal.trackId, 'track-1');
+});
+
 // --- codex folders ---
 
 const ROLLOUT = 'rollout-2026-08-26T11-55-02-01a03f6c-fdf9-7c83-86e3-c388f81d765c.jsonl';

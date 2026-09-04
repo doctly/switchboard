@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('api', {
   openTerminal: (id, projectPath, isNew, sessionOptions) => ipcRenderer.invoke('open-terminal', id, projectPath, isNew, sessionOptions),
   search: (type, query, titleOnly) => ipcRenderer.invoke('search', type, query, titleOnly),
   readSessionJsonl: (sessionId) => ipcRenderer.invoke('read-session-jsonl', sessionId),
+  getSessionLastMessage: (sessionId) => ipcRenderer.invoke('get-session-last-message', sessionId),
 
   // Settings
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),
@@ -63,6 +64,7 @@ contextBridge.exposeInMainWorld('api', {
   listEnvFiles: (folderPath) => ipcRenderer.invoke('list-env-files', folderPath),
   saveProjectBrief: (id, content) => ipcRenderer.invoke('save-project-brief', id, content),
   createProjectFile: (id, name, content) => ipcRenderer.invoke('create-project-file', id, name, content),
+  addProjectFiles: (id, sourcePaths) => ipcRenderer.invoke('add-project-files', id, sourcePaths),
   getProjectPlan: (id) => ipcRenderer.invoke('get-project-plan', id),
   setPlanItem: (id, kind, line, done) => ipcRenderer.invoke('set-plan-item', id, kind, line, done),
   appendPlanItem: (id, kind, text) => ipcRenderer.invoke('append-plan-item', id, kind, text),

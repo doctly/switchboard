@@ -520,6 +520,7 @@ function rebindSidebarEvents(projects) {
             await window.api.stopSession(s.sessionId);
           }
           await window.api.archiveSession(s.sessionId, 1);
+          forgetTerminalHistory(s.sessionId);
           s.archived = 1;
         }
         pollActiveSessions();
@@ -582,6 +583,7 @@ function bindSessionListEvents(container) {
           if (!session || session.archived) continue;
           if (activePtyIds.has(sid)) await window.api.stopSession(sid);
           await window.api.archiveSession(sid, 1);
+          forgetTerminalHistory(sid);
           session.archived = 1;
         }
         pollActiveSessions();
@@ -632,6 +634,7 @@ function bindSessionListEvents(container) {
             await window.api.stopSession(session.sessionId);
           }
           await window.api.archiveSession(session.sessionId, 1);
+          forgetTerminalHistory(session.sessionId);
           session.archived = 1;
         }
         pollActiveSessions();
@@ -734,6 +737,7 @@ function bindSessionListEvents(container) {
           pollActiveSessions();
         }
         await window.api.archiveSession(session.sessionId, newVal);
+        if (newVal) forgetTerminalHistory(session.sessionId);
         session.archived = newVal;
         loadProjects();
       };

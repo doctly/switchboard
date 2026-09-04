@@ -16,9 +16,11 @@
 // sessionBusyState, sessionMap, pendingSessions, openSessions, activeTab,
 // gridViewActive, loadProjects, refreshSidebar, launchNewSession,
 // openSession, pollActiveSessions, placeholder, terminalArea, memoryViewer,
-// memoryPanel, hideAllViewers, showSession, resolveDefaultSessionOptions
+// memoryPanel, hideAllViewers, showSession, fitAndScroll,
+// resolveDefaultSessionOptions
 // Depends on sidebar.js: isSessionRunning
-// Depends on task-runner.js: showTaskPopover, tasksByPath, updateTaskButton
+// Depends on task-runner.js: showTaskPopover, tasksByPath, updateTaskButton,
+// activeTaskView
 // Depends on dialogs.js: showNewSessionDialog, launchTerminalSession,
 // launchScheduleCreator, forkSession
 // Depends on utils.js / icons.js: escapeHtml, formatDate, cleanDisplayName, ICONS
@@ -28,7 +30,9 @@ let openCtxMenu = null;
 
 const projectsUi = {
   selectedProjectId: sessionStorage.getItem('projects.selected') || null,
-  tab: sessionStorage.getItem('projects.tab') || 'overview',
+  // Each project owns its runtime-only navigation state. Nothing here is
+  // persisted: projects start on their Overview tab after an app restart.
+  navigationByProject: new Map(), // projectId → { tab, mode, sessionId }
   trackByProject: (() => { try { return JSON.parse(sessionStorage.getItem('projects.track') || '{}'); } catch { return {}; } })(),
   groupBy: (() => { try { return JSON.parse(sessionStorage.getItem('projects.groupBy') || '{}'); } catch { return {}; } })(),
   expandedLists: {},
@@ -42,13 +46,164 @@ const projectsUi = {
   paneWidth: null, // working-mode session pane width in px; also kept in the global setting projectPaneWidth
 };
 
+// Last completed assistant turns are loaded lazily when an overview row is
+// hovered. The event clock changes at the end of every turn, so it also makes a
+// natural cache key without polling or rereading a transcript on mouse moves.
+const sessionHoverPreviewCache = new Map(); // sessionId -> { eventTime, text }
+let sessionHoverPreviewEl = null;
+let sessionHoverPreviewRow = null;
+let sessionHoverPreviewTimer = null;
+let sessionHoverPreviewRequest = 0;
+
+function sessionIsBusy(sessionId) {
+  return typeof sessionBusyState !== 'undefined' && sessionBusyState.get(sessionId) === true;
+}
+
+function ensureSessionHoverPreview() {
+  if (sessionHoverPreviewEl) return sessionHoverPreviewEl;
+  const el = document.createElement('div');
+  el.className = 'session-turn-preview';
+  el.setAttribute('role', 'tooltip');
+  el.setAttribute('aria-hidden', 'true');
+  el.innerHTML = '<div class="session-turn-preview-label">Last AI message</div><div class="session-turn-preview-text"></div>';
+  document.body.appendChild(el);
+  sessionHoverPreviewEl = el;
+  return el;
+}
+
+function positionSessionHoverPreview(row) {
+  const el = ensureSessionHoverPreview();
+  const rowRect = row.getBoundingClientRect();
+  const margin = 12;
+  const gap = 5;
+  const maxWidth = Math.min(620, window.innerWidth - margin * 2);
+  const width = Math.min(maxWidth, Math.max(360, rowRect.width + 80));
+  el.style.width = width + 'px';
+
+  // Keep the preview visually attached to the row instead of sending the eye
+  // across the page to a side-aligned tooltip.
+  const left = Math.max(margin, Math.min(rowRect.left, window.innerWidth - width - margin));
+  el.style.left = Math.round(left) + 'px';
+
+  const height = el.offsetHeight;
+  let top = rowRect.bottom + gap;
+  if (top + height > window.innerHeight - margin) top = rowRect.top - height - gap;
+  top = Math.max(margin, top);
+  el.style.top = Math.round(top) + 'px';
+}
+
+function hideSessionHoverPreview(sessionId = null) {
+  if (sessionId && sessionHoverPreviewRow?.dataset.sessionId !== sessionId) return;
+  if (sessionHoverPreviewTimer) clearTimeout(sessionHoverPreviewTimer);
+  sessionHoverPreviewTimer = null;
+  sessionHoverPreviewRow = null;
+  sessionHoverPreviewRequest++;
+  if (!sessionHoverPreviewEl) return;
+  sessionHoverPreviewEl.classList.remove('visible');
+  sessionHoverPreviewEl.setAttribute('aria-hidden', 'true');
+}
+
+async function showSessionHoverPreview(row, session) {
+  const id = session.sessionId;
+  if (sessionIsBusy(id) || !row.matches(':hover')) return;
+
+  const eventTime = sessionEventTime(session);
+  let cached = sessionHoverPreviewCache.get(id);
+  const request = ++sessionHoverPreviewRequest;
+  if (!cached || cached.eventTime !== eventTime) {
+    let result;
+    try { result = await window.api.getSessionLastMessage(id); } catch { return; }
+    if (request !== sessionHoverPreviewRequest) return;
+    if (result?.error) return;
+    cached = { eventTime, text: result?.text || '' };
+    sessionHoverPreviewCache.set(id, cached);
+  }
+
+  if (!cached.text || sessionIsBusy(id) || !row.matches(':hover')) return;
+  const el = ensureSessionHoverPreview();
+  const textEl = el.querySelector('.session-turn-preview-text');
+  textEl.innerHTML = typeof renderJsonlText === 'function'
+    ? renderJsonlText(cached.text)
+    : escapeHtml(cached.text);
+  sessionHoverPreviewRow = row;
+  el.classList.add('visible');
+  el.setAttribute('aria-hidden', 'false');
+  positionSessionHoverPreview(row);
+}
+
+function attachSessionHoverPreview(row, session) {
+  row.addEventListener('mouseenter', () => {
+    hideSessionHoverPreview();
+    if (sessionIsBusy(session.sessionId)) return;
+    sessionHoverPreviewRow = row;
+    sessionHoverPreviewTimer = setTimeout(() => {
+      sessionHoverPreviewTimer = null;
+      showSessionHoverPreview(row, session);
+    }, 350);
+  });
+  row.addEventListener('mouseleave', () => hideSessionHoverPreview(session.sessionId));
+}
+
 function saveProjectsUi() {
   if (projectsUi.selectedProjectId) sessionStorage.setItem('projects.selected', projectsUi.selectedProjectId);
   else sessionStorage.removeItem('projects.selected');
-  sessionStorage.setItem('projects.tab', projectsUi.tab);
+  // Tab selection belongs to each project and intentionally resets on restart.
+  sessionStorage.removeItem('projects.tab');
   sessionStorage.setItem('projects.track', JSON.stringify(projectsUi.trackByProject));
   sessionStorage.setItem('projects.groupBy', JSON.stringify(projectsUi.groupBy));
   sessionStorage.setItem('projects.archivedOpen', JSON.stringify(projectsUi.archivedOpen));
+}
+
+const PROJECT_WORKSPACE_TABS = new Set(['overview', 'plan', 'files', 'git', 'settings']);
+
+function projectTab(projectOrId = projectsUi.selectedProjectId) {
+  const projectId = typeof projectOrId === 'string' ? projectOrId : projectOrId?.id;
+  return projectNavigation(projectId).tab;
+}
+
+function setProjectTab(projectOrId, tab) {
+  const projectId = typeof projectOrId === 'string' ? projectOrId : projectOrId?.id;
+  if (!projectId || !PROJECT_WORKSPACE_TABS.has(tab)) return;
+  projectNavigation(projectId).tab = tab;
+}
+
+function projectNavigation(projectOrId = projectsUi.selectedProjectId) {
+  const projectId = typeof projectOrId === 'string' ? projectOrId : projectOrId?.id;
+  if (!projectId) return { tab: 'overview', mode: 'overview', sessionId: null };
+  if (!projectsUi.navigationByProject.has(projectId)) {
+    projectsUi.navigationByProject.set(projectId, { tab: 'overview', mode: 'overview', sessionId: null });
+  }
+  return projectsUi.navigationByProject.get(projectId);
+}
+
+function rememberProjectOverview(projectOrId) {
+  const state = projectNavigation(projectOrId);
+  state.mode = 'overview';
+  state.sessionId = null;
+}
+
+function rememberProjectSession(projectOrId, sessionId) {
+  if (!sessionId) return;
+  const state = projectNavigation(projectOrId);
+  state.mode = 'session';
+  state.sessionId = sessionId;
+}
+
+/** Keep remembered sessions valid when a newly launched/forked CLI gets its real id. */
+function rekeyProjectSessionState(oldId, newId) {
+  if (!oldId || !newId || oldId === newId) return;
+  for (const state of projectsUi.navigationByProject.values()) {
+    if (state.sessionId === oldId) state.sessionId = newId;
+  }
+}
+
+/** A destroyed terminal cannot be restored as a project's selected session. */
+function forgetProjectSessionState(sessionId) {
+  for (const state of projectsUi.navigationByProject.values()) {
+    if (state.sessionId !== sessionId) continue;
+    state.mode = 'overview';
+    state.sessionId = null;
+  }
 }
 
 const projectViewer = document.getElementById('project-viewer');
@@ -66,6 +221,7 @@ const PICONS = {
   dots: (s = 14) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>`,
   play: (s = 12) => `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.8a1 1 0 0 1 1.52-.85l8 5.2a1 1 0 0 1 0 1.7l-8 5.2A1 1 0 0 1 4 13.2V2.8Z"/></svg>`,
   folder: (s = 12) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>`,
+  file: (s = 12) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>`,
   branch: (s = 12) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>`,
   pencil: (s = 14) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`,
   check: (s = 14) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`,
@@ -353,12 +509,13 @@ async function toggleArchiveSession(session) {
   const newVal = session.archived ? 0 : 1;
   if (newVal && activePtyIds.has(session.sessionId)) { await window.api.stopSession(session.sessionId); pollActiveSessions(); }
   await window.api.archiveSession(session.sessionId, newVal);
+  if (newVal) forgetTerminalHistory(session.sessionId);
   session.archived = newVal;
   loadProjects();
 }
 
 /** The J row: title over one meta line (dot, track label, CLI, age, size). */
-function buildSessionRow(project, session, { showTrack = true, className = 'pane-session' } = {}) {
+function buildSessionRow(project, session, { showTrack = true, className = 'pane-session', hoverPreview = false } = {}) {
   const row = document.createElement('div');
   const id = session.sessionId;
   // The same state classes the Sessions tab uses, so the two rows read alike.
@@ -392,8 +549,14 @@ function buildSessionRow(project, session, { showTrack = true, className = 'pane
     btn.onclick = (e) => { e.stopPropagation(); if (dismissible) dismissSession(id); else toggleArchiveSession(session); };
     row.appendChild(btn);
   }
-  row.onclick = () => openSession(session);
-  row.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); showContextMenu(sessionMenuItems(session), { x: e.clientX, y: e.clientY }); };
+  row.onclick = () => { if (hoverPreview) hideSessionHoverPreview(id); openSession(session); };
+  row.oncontextmenu = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (hoverPreview) hideSessionHoverPreview(id);
+    showContextMenu(sessionMenuItems(session), { x: e.clientX, y: e.clientY });
+  };
+  if (hoverPreview) attachSessionHoverPreview(row, session);
   return row;
 }
 
@@ -601,10 +764,13 @@ function selectProject(id, { tab } = {}) {
     if (typeof terminalHeader !== 'undefined') terminalHeader.style.display = 'none';
   }
   projectsUi.selectedProjectId = id;
-  if (tab) projectsUi.tab = tab;
+  if (tab) {
+    setProjectTab(id, tab);
+    rememberProjectOverview(id);
+  }
   saveProjectsUi();
   projectsContent.querySelectorAll('.proj-row').forEach(r => r.classList.toggle('selected', r.dataset.projectId === id));
-  showProjectOverview();
+  showRememberedProjectView();
 }
 
 // --- Main area: which project view to show ---
@@ -615,16 +781,30 @@ function hideProjectChrome() {
   leaveWorking();
 }
 
-/** The main area for the Projects tab: the working session, else the overview, else nothing. */
-function showProjectHome() {
-  const activeSession = activeSessionId ? sessionMap.get(activeSessionId) : null;
-  if (activeSession && openSessions.has(activeSessionId) && !gridViewActive && projectForSession(activeSession)) {
-    showSession(activeSessionId);
+/** Restore this project's own last view without relaunching a closed session. */
+function showRememberedProjectView() {
+  const project = selectedProject();
+  if (project) {
+    const state = projectNavigation(project);
+    if (state.mode === 'session' && state.sessionId && !gridViewActive) {
+      const entry = openSessions.get(state.sessionId);
+      const session = sessionMap.get(state.sessionId) || entry?.session;
+      const owner = projectForSession(session);
+      if (entry && owner?.project?.id === project.id) {
+        showSession(state.sessionId);
+        return;
+      }
+    }
+    showProjectOverview();
     return;
   }
-  if (selectedProject()) { showProjectOverview(); return; }
   hideAllViewers();
   placeholder.style.display = '';
+}
+
+/** The main area for the Projects tab: that project's remembered view. */
+function showProjectHome() {
+  showRememberedProjectView();
 }
 
 /** Called when the user leaves the Projects tab. */
@@ -653,7 +833,11 @@ function refreshProjectViews({ reason = 'project' } = {}) {
     // the Sessions tab keeps its list. The main area shows whatever that tab
     // would show: the placeholder, or the terminal behind its exit banner.
     const project = info?.project || selectedProject();
-    if (project) { renderStrip(project); renderPanes(project); } else leaveWorking();
+    if (project) {
+      renderStrip(project);
+      renderPanes(project);
+      ensureWorkingTerminalVisible(project);
+    } else leaveWorking();
   } else if (projectViewer && projectViewer.style.display !== 'none') {
     const project = selectedProject();
     if (!project) { projectViewer.style.display = 'none'; placeholder.style.display = ''; }
@@ -668,6 +852,55 @@ function refreshProjectViews({ reason = 'project' } = {}) {
     }
   }
   updateProjectStatusDots();
+}
+
+/**
+ * Project refreshes rebuild the strip and session pane, not the terminal. Keep
+ * the live terminal as an explicit invariant anyway: another viewer can leave
+ * the terminal area hidden, and a class lost during a surrounding re-render
+ * otherwise produces a blank session view until the row is clicked again.
+ *
+ * This is called by renderPanes itself, rather than only by the outer project
+ * refresh. Busy/idle changes, plan-file changes and pane controls all render
+ * the pane directly and used to bypass the repair.
+ */
+function ensureWorkingTerminalVisible(project, { refit = false } = {}) {
+  if (!projectsUi.working || gridViewActive || activeTaskView || !activeSessionId) return;
+  const entry = openSessions.get(activeSessionId);
+  const session = sessionMap.get(activeSessionId) || entry?.session;
+  const rememberedHere = projectNavigation(project).mode === 'session' &&
+    projectNavigation(project).sessionId === activeSessionId;
+  if (!entry || (projectForSession(session)?.project?.id !== project.id && !rememberedHere)) return;
+
+  let repaired = false;
+  if (!mainEl.classList.contains('project-working')) {
+    mainEl.classList.add('project-working');
+    repaired = true;
+  }
+  if (projectStrip.style.display === 'none') {
+    projectStrip.style.display = '';
+    repaired = true;
+  }
+  if (projectPanes.style.display === 'none') {
+    projectPanes.style.display = '';
+    repaired = true;
+  }
+  if (terminalArea.style.display === 'none') {
+    terminalArea.style.display = '';
+    repaired = true;
+  }
+  if (!entry.element.classList.contains('visible')) {
+    document.querySelectorAll('.terminal-container.visible').forEach(el => el.classList.remove('visible'));
+    entry.element.classList.add('visible');
+    repaired = true;
+  }
+  placeholder.style.display = 'none';
+  const header = document.getElementById('terminal-header');
+  if (header && header.style.display === 'none') header.style.display = '';
+  // Replacing the pane can change the terminal's available geometry even when
+  // none of its visibility classes changed. Refit on that path so xterm's
+  // canvas cannot remain sized for the pre-project layout and look blank.
+  if (repaired || refit) fitAndScroll(entry);
 }
 
 /**
@@ -714,7 +947,7 @@ function applySessionStatus(project) {
   }
 
   // Only the Overview tab shows sessions; the others do not care.
-  if (projectsUi.tab !== 'overview') return;
+  if (projectTab(project) !== 'overview') return;
   for (const card of projectViewer.querySelectorAll('.tcard[data-track-key]')) {
     const key = card.dataset.trackKey;
     const track = key === 'general' ? null : (project.tracks || []).find(t => t.id === key);
@@ -750,7 +983,10 @@ function enterWorking(project, session) {
     projectsUi.selectedProjectId = project.id;
     projectsContent.querySelectorAll('.proj-row').forEach(r => r.classList.toggle('selected', r.dataset.projectId === project.id));
   }
-  if (session) projectsUi.trackByProject[project.id] = session.trackId || 'general';
+  if (session) {
+    projectsUi.trackByProject[project.id] = session.trackId || 'general';
+    rememberProjectSession(project, session.sessionId);
+  }
   saveProjectsUi();
   if (projectViewer) projectViewer.style.display = 'none';
   const wasWorking = projectsUi.working;
@@ -828,6 +1064,7 @@ function leaveWorking() {
 function showProjectOverview() {
   const project = selectedProject();
   if (!project) return;
+  rememberProjectOverview(project);
   leaveWorking();
   hideAllViewers();
   terminalArea.style.display = 'none';
@@ -905,6 +1142,8 @@ function applyGitStatus(project) {
 function renderOverview() {
   const project = selectedProject();
   if (!project || !projectViewer) return;
+  hideSessionHoverPreview();
+  const tabName = projectTab(project);
   const running = runningTasksFor(project);
   const sessions = projectSessionsAll(project);
   const state = groupState(sessions);
@@ -931,24 +1170,24 @@ function renderOverview() {
         </div>
       </div>
       <div class="ws-tabs">
-        <button type="button" class="ws-tab ${projectsUi.tab === 'overview' ? 'active' : ''}" data-tab="overview">Overview</button>
-        <button type="button" class="ws-tab ${projectsUi.tab === 'plan' ? 'active' : ''}" data-tab="plan" title="Phases from plan-tracker.md and the todos, with the sessions that worked on them">Plan <span class="ws-tab-meta" id="ws-tab-plan-meta"></span></button>
-        <button type="button" class="ws-tab ${projectsUi.tab === 'files' ? 'active' : ''}" data-tab="files" title="The project folder: brief, plan, todos and anything else the project keeps">Files</button>
-        <button type="button" class="ws-tab ${projectsUi.tab === 'git' ? 'active' : ''}" data-tab="git" title="Branches, working changes and recent commits in attached repositories">Git</button>
-        <button type="button" class="ws-tab ${projectsUi.tab === 'settings' ? 'active' : ''}" data-tab="settings">Settings</button>
+        <button type="button" class="ws-tab ${tabName === 'overview' ? 'active' : ''}" data-tab="overview">Overview</button>
+        <button type="button" class="ws-tab ${tabName === 'plan' ? 'active' : ''}" data-tab="plan" title="Phases from plan-tracker.md and the todos, with the sessions that worked on them">Plan <span class="ws-tab-meta" id="ws-tab-plan-meta"></span></button>
+        <button type="button" class="ws-tab ${tabName === 'files' ? 'active' : ''}" data-tab="files" title="The project folder: brief, plan, todos and anything else the project keeps">Files</button>
+        <button type="button" class="ws-tab ${tabName === 'git' ? 'active' : ''}" data-tab="git" title="Branches, working changes and recent commits in attached repositories">Git</button>
+        <button type="button" class="ws-tab ${tabName === 'settings' ? 'active' : ''}" data-tab="settings">Settings</button>
       </div>
     </div>
     <div class="ws-body" id="ws-body"></div>`;
 
   const body = projectViewer.querySelector('#ws-body');
-  if (projectsUi.tab === 'settings') renderSettings(project, body);
-  else if (projectsUi.tab === 'files') renderFilesTab(project, body);
-  else if (projectsUi.tab === 'plan') renderPlanTab(project, body);
-  else if (projectsUi.tab === 'git') renderProjectGitTab(project, body);
+  if (tabName === 'settings') renderSettings(project, body);
+  else if (tabName === 'files') renderFilesTab(project, body);
+  else if (tabName === 'plan') renderPlanTab(project, body);
+  else if (tabName === 'git') renderProjectGitTab(project, body);
   else renderOverviewBody(project, body);
 
   projectViewer.querySelectorAll('.ws-tab:not([disabled])').forEach(tab => {
-    tab.onclick = () => { projectsUi.tab = tab.dataset.tab; saveProjectsUi(); renderOverview(); };
+    tab.onclick = () => { setProjectTab(project, tab.dataset.tab); renderOverview(); };
   });
   projectViewer.querySelector('#ws-new').onclick = (e) => showNewSessionMenu(project, null, e.currentTarget);
   projectViewer.querySelector('#ws-more').onclick = (e) => showContextMenu(projectMenuItems(project, { fromPage: true }), { anchor: e.currentTarget });
@@ -986,7 +1225,7 @@ function renderOverviewBody(project, body) {
   body.querySelector('#ws-new-track').onclick = () => promptNewTrack(project);
   renderSideCards(project, body.querySelector('#ws-side'));
   loadProjectFiles(project).then(() => {
-    if (selectedProject()?.id !== project.id || projectsUi.tab !== 'overview') return;
+    if (selectedProject()?.id !== project.id || projectTab(project) !== 'overview') return;
     if (editingInPage()) return;
     const side = projectViewer.querySelector('#ws-side');
     if (side) renderSideCards(project, side);
@@ -999,7 +1238,7 @@ function sessionsOfTrack(project, trackKey) {
 }
 
 function buildCardSessionRow(project, session) {
-  return buildSessionRow(project, session, { showTrack: false, className: 'pane-session tcard-session' });
+  return buildSessionRow(project, session, { showTrack: false, className: 'pane-session tcard-session', hoverPreview: true });
 }
 
 function buildTrackCard(project, track) {
@@ -1022,6 +1261,7 @@ function buildTrackCard(project, track) {
     `<span class="tcard-meta mono">${track ? escapeHtml(cwdLabel) : 'sessions not in a track'}</span>` +
     `<span class="ws-flex"></span>` +
     (track?.cli ? `<span class="ws-chip ws-chip--cli ${track.cli}" title="${escapeHtml(track.cli === 'codex' ? 'Codex' : 'Claude')}">${track.cli === 'codex' ? ICONS.codex(12) : ICONS.claude(12)}</span>` : '') +
+    `<button type="button" class="ws-ghost ws-ghost--sm tcard-new">${PICONS.plus(11)}<span>New session</span></button>` +
     (track ? `<button type="button" class="tcard-more" title="Track menu">${PICONS.dots(13)}</button>` : '');
   card.appendChild(head);
 
@@ -1037,10 +1277,8 @@ function buildTrackCard(project, track) {
   const foot = document.createElement('div');
   foot.className = 'tcard-f';
   foot.innerHTML =
-    (sessions.length ? `<button type="button" class="ws-ghost tcard-resume">Resume latest</button>` : '') +
-    `<button type="button" class="ws-ghost tcard-new">${PICONS.plus(11)}<span>New</span></button>` +
-    `<span class="ws-flex"></span>` +
-    (sessions.length > 3 ? `<button type="button" class="ws-ghost ws-ghost--muted tcard-more-sessions">+ ${sessions.length - 3} more</button>` : '');
+    (sessions.length > 3 ? `<button type="button" class="ws-ghost ws-ghost--muted tcard-more-sessions">+ ${sessions.length - 3} more</button>` : '') +
+    `<span class="ws-flex"></span>`;
   card.appendChild(foot);
   // Archived sessions of this track sit under the foot, closed until asked for.
   const archived = archivedSessionsOf(project, key);
@@ -1061,14 +1299,14 @@ function buildTrackCard(project, track) {
     if (open) {
       const list = document.createElement('div');
       list.className = 'tcard-archived-list';
-      for (const s of archived) list.appendChild(buildSessionRow(project, s, { showTrack: false, className: 'pane-session tcard-session pane-session--archived' }));
+      for (const s of archived) list.appendChild(buildSessionRow(project, s, { showTrack: false, className: 'pane-session tcard-session pane-session--archived', hoverPreview: true }));
       card.appendChild(list);
     }
   }
 
-  const resume = foot.querySelector('.tcard-resume');
-  if (resume) resume.onclick = () => openSession(sessions[0]);
-  foot.querySelector('.tcard-new').onclick = (e) => launchFromTrack(project, track, e.currentTarget);
+  // Nothing left to show in the foot once New session moved up to the head.
+  if (!foot.querySelector('button')) foot.remove();
+  head.querySelector('.tcard-new').onclick = (e) => launchFromTrack(project, track, e.currentTarget);
   const more = foot.querySelector('.tcard-more-sessions');
   if (more) more.onclick = () => openTrackInPanes(project, key);
   const moreBtn = head.querySelector('.tcard-more');
@@ -1184,8 +1422,7 @@ async function appendTodo(project, text) {
 /** Open one of the project's own files on the Files tab, in the page's editor. */
 function openProjectFileInEditor(project, name) {
   filesState(project).selected = name;
-  projectsUi.tab = 'files';
-  saveProjectsUi();
+  setProjectTab(project, 'files');
   if (!projectViewer || projectViewer.style.display === 'none') showProjectOverview();
   else renderOverview();
 }
@@ -1259,7 +1496,7 @@ function startItemRows(project, track, prompt, planItem) {
   const where = track ? track.name : (project.defaultCwd ? pathBasename(project.defaultCwd) : 'project folder');
   return [
     { label: 'Claude', icon: ICONS.claude(14), hint: `in ${where}`, onClick: () => launch('claude') },
-    { label: 'Codex', icon: ICONS.codex(14), onClick: () => launch('codex') },
+    { label: 'Codex', icon: ICONS.codex(14, 'codex-icon'), onClick: () => launch('codex') },
   ];
 }
 
@@ -1314,7 +1551,7 @@ function renderPlanTab(project, body) {
   else body.innerHTML = '<div class="ws-plan"><div class="ws-card-text muted">Loading the plan…</div></div>';
   const before = planSignature(state);
   loadProjectPlan(project).then(() => {
-    if (selectedProject()?.id !== project.id || projectsUi.tab !== 'plan') return;
+    if (selectedProject()?.id !== project.id || projectTab(project) !== 'plan') return;
     if (!projectViewer.contains(body)) return;
     // Redraw only when the plan or the todos actually moved, so a field being
     // typed into survives a refresh that changed nothing. A field that is open
@@ -1548,7 +1785,7 @@ async function reloadPlanAndRender(project, state) {
   await loadProjectPlan(project);
   await loadProjectFiles(project, { force: true });
   const body = projectViewer?.querySelector('#ws-body');
-  if (!body || selectedProject()?.id !== project.id || projectsUi.tab !== 'plan') return;
+  if (!body || selectedProject()?.id !== project.id || projectTab(project) !== 'plan') return;
   renderPlanBody(project, body, state);
   renderPlanMeta(project);
 }
@@ -1564,7 +1801,7 @@ window.api.onProjectPlanChanged?.((projectId) => {
     if (projectsUi.working) { renderPanes(project); return; }
     if (projectViewer && projectViewer.style.display !== 'none') {
       if (editingInPage()) return;
-      if (projectsUi.tab === 'plan') renderPlanTab(project, projectViewer.querySelector('#ws-body'));
+      if (projectTab(project) === 'plan') renderPlanTab(project, projectViewer.querySelector('#ws-body'));
       else renderOverview();
     }
   });
@@ -1727,7 +1964,7 @@ async function renderFilesTab(project, body) {
   body.innerHTML = `
     <div class="ws-files">
       <div class="ws-files-side">
-        <div class="ws-files-head"><span class="ws-card-title">Project folder</span><span class="ws-flex"></span><button type="button" class="ws-ghost ws-ghost--sm" id="ws-files-refresh">Refresh</button></div>
+        <div class="ws-files-head"><span class="ws-card-title">Project folder</span><span class="ws-flex"></span><button type="button" class="ws-ghost ws-ghost--sm" id="ws-files-open">${PICONS.open(11)}<span>Open folder</span></button><button type="button" class="ws-ghost ws-ghost--sm" id="ws-files-refresh">Refresh</button></div>
         <div class="ws-files-list" id="ws-files-list"></div>
         <div class="ws-help ws-files-hint">CLAUDE.md is the brief every session reads. The agent creates plan.md, plan-tracker.md, todos.md and memory.md when it needs them. Attached repositories are not listed here.</div>
       </div>
@@ -1735,6 +1972,10 @@ async function renderFilesTab(project, body) {
     </div>`;
   const state = filesState(project);
   const list = body.querySelector('#ws-files-list');
+  body.querySelector('#ws-files-open').onclick = async () => {
+    const result = await window.api.openPath(project.root);
+    if (result?.error) alert(result.error);
+  };
   body.querySelector('#ws-files-refresh').onclick = async () => {
     state.cache.clear();
     await renderFileTree(project, list, state);
@@ -1751,6 +1992,66 @@ function hasPlanText(content) {
   return stripped.length > 0;
 }
 
+function bindAddedFilesCard(project, side) {
+  const dropZone = side.querySelector('#ws-added-files-drop');
+  if (!dropZone) return;
+  let dragDepth = 0;
+  const setOver = (over) => dropZone.classList.toggle('is-over', over);
+
+  dropZone.addEventListener('dragenter', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepth++;
+    setOver(true);
+  });
+  dropZone.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = 'copy';
+  });
+  dropZone.addEventListener('dragleave', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) setOver(false);
+  });
+  dropZone.addEventListener('drop', async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepth = 0;
+    setOver(false);
+    const sourcePaths = Array.from(event.dataTransfer.files || []).map(file => {
+      try { return window.api.getPathForFile(file); } catch { return ''; }
+    }).filter(Boolean);
+    if (!sourcePaths.length) return;
+
+    dropZone.classList.add('is-busy');
+    const label = dropZone.querySelector('.ws-added-drop-label');
+    if (label) label.textContent = `Adding ${sourcePaths.length} file${sourcePaths.length === 1 ? '' : 's'}…`;
+    let result;
+    try { result = await window.api.addProjectFiles(project.id, sourcePaths); }
+    catch (err) { result = { error: err.message }; }
+    if (!result?.ok) {
+      dropZone.classList.remove('is-busy');
+      if (label) label.textContent = 'Drop files here';
+      alert(result?.error || 'Could not add the files.');
+      return;
+    }
+
+    project.addedFiles = result.files || [];
+    project.addedFilesPath = result.dirPath || project.addedFilesPath;
+    filesState(project).cache.clear();
+    renderSideCards(project, side);
+    if (result.errors?.length) alert(`Some items could not be added:\n\n${result.errors.join('\n')}`);
+  });
+
+  const open = side.querySelector('#ws-added-files-open');
+  if (open) open.onclick = async () => {
+    const result = await window.api.openPath(project.addedFilesPath);
+    if (result?.error) alert(result.error);
+  };
+}
+
 function renderSideCards(project, side) {
   const brief = briefSummary(fileContent(project, 'CLAUDE.md'));
   const plan = parsePlan(fileContent(project, 'plan-tracker.md'));
@@ -1759,6 +2060,7 @@ function renderSideCards(project, side) {
   const open = todos.filter(t => !t.done);
   const doneTodos = todos.length - open.length;
   const pct = plan.phases.length ? Math.round((plan.done / plan.phases.length) * 100) : 0;
+  const addedFiles = project.addedFiles || [];
 
   side.innerHTML = `
     <div class="ws-card">
@@ -1778,19 +2080,32 @@ function renderSideCards(project, side) {
       <div class="ws-card-hint">Any session can add here. Try "add a todo: …" in a session of this project.</div>
     </div>
     <div class="ws-card">
-      <div class="ws-card-h"><span class="ws-card-title">Folders</span><span class="ws-flex"></span><button type="button" class="ws-ghost ws-ghost--sm" id="ws-folders-add">${PICONS.plus(11)}<span>Attach</span></button></div>
+      <div class="ws-card-h"><span class="ws-card-title">Attached Folders</span><span class="ws-flex"></span><button type="button" class="ws-ghost ws-ghost--sm" id="ws-folders-add">${PICONS.plus(11)}<span>Attach</span></button></div>
       ${(project.folders || []).length ? (project.folders || []).map(f => `
         <div class="ws-frow" data-path="${escapeHtml(f.path)}" data-detail="mode" title="${escapeHtml(f.path)}">
           <span class="ws-frow-icon ${f.mode === 'worktree' ? 'is-worktree' : ''}">${f.mode === 'worktree' ? PICONS.branch(13) : PICONS.folder(13)}</span>
           <span class="ws-frow-name">${escapeHtml(pathBasename(f.path))}</span>
           <span class="ws-card-meta mono">${escapeHtml(folderModeText(project, f))}</span>
         </div>`).join('') : '<div class="ws-card-text muted">No folders attached. Sessions run in the project folder.</div>'}
+    </div>
+    <div class="ws-card ws-added-files-card">
+      <div class="ws-card-h"><span class="ws-card-title">Added Files</span><span class="ws-card-meta">${addedFiles.length ? `${addedFiles.length} file${addedFiles.length === 1 ? '' : 's'}` : ''}</span><span class="ws-flex"></span>${addedFiles.length ? '<button type="button" class="ws-ghost ws-ghost--sm" id="ws-added-files-open">Open</button>' : ''}</div>
+      <div class="ws-added-drop" id="ws-added-files-drop">
+        <span class="ws-added-drop-icon">${PICONS.plus(14)}</span>
+        <span><span class="ws-added-drop-label">Drop files here</span><span class="ws-added-drop-hint">Copied into added-files/ in the project folder</span></span>
+      </div>
+      ${addedFiles.length ? `<div class="ws-added-list">${addedFiles.map(file => `
+        <div class="ws-added-file" title="${escapeHtml(file.relativePath)}">
+          <span class="ws-frow-icon">${PICONS.file(13)}</span>
+          <span class="ws-added-file-name">${escapeHtml(file.name)}</span>
+        </div>`).join('')}</div>` : ''}
     </div>`;
 
   side.querySelector('#ws-brief-edit').onclick = () => openProjectFileInEditor(project, 'CLAUDE.md');
   side.querySelector('#ws-plan-open').onclick = () => openProjectFileInEditor(project, 'plan.md');
   side.querySelector('#ws-plan-tracker').onclick = () => openProjectFileInEditor(project, 'plan-tracker.md');
   side.querySelector('#ws-folders-add').onclick = () => attachFolderAsk(project);
+  bindAddedFilesCard(project, side);
   side.querySelectorAll('.ws-todo input').forEach(box => {
     box.onchange = async () => {
       box.disabled = true;
@@ -2046,7 +2361,7 @@ function renderStrip(project) {
     <button type="button" class="ws-btn ws-btn--sm project-task-btn" id="strip-tasks" data-project-id="${project.id}" data-project-path="${escapeHtml(project.root)}" data-project-paths="${escapeHtml(taskPseudoProject(project).projectPaths.join('\n'))}">${PICONS.play(11)}<span>Tasks</span><span class="project-task-count ws-badge" ${running ? '' : 'style="display:none"'}>${running || ''}</span></button>
     <button type="button" class="ws-btn ws-btn--sm ws-btn--primary" id="strip-new">${PICONS.plus(11)}<span>New session</span>${PICONS.chevronDown(10)}</button>
     <button type="button" class="ws-btn ws-btn--sm ws-btn--icon" id="strip-more" title="More">${PICONS.dots(13)}</button>`;
-  projectStrip.querySelector('#strip-back').onclick = () => { projectsUi.tab = 'overview'; saveProjectsUi(); showProjectOverview(); };
+  projectStrip.querySelector('#strip-back').onclick = () => { setProjectTab(project, 'overview'); showProjectOverview(); };
   projectStrip.querySelector('#strip-tasks').onclick = (e) => showTaskPopover(taskPseudoProject(project), e.currentTarget);
   projectStrip.querySelector('#strip-new').onclick = (e) => showNewSessionMenu(project, currentTrack(project), e.currentTarget);
   projectStrip.querySelector('#strip-more').onclick = (e) => showContextMenu(projectMenuItems(project, { fromPage: true }), { anchor: e.currentTarget });
@@ -2220,6 +2535,10 @@ function renderPanes(project) {
   projectsUi.lastStateKey = projectSessionsAll(project).map(s => s.sessionId + ':' + sessionState(s)).join('|');
   const active = pane.querySelector('.pane-session.here');
   if (active) active.scrollIntoView({ block: 'nearest' });
+  // renderPanes has several direct callers (most notably the first busy signal
+  // from a newly started CLI). They do not pass through refreshProjectViews,
+  // so reassert the terminal invariant here after every pane replacement.
+  ensureWorkingTerminalVisible(project, { refit: true });
 
   loadProjectFiles(project).then(() => {
     if (!projectsUi.working || selectedProject()?.id !== project.id) return;
@@ -2363,7 +2682,7 @@ function newSessionItems(project, track) {
   const where = track ? track.name : (project.defaultCwd ? pathBasename(project.defaultCwd) : 'project folder');
   return [
     { label: 'Claude', icon: ICONS.claude(14), hint: `in ${where}`, onClick: async () => { const o = await resolveDefaultSessionOptions(target); o.runtime = 'claude'; launchNewSession(target, o); } },
-    { label: 'Codex', icon: ICONS.codex(14), onClick: async () => { const o = await resolveDefaultSessionOptions(target); o.runtime = 'codex'; launchNewSession(target, o); } },
+    { label: 'Codex', icon: ICONS.codex(14, 'codex-icon'), onClick: async () => { const o = await resolveDefaultSessionOptions(target); o.runtime = 'codex'; launchNewSession(target, o); } },
     ...terminalLaunchItems(project, target),
     { sep: true },
     { label: 'Claude, configure…', muted: true, onClick: () => showNewSessionDialog(target, 'claude') },
@@ -2454,7 +2773,7 @@ function trackMenuItems(project, track) {
       submenu: [
         { label: 'Ask each time', muted: !track.cli, onClick: () => patch({ cli: null }) },
         { label: 'Claude', icon: ICONS.claude(14), muted: track.cli === 'claude', onClick: () => patch({ cli: 'claude' }) },
-        { label: 'Codex', icon: ICONS.codex(14), muted: track.cli === 'codex', onClick: () => patch({ cli: 'codex' }) },
+        { label: 'Codex', icon: ICONS.codex(14, 'codex-icon'), muted: track.cli === 'codex', onClick: () => patch({ cli: 'codex' }) },
       ] },
     { sep: true },
     { label: track.status === 'done' ? 'Reopen track' : 'Mark as done', icon: PICONS.check(14), onClick: () => patch({ status: track.status === 'done' ? 'active' : 'done' }) },
@@ -2471,6 +2790,7 @@ function sessionMoveItems(session) {
     if (result?.error) { alert(result.error); return; }
     session.projectId = projectId;
     session.trackId = trackId;
+    if (session.type === 'terminal') persistTerminalSession(session);
     loadProjects();
   };
   const moveItems = [];
@@ -2519,18 +2839,23 @@ function sessionMenuItems(session) {
   const forkTarget = info
     ? { ...launchTargetFor(info.project, (info.project.tracks || []).find(t => t.id === session.trackId) || null), projectPath: session.projectPath }
     : folder;
-  return [
-    { label: 'Open', icon: PICONS.play(13), onClick: () => openSession(session) },
+  const sessionActions = [
     session.type !== 'terminal' ? { label: 'Fork', icon: PICONS.fork(14), onClick: () => forkSession(session, forkTarget) } : null,
     session.type !== 'terminal' ? { label: unread ? 'Mark as read' : 'Mark as unread', icon: unread ? ICONS.markRead(14) : ICONS.markUnread(14), onClick: () => { if (unread) clearUnread(session.sessionId); else markUnread(session.sessionId); refreshSidebar(); } } : null,
     session.type !== 'terminal' ? { label: 'View messages', icon: PICONS.messages(14), onClick: () => showJsonlViewer(session) } : null,
-    session.type !== 'terminal' ? { label: 'Resume with config…', icon: ICONS.launchConfig(14), onClick: () => showResumeSessionDialog(session) } : null,
-    { sep: true },
-    ...moveItems,
-    { sep: true },
+    session.type !== 'terminal' && !running ? { label: 'Resume with config…', icon: ICONS.launchConfig(14), onClick: () => showResumeSessionDialog(session) } : null,
+  ].filter(Boolean);
+  const stateActions = [
     running ? { label: 'Stop', icon: '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>', onClick: () => confirmAndStopSession(session.sessionId) } : null,
     isDismissibleSession(session.sessionId) ? { label: 'Dismiss', icon: PICONS.x(14), hint: 'never started', onClick: () => dismissSession(session.sessionId) } : null,
     session.type !== 'terminal' ? { label: session.archived ? 'Unarchive' : 'Archive', icon: PICONS.archive(14), onClick: () => toggleArchiveSession(session) } : null,
+  ].filter(Boolean);
+  return [
+    ...sessionActions,
+    sessionActions.length && moveItems.length ? { sep: true } : null,
+    ...moveItems,
+    moveItems.length && stateActions.length ? { sep: true } : null,
+    ...stateActions,
   ].filter(Boolean);
 }
 
@@ -2653,6 +2978,7 @@ async function removeProjectFlow(project) {
   if (!confirm(`Remove ${project.name} from Switchboard?\n\nThe folder ${project.root} and all sessions stay on disk.`)) return;
   const result = await window.api.deleteProject(project.id);
   if (result?.error) { alert(result.error); return; }
+  projectsUi.navigationByProject.delete(project.id);
   if (projectsUi.selectedProjectId === project.id) { projectsUi.selectedProjectId = null; saveProjectsUi(); leaveProjectViews(); placeholder.style.display = ''; }
   loadProjects();
 }
@@ -3009,7 +3335,7 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
     if (!result || result.error) { showError(result?.error || 'Could not create the project.'); return; }
     close();
     projectsUi.selectedProjectId = result.project?.id || null;
-    projectsUi.tab = 'overview';
+    setProjectTab(projectsUi.selectedProjectId, 'overview');
     saveProjectsUi();
     await loadProjects();
     const tab = document.querySelector('.sidebar-tab[data-tab="projects"]');

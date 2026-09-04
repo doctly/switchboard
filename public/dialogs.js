@@ -166,14 +166,32 @@ function showNewSessionPopover(project, anchorEl) {
   setTimeout(() => document.addEventListener('mousedown', onClickOutside), 0);
 }
 
+/** Start or reattach a raw terminal without routing it through a CLI harness. */
+async function openRawTerminalSession(session, { show = true } = {}) {
+  const { sessionId, projectPath } = session;
+  const entry = openSessions.get(sessionId) || createTerminalEntry(session);
+  const result = await window.api.openTerminal(sessionId, projectPath, true, {
+    type: 'terminal',
+    projectId: session.projectId || null,
+    trackId: session.trackId || null,
+  });
+  if (!result.ok) {
+    entry.terminal.write(`\r\nError: ${result.error}\r\n`);
+    entry.closed = true;
+    return result;
+  }
+  entry.closed = false;
+  persistTerminalSession(session);
+  if (show) showSession(sessionId);
+  return result;
+}
+
 async function launchTerminalSession(project) {
-  const sessionId = crypto.randomUUID();
-  const projectPath = project.projectPath;
   const session = {
-    sessionId,
+    sessionId: crypto.randomUUID(),
     summary: 'Terminal',
     firstPrompt: '',
-    projectPath,
+    projectPath: project.projectPath,
     name: null,
     starred: 0,
     archived: 0,
@@ -190,6 +208,7 @@ async function launchTerminalSession(project) {
   }
 
   // Track as pending
+  const { sessionId, projectPath } = session;
   const folder = encodeProjectPath(projectPath);
   pendingSessions.set(sessionId, { session, projectPath, folder });
 
@@ -206,16 +225,7 @@ async function launchTerminalSession(project) {
   if (typeof injectPendingIntoTree === 'function') injectPendingIntoTree(session);
   refreshSidebar();
 
-  const entry = createTerminalEntry(session);
-
-  const result = await window.api.openTerminal(sessionId, projectPath, true, { type: 'terminal' });
-  if (!result.ok) {
-    entry.terminal.write(`\r\nError: ${result.error}\r\n`);
-    entry.closed = true;
-    return;
-  }
-
-  showSession(sessionId);
+  await openRawTerminalSession(session);
   pollActiveSessions();
 }
 

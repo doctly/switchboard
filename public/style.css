@@ -4830,11 +4830,7 @@ body { display: flex; flex-direction: column; }
   min-width: 0;
 }
 
-.tcard--general {
-  border-style: dashed;
-  border-color: rgba(255,255,255,0.1);
-  background: transparent;
-}
+.tcard--general { border-color: rgba(255,255,255,0.09); }
 
 .tcard--done { opacity: 0.6; }
 .tcard--done:hover { opacity: 1; }
@@ -4843,15 +4839,19 @@ body { display: flex; flex-direction: column; }
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 14px 6px;
+  padding: 9px 14px;
   min-width: 0;
+  background: rgba(255,255,255,0.022);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  border-radius: 9px 9px 0 0;
 }
 
 .tcard-name {
-  font-size: 13px;
+  font-size: 11.5px;
   font-weight: 700;
   color: #d0d0e8;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4882,11 +4882,9 @@ body { display: flex; flex-direction: column; }
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  opacity: 0;
   transition: all 0.12s;
 }
 
-.tcard:hover .tcard-more { opacity: 1; }
 .tcard-more:hover { background: rgba(255,255,255,0.06); color: #c0c0d8; }
 
 .tcard .pane-session { margin: 0 6px; }
@@ -4905,6 +4903,9 @@ body { display: flex; flex-direction: column; }
   border-top: 1px solid rgba(255,255,255,0.05);
   margin-top: 6px;
 }
+
+.tcard-h .tcard-new { flex: none; }
+
 
 /* ---- Side cards, settings cards ---- */
 .ws-card {
@@ -5032,6 +5033,55 @@ body { display: flex; flex-direction: column; }
 .ws-frow-detail { flex: 1; min-width: 0; }
 .ws-frow .ws-ghost { opacity: 0; }
 .ws-frow:hover .ws-ghost { opacity: 1; }
+
+.ws-added-files-card { padding-bottom: 8px; }
+
+.ws-added-drop {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 2px 12px 6px;
+  padding: 10px;
+  border: 1px dashed rgba(128,136,255,0.3);
+  border-radius: 8px;
+  color: #a6abff;
+  background: rgba(120,130,255,0.045);
+  transition: border-color 0.12s, background 0.12s, color 0.12s, opacity 0.12s;
+}
+
+.ws-added-drop.is-over {
+  border-color: rgba(128,136,255,0.85);
+  background: rgba(120,130,255,0.14);
+  color: #d0d3ff;
+}
+
+.ws-added-drop.is-busy { opacity: 0.65; }
+.ws-added-drop-icon { display: inline-flex; flex-shrink: 0; }
+.ws-added-drop-label { display: block; font-size: 12px; font-weight: 650; }
+.ws-added-drop-hint { display: block; margin-top: 2px; color: #6f6f88; font-size: 10.5px; line-height: 1.35; }
+
+.ws-added-list {
+  max-height: 190px;
+  overflow-y: auto;
+  padding: 2px 0;
+}
+
+.ws-added-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 14px;
+  color: #b8b8cc;
+  font-size: 12px;
+}
+
+.ws-added-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ---- Settings tab ---- */
 .ws-settings {
@@ -5733,6 +5783,7 @@ body { display: flex; flex-direction: column; }
 .ctx-item.disabled:hover { background: none; }
 .ctx-item.muted { color: #8888a0; }
 .ctx-icon { width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; color: #8088ff; flex-shrink: 0; }
+.ctx-icon .codex-icon { color: #10a37f; }
 .ctx-item.danger .ctx-icon { color: #e05070; }
 .ctx-item.muted .ctx-icon, .ctx-item.disabled .ctx-icon { color: #6a6a80; }
 .ctx-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -5789,6 +5840,85 @@ body { display: flex; flex-direction: column; }
 }
 .tcard .tcard-session:hover { background: rgba(255,255,255,0.035); }
 .tcard .tcard-session .pane-meta { margin-top: 1px; }
+
+/* Lazy transcript preview for session rows on the project Overview page. */
+.session-turn-preview {
+  position: fixed;
+  z-index: 10030;
+  box-sizing: border-box;
+  display: none;
+  padding: 11px 13px 13px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 9px;
+  background: #191923;
+  box-shadow: 0 10px 32px rgba(0,0,0,0.38);
+  pointer-events: none;
+}
+.session-turn-preview.visible { display: block; }
+.session-turn-preview-label {
+  margin-bottom: 7px;
+  color: #77778e;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.session-turn-preview-text {
+  max-height: 342px;
+  overflow: hidden;
+  color: #c9c9d8;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.session-turn-preview-text > :first-child { margin-top: 0; }
+.session-turn-preview-text > :last-child { margin-bottom: 0; }
+.session-turn-preview-text p { margin: 0 0 7px; }
+.session-turn-preview-text h1,
+.session-turn-preview-text h2,
+.session-turn-preview-text h3,
+.session-turn-preview-text h4,
+.session-turn-preview-text h5,
+.session-turn-preview-text h6 {
+  margin: 9px 0 4px;
+  font-size: inherit;
+  line-height: inherit;
+  font-weight: 700;
+}
+.session-turn-preview-text h1 { color: #8ebbe8; }
+.session-turn-preview-text h2 { color: #86cbb5; }
+.session-turn-preview-text h3 { color: #b7a0df; }
+.session-turn-preview-text h4 { color: #d6b078; }
+.session-turn-preview-text h5 { color: #d994a5; }
+.session-turn-preview-text h6 { color: #9fa8c7; }
+.session-turn-preview-text strong { color: #e0e0ee; font-weight: 700; }
+.session-turn-preview-text em { color: #d2d2e2; }
+.session-turn-preview-text ul,
+.session-turn-preview-text ol { margin: 3px 0 7px; padding-left: 19px; }
+.session-turn-preview-text li { margin: 1px 0; }
+.session-turn-preview-text code {
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.07);
+  color: #d7d7e8;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.92em;
+}
+.session-turn-preview-text pre {
+  margin: 5px 0 8px;
+  padding: 7px 8px;
+  border-radius: 5px;
+  background: rgba(0,0,0,0.24);
+  white-space: pre-wrap;
+}
+.session-turn-preview-text pre code { padding: 0; background: none; }
+.session-turn-preview-text blockquote {
+  margin: 5px 0 8px;
+  padding-left: 9px;
+  border-left: 2px solid rgba(255,255,255,0.16);
+  color: #a8a8bd;
+}
+.session-turn-preview-text a { color: #8eb8e8; text-decoration: none; }
 
 /* ========== PROJECT PAGE: FILES TAB ========== */
 .ws-body--files {

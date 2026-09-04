@@ -53,11 +53,19 @@ let gridViewActive = localStorage.getItem('gridViewActive') === '1';
 // Map<sessionId, { terminal, element, fitAddon, session, closed }>
 const openSessions = new Map();
 window._openSessions = openSessions;
-let activeSessionId = sessionStorage.getItem('activeSessionId') || null;
+// sessionStorage covers renderer reloads; localStorage also restores the last
+// terminal after the Electron process itself restarts.
+const ACTIVE_SESSION_KEY = 'activeSessionId';
+let activeSessionId = sessionStorage.getItem(ACTIVE_SESSION_KEY) || localStorage.getItem(ACTIVE_SESSION_KEY) || null;
 function setActiveSession(id) {
   activeSessionId = id;
-  if (id) sessionStorage.setItem('activeSessionId', id);
-  else sessionStorage.removeItem('activeSessionId');
+  if (id) {
+    sessionStorage.setItem(ACTIVE_SESSION_KEY, id);
+    localStorage.setItem(ACTIVE_SESSION_KEY, id);
+  } else {
+    sessionStorage.removeItem(ACTIVE_SESSION_KEY);
+    localStorage.removeItem(ACTIVE_SESSION_KEY);
+  }
   // Update file panel to show this session's open files/diffs
   if (typeof switchPanel === 'function') switchPanel(id);
 }
@@ -210,6 +218,7 @@ function setActivity(sessionId, active) {
 
   const wasActive = sessionBusyState.get(sessionId) || false;
   sessionBusyState.set(sessionId, active);
+  if (active && typeof hideSessionHoverPreview === 'function') hideSessionHoverPreview(sessionId);
 
   if (wasActive && !active) {
     bumpSessionEvent(sessionId);
@@ -306,6 +315,8 @@ window.api.onSessionDetected((tempId, realId) => {
   entry.session.sessionId = realId;
   if (activeSessionId === tempId) setActiveSession(realId);
   rekeySessionActivity(tempId, realId);
+  rekeyTerminalHistory(tempId, realId);
+  if (typeof rekeyProjectSessionState === 'function') rekeyProjectSessionState(tempId, realId);
 
   // Re-key in openSessions
   openSessions.delete(tempId);
@@ -346,6 +357,8 @@ window.api.onSessionForked((oldId, newId) => {
   entry.session.sessionId = newId;
   if (activeSessionId === oldId) setActiveSession(newId);
   rekeySessionActivity(oldId, newId);
+  rekeyTerminalHistory(oldId, newId);
+  if (typeof rekeyProjectSessionState === 'function') rekeyProjectSessionState(oldId, newId);
 
   openSessions.delete(oldId);
   openSessions.set(newId, entry);
@@ -408,9 +421,10 @@ window.api.onProcessExited((sessionId, exitCode, signal, userStopped) => {
     return;
   }
 
-  // Everything else — plain terminals (always ephemeral) and Claude sessions
-  // the user ended themselves — goes away.
-  if (entry) destroySession(sessionId);
+  // Everything else — a raw shell that exited and harness sessions the user
+  // ended themselves — goes away, including its retained terminal history.
+  // Run cleanup even if the pane was already detached from the renderer.
+  destroySession(sessionId);
   if (gridViewActive) {
     gridViewerCount.textContent = gridCards.size + ' session' + (gridCards.size !== 1 ? 's' : '');
   } else if (activeSessionId === sessionId) {
@@ -686,6 +700,7 @@ function isDismissibleSession(sessionId) {
 
 /** Drop such a row. Purely renderer state, so it cannot come back. */
 function dismissSession(sessionId) {
+  const session = sessionMap.get(sessionId);
   pendingSessions.delete(sessionId);
   sessionMap.delete(sessionId);
   for (const projList of [cachedProjects, cachedAllProjects]) {
@@ -695,6 +710,10 @@ function dismissSession(sessionId) {
   }
   if (typeof removeSessionFromTrees === 'function') removeSessionFromTrees(sessionId);
   if (openSessions.has(sessionId)) destroySession(sessionId);
+  else {
+    forgetTerminalHistory(sessionId);
+    if (session?.type === 'terminal') forgetPersistedTerminalSession(sessionId);
+  }
   if (activeSessionId === sessionId) {
     setActiveSession(null);
     terminalHeader.style.display = 'none';
@@ -839,6 +858,49 @@ function dedup(projects) {
   }
 }
 
+/**
+ * Raw terminals have no transcript/database row. Recreate their renderer rows
+ * from localStorage before the sidebar/project panes render after a restart.
+ */
+function injectPersistedTerminalRows() {
+  for (const saved of persistedTerminalSessions()) {
+    if (pendingSessions.has(saved.sessionId)) continue;
+    const session = sessionMap.get(saved.sessionId) || saved;
+    Object.assign(session, saved);
+    sessionMap.set(session.sessionId, session);
+    const folder = encodeProjectPath(session.projectPath);
+    pendingSessions.set(session.sessionId, {
+      session,
+      projectPath: session.projectPath,
+      folder,
+      restored: true,
+    });
+    for (const projList of [cachedProjects, cachedAllProjects]) {
+      let proj = projList.find(p => p.projectPath === session.projectPath);
+      if (!proj) {
+        proj = { folder, projectPath: session.projectPath, sessions: [] };
+        projList.unshift(proj);
+      }
+      if (!proj.sessions.some(item => item.sessionId === session.sessionId)) proj.sessions.unshift(session);
+    }
+    injectPendingIntoTree(session);
+  }
+}
+
+/** Reopen every saved raw terminal as a fresh shell, initially hidden. */
+async function restorePersistedTerminalProcesses() {
+  const jobs = [];
+  for (const saved of persistedTerminalSessions()) {
+    if (openSessions.has(saved.sessionId)) continue;
+    const session = sessionMap.get(saved.sessionId) || saved;
+    jobs.push(openRawTerminalSession(session, { show: false }));
+  }
+  if (jobs.length) {
+    await Promise.all(jobs);
+    await pollActiveSessions();
+  }
+}
+
 async function loadProjects({ resort = false, reason = 'project' } = {}) {
   const wasEmpty = cachedProjects.length === 0;
   if (wasEmpty) {
@@ -890,7 +952,7 @@ async function loadProjects({ resort = false, reason = 'project' } = {}) {
   // Track active plain terminals in pendingSessions/sessionMap (data now comes from backend)
   try {
     const activeTerminals = await window.api.getActiveTerminals();
-    for (const { sessionId, projectPath } of activeTerminals) {
+    for (const { sessionId, projectPath, projectId, trackId } of activeTerminals) {
       if (pendingSessions.has(sessionId)) continue; // already tracked
       const folder = encodeProjectPath(projectPath);
       // Find the session object already injected by the backend
@@ -900,10 +962,22 @@ async function loadProjects({ resort = false, reason = 'project' } = {}) {
         if (session) break;
       }
       if (!session) continue;
+      // An attached folder can sit outside the project's root, so cwd alone is
+      // not enough to restore where this ephemeral terminal belongs.
+      if (projectId) session.projectId = projectId;
+      if (trackId) session.trackId = trackId;
+      // Also adopts terminals that were already running when this persistence
+      // feature was introduced; the next restart should retain them too.
+      persistTerminalSession(session);
       pendingSessions.set(sessionId, { session, projectPath, folder });
       sessionMap.set(sessionId, session);
     }
   } catch {}
+
+  // A full app exit kills raw PTYs, so the main-process active list is empty on
+  // the next launch. Their durable descriptors still put them back in the same
+  // project/track and starting folder.
+  injectPersistedTerminalRows();
 
   // Project roots and attached folders get their tasks too, even with no
   // sessions of their own, so a project's task menu is complete.
@@ -1011,22 +1085,50 @@ async function showTerminalHeader(session) {
 
 // Terminal lifecycle (createTerminalEntry, destroySession, showSession, setupDragAndDrop) → terminal-manager.js
 
+async function unarchiveSessionBeforeOpen(session) {
+  if (!session.archived) return true;
+
+  const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary) || 'This session';
+  if (!confirm(`“${displayName}” is archived.\n\nUnarchive it and open it?`)) return false;
+
+  const result = await window.api.archiveSession(session.sessionId, 0);
+  if (result?.error) {
+    alert(result.error);
+    return false;
+  }
+  session.archived = 0;
+  await loadProjects();
+  return true;
+}
+
 async function openSession(session, customOptions) {
+  if (!await unarchiveSessionBeforeOpen(session)) return;
+
   const { sessionId, projectPath } = session;
 
   // If already open, handle closed-session cleanup or just show it
   if (openSessions.has(sessionId)) {
     const entry = openSessions.get(sessionId);
     if (entry.closed) {
-      destroySession(sessionId);
+      destroySession(sessionId, {
+        forgetPersisted: session.type !== 'terminal',
+        preserveHistory: true,
+      });
       if (session.type === 'terminal') {
-        launchTerminalSession({ projectPath: session.projectPath });
+        await openRawTerminalSession(session);
+        pollActiveSessions();
         return;
       }
     } else {
       showSession(sessionId);
       return;
     }
+  }
+
+  if (session.type === 'terminal') {
+    await openRawTerminalSession(session);
+    pollActiveSessions();
+    return;
   }
 
   // Create new terminal entry (hidden until showSession)
@@ -1300,14 +1402,23 @@ loadProjects().then(async () => {
   const lastTab = rememberedTab();
   if (lastTab !== activeTab) document.querySelector(`.sidebar-tab[data-tab="${lastTab}"]`)?.click();
   await restoreActiveTaskView();
+  await restorePersistedTerminalProcesses();
   // Restore grid view preference before opening sessions so they enter grid mode
   if (!activeTaskView && localStorage.getItem('gridViewActive') === '1') {
     showGridView();
   }
-  // Restore active session after reload
-  if (activeSessionId && !openSessions.has(activeSessionId)) {
+  // Restore the active session after a renderer reload or full app restart.
+  // Raw terminals were reopened above but deliberately left hidden until this
+  // point, so an already-open entry still needs showSession().
+  if (activeSessionId) {
     const session = sessionMap.get(activeSessionId);
-    if (session) openSession(session);
+    if (session?.archived) {
+      setActiveSession(null);
+    } else if (session) {
+      if (openSessions.has(activeSessionId)) showSession(activeSessionId);
+      else openSession(session);
+    }
+    else setActiveSession(null);
   }
 });
 
