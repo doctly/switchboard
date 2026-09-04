@@ -255,6 +255,7 @@ module.exports = [
       'public/codemirror-bundle.js',
       'scripts/**', // ad-hoc build helpers; out of lint scope for now
       '.work-files/**',
+      '.claude/**', // agent worktrees (nested checkouts) and command config; not lint scope
     ],
   },
 

@@ -17,3 +17,10 @@ dev-app-update.yml
 
 # c8 coverage output
 coverage/
+
+# Agent worktrees (isolation: "worktree") — not auto-cleaned by the harness.
+# NOT a blanket .claude/ ignore: .claude/commands/*.md is versioned config.
+.claude/worktrees/
+
+# task test-pr worktrees
+.worktrees/
