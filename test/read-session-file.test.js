@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { readSessionFile } = require('../read-session-file');
+const { readSessionFile } = require('../harnesses/claude');
 
 const FOLDER = 'test-folder';
 const PROJECT = 'C:/test/project';
@@ -102,5 +102,116 @@ test('a single-message file with no trailing newline is still indexed', () => {
     const s = readSessionFile(file, FOLDER, PROJECT);
     assert.ok(s, 'a file whose last line lacks a newline must not vanish from the sidebar');
     assert.equal(s.messageCount, 1);
+  });
+});
+
+test('truncation and atomic replacement with an unchanged head reset resume state', () => {
+  withTmp(dir => {
+    const file = path.join(dir, 'session.jsonl');
+    fs.writeFileSync(file, buildSession(40));
+    const first = readSessionFile(file, FOLDER, PROJECT);
+    fs.writeFileSync(file, buildSession(2));
+    const truncated = readSessionFile(file, FOLDER, PROJECT, first);
+    assert.equal(truncated.messageCount, 5);
+
+    const replacement = path.join(dir, 'replacement');
+    // Keep more than 4 KiB identical but change message counts beyond it.
+    const content = buildSession(2) + line({ type: 'assistant', message: 'x'.repeat(200000) });
+    fs.writeFileSync(replacement, content);
+    fs.renameSync(replacement, file);
+    const replaced = readSessionFile(file, FOLDER, PROJECT, first);
+    assert.equal(replaced.messageCount, 6);
+    assert.equal(replaced.messageCount, readSessionFile(file, FOLDER, PROJECT).messageCount);
+  });
+});
+
+test('same-size rewrites beyond the head reset when the modification time changes', () => {
+  withTmp(dir => {
+    const file = path.join(dir, 'session.jsonl');
+    const content = buildSession(4) + line({ type: 'ai-title', aiTitle: 'original' });
+    fs.writeFileSync(file, content);
+    const first = readSessionFile(file, FOLDER, PROJECT);
+    fs.writeFileSync(file, content.replace('original', 'replaced'));
+    const future = new Date(Date.parse(first.fileMtime) + 1000);
+    fs.utimesSync(file, future, future);
+    assert.equal(readSessionFile(file, FOLDER, PROJECT, first).aiTitle, 'replaced');
+  });
+});
+
+test('a partial final message is not counted twice when it is completed', () => {
+  withTmp(dir => {
+    const file = path.join(dir, 'session.jsonl');
+    fs.writeFileSync(file, buildSession(4));
+    const first = readSessionFile(file, FOLDER, PROJECT);
+    const append = JSON.stringify({ type: 'assistant', message: 'the final answer' });
+    fs.appendFileSync(file, append.slice(0, -3));
+    const partial = readSessionFile(file, FOLDER, PROJECT, first);
+    assert.equal(partial.messageCount, first.messageCount);
+    assert.equal(partial.indexedBytes, 0);
+    fs.appendFileSync(file, append.slice(-3));
+    const noNewline = readSessionFile(file, FOLDER, PROJECT, partial);
+    assert.equal(noNewline.messageCount, first.messageCount + 1);
+    assert.equal(noNewline.indexedBytes, 0);
+    fs.appendFileSync(file, '\n');
+    const completed = readSessionFile(file, FOLDER, PROJECT, noNewline);
+    assert.equal(completed.messageCount, first.messageCount + 1);
+    assert.equal(completed.indexedBytes, fs.statSync(file).size);
+  });
+});
+
+test('incremental timestamps use message bounds rather than file-time fallbacks', () => {
+  withTmp(dir => {
+    const file = path.join(dir, 'session.jsonl');
+    fs.writeFileSync(file, buildSession(4));
+    const first = readSessionFile(file, FOLDER, PROJECT);
+    assert.equal(first.firstTimestamp, null);
+    fs.appendFileSync(file, line({ type: 'assistant', message: 'dated answer', timestamp: '2025-01-02T00:00:00Z' }));
+    const dated = readSessionFile(file, FOLDER, PROJECT, first);
+    assert.equal(dated.created, '2025-01-02T00:00:00Z');
+    assert.equal(dated.modified, '2025-01-02T00:00:00Z');
+    fs.appendFileSync(file, line({ type: 'user', message: 'earlier date', timestamp: '2025-01-01T00:00:00Z' }));
+    fs.appendFileSync(file, line({ type: 'ai-title', aiTitle: 'new title without activity' }));
+    const after = readSessionFile(file, FOLDER, PROJECT, dated);
+    const full = readSessionFile(file, FOLDER, PROJECT);
+    for (const field of ['created', 'modified', 'firstTimestamp', 'lastTimestamp', 'fileMtime', 'runtime', 'sessionFile']) {
+      assert.equal(after[field], full[field], field);
+    }
+    assert.equal(after.created, '2025-01-01T00:00:00Z');
+    assert.equal(after.modified, '2025-01-02T00:00:00Z');
+  });
+});
+
+test('old parser state and read errors cannot produce a seemingly complete incremental result', () => {
+  withTmp(dir => {
+    const file = path.join(dir, 'session.jsonl');
+    fs.writeFileSync(file, buildSession(100));
+    const first = readSessionFile(file, FOLDER, PROJECT);
+    const legacy = { ...first, headHash: first.headHash.slice(3), messageCount: 999 };
+    assert.equal(readSessionFile(file, FOLDER, PROJECT, legacy).messageCount, first.messageCount);
+    const read = fs.readSync;
+    fs.readSync = function(fd, buf, offset, length, position) {
+      if (position >= 256 * 1024) throw new Error('simulated read failure');
+      return read(fd, buf, offset, length, position);
+    };
+    try { assert.equal(readSessionFile(file, FOLDER, PROJECT), null); }
+    finally { fs.readSync = read; }
+  });
+});
+
+test('cwd derivation supports an unterminated first record without reading the rest of a large file', () => {
+  const { deriveProjectPath } = require('../harnesses/claude');
+  withTmp(dir => {
+    const file = path.join(dir, 'session.jsonl');
+    const record = JSON.stringify({ type: 'user', cwd: PROJECT, message: 'hello' });
+    fs.writeFileSync(file, record);
+    assert.equal(deriveProjectPath(dir), PROJECT);
+    fs.appendFileSync(file, '\n' + 'x'.repeat(1024 * 1024));
+    const read = fs.readSync;
+    let bytes = 0;
+    fs.readSync = function(...args) { const n = read(...args); bytes += n; return n; };
+    try {
+      assert.equal(deriveProjectPath(dir), PROJECT);
+      assert.ok(bytes <= 256 * 1024);
+    } finally { fs.readSync = read; }
   });
 });

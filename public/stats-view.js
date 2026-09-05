@@ -2,6 +2,7 @@
 // Depends on globals: escapeHtml (utils.js), statsViewerBody (app.js)
 
 let cachedUsage = null;
+let cachedCodexUsage = null;
 
 async function loadStats() {
   statsViewerBody.innerHTML = '';
@@ -14,6 +15,10 @@ async function loadStats() {
 
   // Refresh stats cache via PTY (/stats + /usage)
   let stats, usage;
+  // Codex usage is a plain API read, so it runs alongside the Claude refresh
+  // (which spawns a PTY) rather than after it.
+  const codexPromise = (window.api.getCodexUsage?.() ?? Promise.resolve({})).catch(() => ({}));
+
   try {
     const result = await window.api.refreshStats();
     stats = result?.stats;
@@ -25,10 +30,16 @@ async function loadStats() {
     usage = cachedUsage || {};
   }
 
+  let codexUsage = {};
+  try { codexUsage = await codexPromise; } catch {}
+  if (codexUsage && Object.keys(codexUsage).length) cachedCodexUsage = codexUsage;
+
   statsViewerBody.innerHTML = '';
 
-  if (!stats && !Object.keys(usage).length) {
-    statsViewerBody.innerHTML = '<div class="plans-empty">No stats data found. Run some Claude sessions first.</div>';
+  // Codex counts here too — a Codex-only user has no Claude stats cache, and
+  // bailing on that alone would hide their rate limits entirely.
+  if (!stats && !Object.keys(usage).length && !Object.keys(codexUsage || {}).length) {
+    statsViewerBody.innerHTML = '<div class="plans-empty">No stats data found. Run some sessions first.</div>';
     return;
   }
 
@@ -52,7 +63,16 @@ async function loadStats() {
 
   // Build usage section below charts (from /usage output)
   if (Object.keys(usage).length) {
-    buildUsageSection(usage);
+    buildUsageSection(usage, { runtime: 'claude', title: 'Claude Rate Limits' });
+  }
+
+  // A signed-out or switched-off Codex simply contributes no panel.
+  if (codexUsage && (codexUsage.limits?.length || codexUsage._error || codexUsage._rateLimited)) {
+    buildUsageSection(codexUsage, {
+      runtime: 'codex',
+      title: 'Codex Rate Limits',
+      refetch: () => window.api.getCodexUsage(),
+    });
   }
 
   if (stats) {
@@ -64,19 +84,26 @@ async function loadStats() {
   }
 }
 
-function buildUsageSection(usage) {
+/**
+ * One rate-limit panel per CLI.
+ *
+ * `runtime` keys the container so a refresh replaces only its own panel, and
+ * `refetch` is the per-CLI usage call — each refreshes independently, since one
+ * being signed out should not blank the other.
+ */
+function buildUsageSection(usage, { runtime = 'claude', title: titleText = 'Rate Limits', refetch = () => window.api.getUsage() } = {}) {
   // Remove existing usage container if present (for refresh)
-  const existing = statsViewerBody.querySelector('.usage-container');
+  const existing = statsViewerBody.querySelector('.usage-container-' + runtime);
   if (existing) existing.remove();
 
   const container = document.createElement('div');
-  container.className = 'usage-container';
+  container.className = 'usage-container usage-container-' + runtime;
 
   const titleRow = document.createElement('div');
   titleRow.className = 'usage-title-row';
   const title = document.createElement('div');
   title.className = 'daily-chart-title';
-  title.textContent = 'Rate Limits';
+  title.textContent = titleText;
   titleRow.appendChild(title);
 
   const refreshBtn = document.createElement('button');
@@ -87,10 +114,10 @@ function buildUsageSection(usage) {
     refreshBtn.classList.add('usage-refresh-spinning');
     refreshBtn.disabled = true;
     try {
-      const freshUsage = await window.api.getUsage();
+      const freshUsage = await refetch();
       if (freshUsage && Object.keys(freshUsage).length) {
-        cachedUsage = freshUsage;
-        buildUsageSection(freshUsage);
+        if (runtime === 'codex') cachedCodexUsage = freshUsage; else cachedUsage = freshUsage;
+        buildUsageSection(freshUsage, { runtime, title: titleText, refetch });
       }
     } catch {}
     refreshBtn.classList.remove('usage-refresh-spinning');
@@ -122,16 +149,22 @@ function buildUsageSection(usage) {
   const grid = document.createElement('div');
   grid.className = 'usage-grid';
 
-  const items = [
-    { key: 'session', label: 'Current session', resetKey: 'sessionReset' },
-    { key: 'weekAll', label: 'Week (all models)', resetKey: 'weekAllReset' },
-    { key: 'weekSonnet', label: 'Week (Sonnet)', resetKey: 'weekSonnetReset' },
-    { key: 'weekOpus', label: 'Week (Opus)', resetKey: 'weekOpusReset' },
-  ];
+  // Prefer the API's self-describing `limits` rows: they carry their own label
+  // and cover model-scoped windows (e.g. "Week (Fable)") that no fixed key list
+  // can anticipate. The flat keys below are the fallback for an older response
+  // shape — the per-model ones among them have gone null server-side.
+  const items = Array.isArray(usage.limits) && usage.limits.length
+    ? usage.limits.map(l => ({ label: l.label, pct: l.percent, reset: l.reset }))
+    : [
+      { key: 'session', label: 'Current session', resetKey: 'sessionReset' },
+      { key: 'weekAll', label: 'Week (all models)', resetKey: 'weekAllReset' },
+      { key: 'weekSonnet', label: 'Week (Sonnet)', resetKey: 'weekSonnetReset' },
+      { key: 'weekOpus', label: 'Week (Opus)', resetKey: 'weekOpusReset' },
+    ].map(i => ({ label: i.label, pct: usage[i.key], reset: usage[i.resetKey] }));
 
   for (const item of items) {
-    if (usage[item.key] === undefined) continue;
-    const pct = usage[item.key];
+    if (item.pct === undefined || item.pct === null) continue;
+    const pct = item.pct;
     const card = document.createElement('div');
     card.className = 'usage-card';
 
@@ -151,14 +184,14 @@ function buildUsageSection(usage) {
     track.className = 'usage-track';
     const fill = document.createElement('div');
     fill.className = 'usage-fill' + (pct >= 80 ? ' usage-fill-high' : '');
-    fill.style.width = Math.max(pct, 1) + '%';
+    fill.style.width = Math.min(Math.max(pct, 1), 100) + '%';
     track.appendChild(fill);
     card.appendChild(track);
 
-    if (usage[item.resetKey]) {
+    if (item.reset) {
       const reset = document.createElement('div');
       reset.className = 'usage-card-reset';
-      reset.textContent = 'Resets ' + usage[item.resetKey];
+      reset.textContent = 'Resets ' + item.reset;
       card.appendChild(reset);
     }
 
@@ -166,6 +199,21 @@ function buildUsageSection(usage) {
   }
 
   container.appendChild(grid);
+
+  // Plan, credit balance and reset credits — reported by codex only, and worth
+  // showing because a reset credit is a thing the user can actually spend.
+  const facts = [];
+  if (usage.planType) facts.push(`Plan: ${usage.planType}`);
+  if (usage.credits && !usage.credits.unlimited && usage.credits.balance != null
+      && usage.credits.balance !== '0') facts.push(`Credits: ${usage.credits.balance}`);
+  if (usage.resetCredits) facts.push(`${usage.resetCredits} limit reset${usage.resetCredits !== 1 ? 's' : ''} available`);
+  if (facts.length) {
+    const meta = document.createElement('div');
+    meta.className = 'usage-card-reset usage-account-facts';
+    meta.textContent = facts.join(' \u00b7 ');
+    container.appendChild(meta);
+  }
+
   // Insert before the stats notice footer if it exists, otherwise append
   const statsNotice = statsViewerBody.querySelector('.stats-notice');
   if (statsNotice) statsViewerBody.insertBefore(container, statsNotice);

@@ -2,9 +2,27 @@ const path = require('path');
 const fs = require('fs');
 const { Worker } = require('worker_threads');
 const { getFolderIndexMtimeMs } = require('./folder-index-state');
-const { deriveProjectPath } = require('./derive-project-path');
-const { readSessionFile } = require('./read-session-file');
 const { encodeProjectPath } = require('./encode-project-path');
+const { getHarness, DEFAULT_HARNESS, harnessForFolder, availableHarnesses } = require('./harnesses');
+
+// Only Claude sessions are indexed today; the harness lookup is here so the
+// call sites already read the right way when codex folders join them.
+const claude = getHarness(DEFAULT_HARNESS);
+const { deriveProjectPath, readSessionFile } = claude;
+
+/**
+ * Folder key → the directory holding its transcripts.
+ *
+ * Claude's root is the injected PROJECTS_DIR, not claude.sessionsRoot(): init()
+ * is handed that path so tests and the dev data-dir override can repoint it, and
+ * resolving through the harness default would quietly ignore them. Prefixed keys
+ * belong to a harness with a fixed root of its own, so those do go through it.
+ */
+function resolveFolderPath(folder) {
+  const h = harnessForFolder(folder);
+  if (!h.folderPrefix) return path.join(PROJECTS_DIR, folder);
+  return h.folderPath(String(folder).slice(h.folderPrefix.length));
+}
 
 /**
  * Session cache module.
@@ -13,7 +31,8 @@ const { encodeProjectPath } = require('./encode-project-path');
 let PROJECTS_DIR, activeSessions, getMainWindow, log;
 let deleteCachedFolder, getCachedByFolder, getCachedSession, upsertCachedSessions, deleteCachedSession;
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
-let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName;
+let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, setSetting, getMeta, setName;
+let updateCachedAiTitle, updateSearchTitle;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -34,59 +53,192 @@ function init(ctx) {
   getAllMeta = ctx.db.getAllMeta;
   getAllCached = ctx.db.getAllCached;
   getSetting = ctx.db.getSetting;
+  setSetting = ctx.db.setSetting;
   getMeta = ctx.db.getMeta;
   setName = ctx.db.setName;
+  updateCachedAiTitle = ctx.db.updateCachedAiTitle;
+  updateSearchTitle = ctx.db.updateSearchTitle;
 }
 
-// readSessionFile is imported from read-session-file.js (shared with worker)
+/**
+ * Give hidden projects from older builds a baseline time. Without one, the
+ * first ordinary rescan after upgrading could mistake an old transcript for a
+ * newly-created session and immediately undo the user's hide choice.
+ */
+function initializeHiddenProjectTimestamps(now = Date.now()) {
+  const global = getSetting('global') || {};
+  const hidden = Array.isArray(global.hiddenProjects) ? global.hiddenProjects : [];
+  const timestamps = (global.hiddenProjectTimestamps
+    && typeof global.hiddenProjectTimestamps === 'object'
+    && !Array.isArray(global.hiddenProjectTimestamps))
+    ? { ...global.hiddenProjectTimestamps }
+    : {};
+  let changed = false;
 
-/** Read one folder from filesystem by scanning .jsonl files directly */
-function readFolderFromFilesystem(folder) {
-  const folderPath = path.join(PROJECTS_DIR, folder);
-  const projectPath = deriveProjectPath(folderPath, folder);
-  if (!projectPath) return { projectPath: null, sessions: [] };
-  const sessions = [];
-
-  try {
-    const jsonlFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
-    for (const file of jsonlFiles) {
-      const s = readSessionFile(path.join(folderPath, file), folder, projectPath);
-      if (s) sessions.push(s);
+  for (const projectPath of hidden) {
+    if (!Number.isFinite(Number(timestamps[projectPath]))) {
+      timestamps[projectPath] = now;
+      changed = true;
     }
-  } catch {}
+  }
+  for (const projectPath of Object.keys(timestamps)) {
+    if (!hidden.includes(projectPath)) {
+      delete timestamps[projectPath];
+      changed = true;
+    }
+  }
 
-  return { projectPath, sessions };
+  if (changed) {
+    global.hiddenProjectTimestamps = timestamps;
+    setSetting('global', global);
+  }
 }
 
-/** Refresh a single folder incrementally: only re-read changed/new .jsonl files */
+/**
+ * Restore a hidden project when indexing finds a transcript file created after
+ * the project was hidden. File birth time distinguishes a new session from an
+ * old hidden session merely receiving more output; transcript `created` is a
+ * second signal for filesystems with coarse or unavailable birth times.
+ */
+function restoreProjectsWithNewSessions(sessions) {
+  if (!sessions.length) return [];
+
+  const global = getSetting('global') || {};
+  const hidden = new Set(global.hiddenProjects || []);
+  if (!hidden.size) return [];
+  const timestamps = global.hiddenProjectTimestamps || {};
+  const restored = new Set();
+
+  for (const session of sessions) {
+    if (!hidden.has(session.projectPath)) continue;
+    const hiddenAt = Number(timestamps[session.projectPath]);
+    if (!Number.isFinite(hiddenAt)) continue;
+
+    const creationTimes = [];
+    if (session.sessionFile) {
+      try {
+        const birthtimeMs = fs.statSync(session.sessionFile).birthtimeMs;
+        if (Number.isFinite(birthtimeMs) && birthtimeMs > 0) creationTimes.push(birthtimeMs);
+      } catch {}
+    }
+    const transcriptCreatedAt = Date.parse(session.created);
+    if (Number.isFinite(transcriptCreatedAt)) creationTimes.push(transcriptCreatedAt);
+    const createdAt = creationTimes.length ? Math.max(...creationTimes) : NaN;
+
+    if (Number.isFinite(createdAt) && createdAt >= hiddenAt) {
+      restored.add(session.projectPath);
+    }
+  }
+
+  if (!restored.size) return [];
+  global.hiddenProjects = [...hidden].filter(projectPath => !restored.has(projectPath));
+  const nextTimestamps = { ...timestamps };
+  for (const projectPath of restored) delete nextTimestamps[projectPath];
+  global.hiddenProjectTimestamps = nextTimestamps;
+  setSetting('global', global);
+  for (const projectPath of restored) log.info(`[projects] restored hidden project after new session: ${projectPath}`);
+  return [...restored];
+}
+
+/**
+ * Pull titles stored outside transcripts into the shared cache.
+ *
+ * Codex writes automatic names and `/rename` changes to session_index.jsonl,
+ * not to a rollout. Keeping them in aiTitle preserves the established title
+ * precedence: a name set in Switchboard still wins, while Codex's latest title
+ * wins over the first-prompt summary.
+ */
+function refreshHarnessTitles(harness) {
+  if (!harness?.readSessionTitles || !updateCachedAiTitle) return 0;
+  const titles = harness.readSessionTitles();
+  if (!(titles instanceof Map)) return 0; // unreadable: retain the last good data
+
+  const metaMap = getAllMeta();
+  let changed = 0;
+  for (const row of getAllCached()) {
+    if ((row.runtime || DEFAULT_HARNESS) !== harness.id) continue;
+    const title = titles.get(row.sessionId) || null;
+    if ((row.aiTitle || null) === title) continue;
+
+    changed += updateCachedAiTitle(row.sessionId, title, harness.id);
+    if (updateSearchTitle) {
+      const displayTitle = metaMap.get(row.sessionId)?.name || title || '';
+      updateSearchTitle(row.sessionId, 'session', (displayTitle ? displayTitle + ' ' : '') + (row.summary || ''));
+    }
+  }
+  return changed;
+}
+
+/**
+ * Which harnesses the user has switched off in settings.
+ *
+ * A disabled harness is not scanned and its sessions are not listed, but its
+ * cached rows stay in the database — so switching it back on is an incremental
+ * reconcile, not a full re-index.
+ */
+function disabledHarnessIds() {
+  const global = getSetting('global') || {};
+  return new Set(global.disabledHarnesses || []);
+}
+
+/**
+ * Every folder key worth indexing, across every harness available here.
+ *
+ * Claude's come from the injected PROJECTS_DIR rather than its own root, for
+ * the same reason resolveFolderPath does — see the note there. A harness whose
+ * home directory is missing contributes nothing and costs one existsSync.
+ */
+function listAllFolders() {
+  const disabled = disabledHarnessIds();
+  const folders = [];
+  if (!disabled.has(DEFAULT_HARNESS)) {
+    try {
+      for (const d of fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })) {
+        if (d.isDirectory() && d.name !== '.git') folders.push(d.name);
+      }
+    } catch {}
+  }
+  for (const h of availableHarnesses()) {
+    if (!h.folderPrefix) continue; // the unprefixed namespace is PROJECTS_DIR, above
+    if (disabled.has(h.id)) continue;
+    try { folders.push(...h.listFolders()); } catch {}
+  }
+  return folders;
+}
+
+/** Refresh a single folder incrementally: only re-read changed/new transcripts */
 function refreshFolder(folder) {
-  const folderPath = path.join(PROJECTS_DIR, folder);
+  const h = harnessForFolder(folder);
+  const folderPath = resolveFolderPath(folder);
   if (!fs.existsSync(folderPath)) {
     deleteCachedFolder(folder);
     return;
   }
+  // Never mark writes that arrive during this pass as already indexed. The
+  // Claude parser deliberately stops at its initial file size; a later append
+  // must remain visible to reconciliation even if its watcher event is missed.
+  const indexMtimeMs = getFolderIndexMtimeMs(folderPath);
 
-  const projectPath = deriveProjectPath(folderPath, folder);
-  if (!projectPath) {
-    setFolderMeta(folder, null, getFolderIndexMtimeMs(folderPath));
+  // For Claude a folder IS a project, and one with no readable cwd is unusable.
+  // A codex folder is a date spanning many projects, so there is no folder-level
+  // project to derive — each transcript carries its own, and folderProject stays
+  // null (which is also what cache_meta records for it).
+  const folderProject = h.deriveProjectPath(folderPath, folder);
+  if (h.groupsByProject && !folderProject) {
+    setFolderMeta(folder, null, indexMtimeMs);
     return;
   }
 
   // Get what's currently cached for this folder
   const cachedSessions = getCachedByFolder(folder);
-  const cachedMap = new Map(); // sessionId → modified ISO string
+  const cachedMap = new Map(); // sessionId → fileMtime ISO string (invalidation key)
   for (const row of cachedSessions) {
-    cachedMap.set(row.sessionId, row.modified);
+    cachedMap.set(row.sessionId, row.fileMtime);
   }
 
-  // Scan current .jsonl files
-  let jsonlFiles;
-  try {
-    jsonlFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
-  } catch { return; }
+  const transcripts = h.listTranscripts(folderPath);
 
   const currentIds = new Set();
-  let changed = false;
 
   // Collect all changes first, then batch DB writes to minimize lock duration
   const sessionsToUpsert = [];
@@ -94,9 +246,11 @@ function refreshFolder(folder) {
   const namesToSet = [];
   const sessionsToDelete = [];
 
-  for (const file of jsonlFiles) {
-    const filePath = path.join(folderPath, file);
-    const sessionId = path.basename(file, '.jsonl');
+  for (const filePath of transcripts) {
+    // Derived from the file name, so this costs no read — which is the whole
+    // point of the mtime gate below.
+    const sessionId = h.sessionIdFromPath(filePath);
+    if (!sessionId) continue;
     currentIds.add(sessionId);
 
     // Check if file mtime changed
@@ -112,27 +266,25 @@ function refreshFolder(folder) {
     // the file. Fetched per changed session on purpose: a folder holds
     // thousands of sessions and only a couple change per flush.
     const cachedRow = getCachedSession(sessionId);
-    const s = readSessionFile(filePath, folder, projectPath, cachedRow);
-    if (s) {
-      sessionsToUpsert.push(s);
+    const sess = h.readSessionFile(filePath, folder, folderProject, cachedRow);
+    if (sess) {
+      sessionsToUpsert.push(sess);
       // Title precedence: user rename (session_meta.name) > JSONL custom-title > JSONL ai-title.
       // Only customTitle (Claude /title) promotes to session_meta.name — AI titles must NEVER
       // be written there or they'd overwrite the user's UI rename on the next index pass.
-      const name = getMeta(s.sessionId)?.name || s.customTitle || s.aiTitle || '';
+      const name = getMeta(sess.sessionId)?.name || sess.customTitle || sess.aiTitle || '';
       searchEntriesToUpsert.push({
-        id: s.sessionId, type: 'session', folder: s.folder,
-        title: (name ? name + ' ' : '') + s.summary, body: s.textContent,
+        id: sess.sessionId, type: 'session', folder: sess.folder,
+        title: (name ? name + ' ' : '') + sess.summary, body: sess.textContent,
       });
-      if (s.customTitle) namesToSet.push({ id: s.sessionId, name: s.customTitle });
+      if (sess.customTitle) namesToSet.push({ id: sess.sessionId, name: sess.customTitle });
     }
-    changed = true;
   }
 
-  // Remove sessions whose .jsonl files were deleted
+  // Remove sessions whose transcripts were deleted
   for (const sessionId of cachedMap.keys()) {
     if (!currentIds.has(sessionId)) {
       sessionsToDelete.push(sessionId);
-      changed = true;
     }
   }
 
@@ -154,8 +306,10 @@ function refreshFolder(folder) {
     deleteSearchSession(sessionId);
   }
 
+  restoreProjectsWithNewSessions(sessionsToUpsert);
+
   // Update folder mtime
-  setFolderMeta(folder, projectPath, getFolderIndexMtimeMs(folderPath));
+  setFolderMeta(folder, folderProject, indexMtimeMs);
 }
 
 /**
@@ -169,21 +323,27 @@ function refreshFolder(folder) {
  * (populateCacheViaWorker) only runs when the cache is completely empty.
  */
 function reconcileCacheFromFilesystem() {
-  try {
-    const metaMap = getAllFolderMeta();
-    const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
-      .filter(d => d.isDirectory() && d.name !== '.git')
-      .map(d => d.name);
+  const metaMap = getAllFolderMeta();
 
-    for (const folder of folders) {
+  for (const folder of listAllFolders()) {
+    try {
       const meta = metaMap.get(folder);
-      const folderPath = path.join(PROJECTS_DIR, folder);
+      const folderPath = resolveFolderPath(folder);
       if (!meta || getFolderIndexMtimeMs(folderPath) > (meta.indexMtimeMs || 0)) {
         refreshFolder(folder);
       }
+    } catch (err) {
+      // One unreadable folder must not stop the rest — before this loop was
+      // per-harness, a single bad directory aborted the whole pass.
+      console.error('Error reconciling folder', folder, err);
     }
-  } catch (err) {
-    console.error('Error reconciling cache:', err);
+  }
+
+  // Some harness metadata changes without touching a transcript. This remains
+  // necessary even when every folder above was skipped by the mtime gate.
+  const disabled = disabledHarnessIds();
+  for (const h of availableHarnesses()) {
+    if (!disabled.has(h.id)) refreshHarnessTitles(h);
   }
 }
 
@@ -193,6 +353,7 @@ function buildProjectsFromCache(showArchived) {
   const cachedRows = getAllCached();
   const global = getSetting('global') || {};
   const hiddenProjects = new Set(global.hiddenProjects || []);
+  const disabledHarnesses = new Set(global.disabledHarnesses || []);
 
   // Group by projectPath, not on-disk folder name. Multiple ~/.claude/projects/<folder>/
   // directories can resolve to the same projectPath (Claude Code's folder-name encoding
@@ -205,6 +366,8 @@ function buildProjectsFromCache(showArchived) {
   for (const row of cachedRows) {
     if (!row.projectPath) continue;
     if (hiddenProjects.has(row.projectPath)) continue;
+    // Rows written before the runtime column existed are Claude's.
+    if (disabledHarnesses.has(row.runtime || DEFAULT_HARNESS)) continue;
     const meta = metaMap.get(row.sessionId);
     const s = {
       sessionId: row.sessionId,
@@ -216,6 +379,7 @@ function buildProjectsFromCache(showArchived) {
       projectPath: row.projectPath,
       slug: row.slug || null,
       aiTitle: row.aiTitle || null,
+      runtime: row.runtime || DEFAULT_HARNESS,
       name: meta?.name || null,
       starred: meta?.starred || 0,
       archived: meta?.archived || 0,
@@ -367,6 +531,7 @@ function populateCacheViaWorker() {
           };
         }));
       }
+      restoreProjectsWithNewSessions(sessions);
       setFolderMeta(folder, projectPath, indexMtimeMs);
     }
 
@@ -399,12 +564,12 @@ function populateCacheViaWorker() {
 
 module.exports = {
   init,
-  readSessionFile,
-  readFolderFromFilesystem,
   refreshFolder,
   reconcileCacheFromFilesystem,
   buildProjectsFromCache,
   notifyRendererProjectsChanged,
   sendStatus,
   populateCacheViaWorker,
+  refreshHarnessTitles,
+  initializeHiddenProjectTimestamps,
 };

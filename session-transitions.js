@@ -85,6 +85,9 @@ function detectSessionTransitions(folder) {
   } catch { return; }
 
   for (const [sessionId, session] of [...activeSessions]) {
+    // A session whose real id has already been adopted (by the launch matcher,
+    // which claims forks) must not be transitioned a second time.
+    if (session.realSessionId) continue;
     if (session.exited || session.isPlainTerminal || !session.knownJsonlFiles || session.projectFolder !== folder) {
       if (!session.exited && !session.isPlainTerminal && session.forkFrom) {
         log.info(`[fork-detect] skipped session=${sessionId} forkFrom=${session.forkFrom||'none'} reason=${session.exited ? 'exited' : session.isPlainTerminal ? 'terminal' : !session.knownJsonlFiles ? 'noKnown' : 'folderMismatch('+session.projectFolder+' vs '+folder+')'}`);

@@ -5,6 +5,7 @@ dist/
 *.db-shm
 public/codemirror-bundle.js
 .DS_Store
+.idea/
 *.pem
 .env
 .cache/

@@ -1,22 +1,106 @@
 # Switchboard
 
-Your command center for Claude Code sessions.
+Your command center for CLI coding sessions.
 
-Switchboard is a desktop app that gives you a unified view of all your Claude Code sessions across every project. Launch, resume, fork, and monitor sessions from a single window — no more juggling terminal tabs or digging through `~/.claude/projects` to find that one conversation from last week.
+Switchboard is a desktop app that gives you a unified view of all your coding agent sessions across every project. Launch, resume, fork, and monitor sessions from a single window — no more juggling terminal tabs or digging through `~/.claude/projects` and `~/.codex/sessions` to find that one conversation from last week.
 
 ![Switchboard](build/screenshot.png)
 
+### Supported CLIs
+
+| | Claude Code (`claude`) | Codex (`codex`) |
+|---|---|---|
+| Browse & search history | ✅ | ✅ |
+| Resume a session | ✅ | ✅ |
+| Start a new session | ✅ | ✅ |
+| Fork a session | ✅ | ✅ |
+| Read in the message viewer | ✅ | ✅ |
+| Status & activity indicators | ✅ | ✅ |
+| IDE emulation (diff review) | ✅ | — |
+| Plans & memory files | ✅ | — |
+
+Sessions from both CLIs share one sidebar, each row marked with its own logo. A
+fork runs on the CLI that wrote the session being forked.
+
+Turn either CLI off under **CLI Agents** in Settings. A switched-off CLI is not
+scanned, not watched, not offered when you start a session, and its sessions are
+hidden — but its history is kept, so switching it back on restores everything
+straight away. At least one CLI always stays on.
+
 ### Key Features
 
-- **Session Browser** — All your Claude Code sessions, organized by project, searchable by content
+- **Session Browser** — All your sessions from every supported CLI, organized by project, searchable by content
 - **Built-in Terminal** — Connect to running sessions or launch new ones without leaving the app
+- **Project Tasks & Server Logs** — Run `.vscode/tasks.json` commands from a compact project or worktree menu and view their live logs in the built-in terminal
 - **Status Notifications** — In-app alerts when a session is waiting for permission approval or user input
 - **Fork & Resume** — Branch off from any point in a session's history
 - **Full-Text Search** — Find any session by what was discussed, not just when it happened
-- **IDE Emulation** — Switchboard acts as an IDE for Claude CLI, showing file diffs and opens in a side panel where you can accept, reject, or edit changes before they're applied. Supports both inline and side-by-side diff views. Disable this in Global Settings if you prefer Claude to use your own editor (VS Code, Cursor, etc.)
-- **Plans & Memory** — Browse and edit your plan files and CLAUDE.md memory in one place
+- **Per-CLI Launch Options** — Claude sessions offer permission mode, worktree and Chrome; Codex sessions offer sandbox policy, approval policy and model. Set them per session, per project, or globally
+- **IDE Emulation** (Claude only) — Switchboard acts as an IDE for Claude CLI, showing file diffs and opens in a side panel where you can accept, reject, or edit changes before they're applied. Supports both inline and side-by-side diff views. Disable this in Global Settings if you prefer Claude to use your own editor (VS Code, Cursor, etc.)
+- **Plans & Memory** (Claude only) — Browse and edit your plan files and CLAUDE.md memory in one place
 - **Activity Stats** — Heatmap of your coding activity across all projects
-- **Session Names** — Picks up session names from Claude Code's `/rename` command automatically
+- **Session Names** (Claude only) — Picks up session names from Claude Code's `/rename` command automatically
+
+## Project Tasks and Server Logs
+
+Switchboard can run the commands in a project's `.vscode/tasks.json` without
+requiring a debugger. Use it for development servers, workers, asset watchers,
+test suites, or any other long-running project command whose output you want to
+keep beside your coding sessions.
+
+- **Compact task launcher** — A play button appears in each project header. In
+  worktree headers it appears between the hide and new-session buttons when you
+  hover, and stays visible while a task is running.
+- **Live, retained logs** — Selecting a task opens its terminal in the main
+  pane. Output is retained when you switch to another session or task, and the
+  selected task view is restored after a renderer reload.
+- **Independent lifecycle** — Tasks run separately from Claude and Codex
+  sessions. Stop or restart them from the terminal header without altering an
+  agent transcript.
+- **Project and worktree scope** — Commands run with the selected project or
+  worktree as `${workspaceFolder}`. A worktree inherits its parent project's
+  tasks when it has no `.vscode/tasks.json` of its own; a worktree-local file
+  overrides the inherited one.
+- **Compound stacks** — `dependsOn` tasks can start several services in
+  parallel, making one-click API + worker + frontend stacks possible. Stopping
+  the compound stops its child tasks.
+
+For example:
+
+```jsonc
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "API server",
+      "type": "process",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["-m", "uvicorn", "app.main:app", "--reload"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true
+    },
+    {
+      "label": "Frontend",
+      "type": "npm",
+      "script": "dev",
+      "isBackground": true
+    },
+    {
+      "label": "Full stack",
+      "dependsOn": ["API server", "Frontend"],
+      "dependsOrder": "parallel"
+    }
+  ]
+}
+```
+
+Switchboard reads JSON with comments and trailing commas and currently supports
+`shell`, `process`, and `npm` tasks, `dependsOn`/`dependsOrder`, task working
+directories and environment variables, platform overrides, and an optional
+`options.envFile`. Common workspace, home, path-separator, and `${env:NAME}`
+variables are expanded. Debug adapters, breakpoints, VS Code command/input
+variables, and problem-matcher diagnostics are outside the current scope; the
+feature is intentionally focused on running commands and seeing their logs.
 
 ## Session Grid Overview
 
@@ -24,14 +108,14 @@ Toggle the grid overview from the sidebar for a bird's-eye view of all your open
 
 ![Session Grid Overview](build/screenshot-grid.png)
 
-- **Live terminals** — Every open session renders its full terminal in a card, so you can monitor multiple Claude agents simultaneously.
+- **Live terminals** — Every open session renders its full terminal in a card, so you can monitor multiple agents simultaneously, whichever CLI each one is running.
 - **Status at a glance** — Each card shows a running/stopped/busy indicator dot and last-activity timestamp.
 - **Click to focus, double-click to expand** — Click a card header to focus it; double-click to switch back to single-terminal view for that session.
 - **Persistent** — Grid preference is saved across restarts.
 
 ## File Preview Side Panel & Claude IDE MCP Emulator
 
-Switchboard can act as an IDE for your Claude Code sessions. When enabled, Claude's file opens and proposed edits appear in a side panel next to the terminal instead of being sent to an external editor.
+Switchboard can act as an IDE for your Claude Code sessions. This one is Claude-only — it speaks Claude CLI's own IDE protocol, and Codex sessions are launched without it. When enabled, Claude's file opens and proposed edits appear in a side panel next to the terminal instead of being sent to an external editor.
 
 ![IDE Emulation](build/screenshot-ide.png)
 
@@ -44,12 +128,12 @@ To disable IDE emulation entirely (e.g. if you want Claude to use VS Code or Cur
 
 ## Status Notifications
 
-Switchboard monitors all your sessions in the background and shows status indicators in the sidebar so you can tell at a glance which sessions need attention — even when you're working in a different one.
+Switchboard monitors all your sessions in the background — Claude and Codex alike — and shows status indicators in the sidebar so you can tell at a glance which sessions need attention, even when you're working in a different one.
 
 ![Status Notifications](build/screenshot-notifications.png)
 
 - **Waiting for input** — A session that needs your response is highlighted so you don't miss it.
-- **Permission approval** — When Claude is blocked waiting for a permission grant, the session badge lets you know immediately.
+- **Permission approval** — When a session is blocked waiting for a permission grant or an approval, its badge lets you know immediately. Switchboard reads each CLI's own wording, so Claude's permission prompts and Codex's approval requests both register.
 - **Activity indicators** — See which sessions are actively running, idle, or finished.
 
 ## Editor
@@ -170,6 +254,7 @@ The macOS build uses custom entitlements (`build/entitlements.mac.plist`) to all
 main.js            Electron main process
 preload.js         Context bridge (IPC bindings)
 db.js              SQLite session cache & metadata
+harnesses/         Per-CLI modules (claude, codex) + registry
 public/            Renderer (HTML/CSS/JS)
 scripts/           Build & postinstall scripts
 build/             Icons, entitlements, builder resources

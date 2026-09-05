@@ -55,7 +55,7 @@ function wrapInGridCard(sessionId) {
   footer.className = 'grid-card-footer';
   const statusSpan = document.createElement('span');
   const timeSpan = document.createElement('span');
-  timeSpan.textContent = formatDate(lastActivityTime.get(sessionId) || new Date(session.modified));
+  timeSpan.textContent = formatDate(new Date(session.modified));
   footer.appendChild(statusSpan);
   footer.appendChild(timeSpan);
 

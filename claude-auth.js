@@ -96,13 +96,64 @@ function mapBucket(apiUsage, apiKey, usageKey, usage) {
   }
 }
 
+/**
+ * Map the API's `limits` array into a renderable list.
+ *
+ * The per-model top-level buckets this file used to read — seven_day_sonnet,
+ * seven_day_opus, and a set of codenamed ones — now come back `null`. The live
+ * data moved into `limits`, which is self-describing: each row carries its own
+ * `kind`, `percent`, `resets_at`, and, for model-scoped windows, the model's
+ * display name. Reading that means new models show up on their own instead of
+ * needing a new key added here every time one ships.
+ */
+function mapLimits(apiUsage, usage) {
+  const rows = Array.isArray(apiUsage.limits) ? apiUsage.limits : [];
+  const out = [];
+  for (const l of rows) {
+    if (!l || l.percent === null || l.percent === undefined) continue;
+    const model = l.scope?.model?.display_name || null;
+    const label = l.kind === 'session' ? 'Current session'
+      : l.kind === 'weekly_all' ? 'Week (all models)'
+      : model ? `Week (${model})`
+      : 'Week';
+    out.push({
+      kind: l.kind || null,
+      label,
+      model,
+      percent: Math.floor(l.percent),
+      reset: l.resets_at ? formatResetTime(l.resets_at) : null,
+      severity: l.severity || 'normal',
+    });
+  }
+  if (out.length) usage.limits = out;
+}
+
 function transformUsageResponse(apiUsage) {
   if (!apiUsage) return {};
   const usage = {};
+  // Legacy flat keys — kept because existing callers read usage.session /
+  // usage.weekAll directly. five_hour and seven_day are still populated by the
+  // API; the two model-specific ones are not, and are left in only so an older
+  // response shape still maps.
   mapBucket(apiUsage, 'five_hour', 'session', usage);
   mapBucket(apiUsage, 'seven_day', 'weekAll', usage);
   mapBucket(apiUsage, 'seven_day_sonnet', 'weekSonnet', usage);
   mapBucket(apiUsage, 'seven_day_opus', 'weekOpus', usage);
+
+  mapLimits(apiUsage, usage);
+
+  // Backfill the legacy keys from `limits` if the flat buckets ever go null too,
+  // so the status bar and any other flat-key reader keep working.
+  for (const l of usage.limits || []) {
+    if (l.kind === 'session' && usage.session === undefined) {
+      usage.session = l.percent;
+      if (l.reset) usage.sessionReset = l.reset;
+    }
+    if (l.kind === 'weekly_all' && usage.weekAll === undefined) {
+      usage.weekAll = l.percent;
+      if (l.reset) usage.weekAllReset = l.reset;
+    }
+  }
   return usage;
 }
 

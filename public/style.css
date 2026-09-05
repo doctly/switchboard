@@ -98,7 +98,6 @@ body { display: flex; flex-direction: column; }
 }
 
 #status-bar-activity {
-  margin-left: auto;
   white-space: nowrap;
   color: #8088ff;
 }
@@ -112,6 +111,52 @@ body { display: flex; flex-direction: column; }
   color: #888;
   font-style: italic;
 }
+
+#status-bar-quota {
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  cursor: pointer;
+  opacity: 0.95;
+  flex-shrink: 0;
+  margin-left: auto;
+  transition: opacity 0.15s;
+}
+/* One bar per limit window; count varies with what the usage API reports. */
+.quota-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.quota-label {
+  color: #b4b8d0;
+  white-space: nowrap;
+}
+#status-bar-quota:hover { opacity: 1; }
+.quota-track {
+  width: 34px;
+  height: 4px;
+  background: rgba(255,255,255,0.12);
+  border-radius: 2px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.quota-fill {
+  display: block;
+  height: 100%;
+  background: #3ecf5a;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+.quota-fill.quota-mid { background: #e8a030; }
+.quota-fill.quota-high { background: #e05070; }
+.quota-pct {
+  color: #b4b8d0;
+  white-space: nowrap;
+}
+
+
 
 /* ========== SIDEBAR ========== */
 #sidebar {
@@ -557,9 +602,12 @@ body { display: flex; flex-direction: column; }
   display: none;
 }
 
+/* Left edge lines up with the session rows above it (.session-item's 7px
+   inset), so the toggle reads as part of the same list. It was indented to
+   clear the pin back when the pin had its own gutter column. */
 .sessions-more-toggle {
   padding: 4px 10px;
-  margin: 4px 12px 10px 40px;
+  margin: 4px 12px 10px 7px;
   font-size: 11px;
   font-weight: 500;
   color: #7a7a90;
@@ -567,13 +615,36 @@ body { display: flex; flex-direction: column; }
   user-select: none;
   transition: all 0.15s;
   border-radius: 5px;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: rgba(255,255,255,0.03);
 }
 
 .sessions-more-toggle:hover {
   color: #8088ff;
   background: rgba(120,130,255,0.08);
+}
+
+.sessions-older-archive-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin: -3px -6px -3px 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #7a7a90;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.sessions-older-archive-btn:hover {
+  color: #8088ff;
+  background: rgba(120,130,255,0.16);
 }
 
 /* ---- Slug groups ---- */
@@ -683,9 +754,10 @@ body { display: flex; flex-direction: column; }
 
 .slug-group.collapsed .slug-group-sessions { display: none; }
 .slug-group.collapsed .slug-group-older { display: none; }
+/* Same alignment as .sessions-more-toggle, inside a slug group's indent. */
 .slug-group-more {
   padding: 4px 10px;
-  margin: 4px 12px 10px 22px;
+  margin: 4px 12px 10px 7px;
   font-size: 11px;
   font-weight: 500;
   color: #7a7a90;
@@ -711,7 +783,7 @@ body { display: flex; flex-direction: column; }
 
 /* ---- Session items ---- */
 .session-item {
-  padding: 0 12px;
+  padding: 0 7px;
   cursor: pointer;
   transition: all 0.12s;
 }
@@ -720,7 +792,7 @@ body { display: flex; flex-direction: column; }
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 10px 10px;
+  padding: 10px 8px;
   border-radius: 8px;
   transition: background 0.12s;
   position: relative;
@@ -734,18 +806,37 @@ body { display: flex; flex-direction: column; }
   background: rgba(120,130,255,0.14);
 }
 
+/* ---- Gutter: logo above, pin below ---- */
+.session-gutter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* Dim until the row is hovered or the session is actually pinned, so an
+   unpinned pin does not compete with the logo above it. */
+.session-gutter .session-pin {
+  opacity: 0.4;
+}
+
+.session-item:hover .session-gutter .session-pin,
+.session-gutter .session-pin.pinned {
+  opacity: 1;
+}
+
 /* ---- Pin ---- */
 .session-pin {
   flex-shrink: 0;
   cursor: pointer;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1;
   color: #7a7a96;
   transition: all 0.15s;
   user-select: none;
   display: flex;
   align-items: center;
-  margin-top: 5px;
 }
 
 .session-pin:hover {
@@ -758,15 +849,44 @@ body { display: flex; flex-direction: column; }
 }
 
 /* ---- Running dot ---- */
+/* Gutter mark: the session's CLI logo with its running dot tucked into the
+   corner. One column shared with the pin, so titles line up whatever the
+   session type is. The dot stays a separate element because the busy,
+   attention and response-ready states all restyle it. */
+.session-mark {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.session-mark-icon {
+  display: flex;
+  color: #7a7a90;
+  opacity: 0.8;
+}
+
+.session-item.has-running-pty .session-mark-icon { opacity: 1; }
+
+.session-item.is-codex .session-mark-icon { color: #10a37f; }
+.session-item.is-terminal .session-mark-icon { color: #3ecf5a; }
+
 .session-status-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -1px;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
-  margin-top: 7px;
-  background: rgba(255,255,255,0.18);
+  background: transparent;
 }
 
+/* Idle sessions show the logo alone — an always-on grey dot is noise. */
 .session-status-dot.running {
   background: #3ecf5a;
 }
@@ -781,10 +901,17 @@ body { display: flex; flex-direction: column; }
 .session-item.cli-busy:not(.needs-attention) .session-status-dot,
 .session-item.cli-busy:not(.needs-attention) .session-status-dot.running {
   background: transparent !important;
+  box-shadow: none !important;
+}
+
+.session-item.cli-busy:not(.needs-attention) .session-mark::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
   border: 1.5px solid #4fc3f7;
   border-top-color: transparent;
-  animation: spin-dot 0.8s linear infinite !important;
-  box-shadow: none !important;
+  animation: spin-dot 0.8s linear infinite;
 }
 
 @keyframes spin-dot {
@@ -855,6 +982,20 @@ body { display: flex; flex-direction: column; }
   margin-top: 3px;
 }
 
+/* Sidebar session items: time on the left, short session id on the right */
+.session-item .session-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.session-short-id {
+  font-family: 'SF Mono', 'Fira Code', Menlo, monospace;
+  color: #5a5a72;
+  flex-shrink: 0;
+}
+
 /* ---- Session action buttons ---- */
 .session-actions {
   flex-shrink: 0;
@@ -879,6 +1020,7 @@ body { display: flex; flex-direction: column; }
 .session-launch-config-btn,
 .session-fork-btn,
 .session-jsonl-btn,
+.session-unread-btn,
 .session-archive-btn {
   cursor: pointer;
   background: none;
@@ -905,6 +1047,14 @@ body { display: flex; flex-direction: column; }
   color: #5a7a6a;
 }
 
+.session-unread-btn {
+  color: #4a7f96;
+}
+
+.session-item.response-ready .session-unread-btn {
+  color: #4fc3f7;
+}
+
 .session-archive-btn {
   color: #6068b0;
 }
@@ -922,6 +1072,11 @@ body { display: flex; flex-direction: column; }
 .session-fork-btn:hover {
   color: #3ecf5a;
   background: rgba(62,207,90,0.1);
+}
+
+.session-unread-btn:hover {
+  color: #4fc3f7;
+  background: rgba(79,195,247,0.1);
 }
 
 .session-archive-btn:hover {
@@ -970,12 +1125,22 @@ body { display: flex; flex-direction: column; }
 }
 
 /* ---- Needs attention indicator (ripple) ---- */
+/* The dot is absolutely positioned in the gutter mark; it must stay that way
+   (it was `position: relative` when it was a plain flex child). */
 .session-item.needs-attention .session-status-dot,
 .session-item.needs-attention .session-status-dot.running {
   background: #f0a050;
   box-shadow: none;
   animation: none;
-  position: relative;
+}
+
+/* The logo is the thing the eye lands on, so a blocked session colours that,
+   not just the 6px dot beside it. */
+.session-item.needs-attention .session-mark-icon,
+.session-item.needs-attention.is-codex .session-mark-icon,
+.session-item.needs-attention.is-terminal .session-mark-icon {
+  color: #f0a050;
+  opacity: 1;
 }
 
 .session-item.needs-attention .session-status-dot::before,
@@ -1185,6 +1350,14 @@ body { display: flex; flex-direction: column; }
   background: #6a6a80;
 }
 
+#terminal-header-status.failed {
+  color: #e36a78;
+}
+
+#terminal-header-status.failed::before {
+  background: #e36a78;
+}
+
 #terminal-stop-btn {
   cursor: pointer;
   background: none;
@@ -1197,6 +1370,44 @@ body { display: flex; flex-direction: column; }
   align-items: center;
   justify-content: center;
   transition: all 0.15s;
+}
+
+#terminal-restart-task-btn {
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 4px;
+  line-height: 1;
+  color: #7a7a90;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#terminal-restart-task-btn:hover {
+  color: #8a91ff;
+  background: rgba(120,130,255,0.1);
+}
+
+#project-files-btn {
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 4px;
+  line-height: 1;
+  color: #7a7a90;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+#project-files-btn:hover,
+#project-files-btn.active {
+  color: #8a91ff;
+  background: rgba(120,130,255,0.1);
 }
 
 #terminal-stop-btn:hover {
@@ -2868,6 +3079,220 @@ body { display: flex; flex-direction: column; }
   color: #888;
 }
 
+/* ========== PROJECT TASKS ========== */
+.project-task-btn {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #7a7a90;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: all 0.15s;
+}
+
+.project-task-btn:hover {
+  opacity: 1;
+  color: #a6abff;
+  border-color: rgba(128,136,255,0.5);
+  background: rgba(128,136,255,0.13);
+}
+
+.project-task-btn.running {
+  color: #59d46d;
+  border-color: rgba(62,207,90,0.34);
+  background: rgba(62,207,90,0.09);
+}
+
+.project-task-btn.error {
+  color: #e36a78;
+  border-color: rgba(227,106,120,0.35);
+  background: rgba(227,106,120,0.08);
+}
+
+.project-task-count {
+  min-width: 10px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.worktree-task-btn {
+  height: 18px;
+  min-width: 20px;
+  padding: 0 4px;
+  opacity: 0;
+}
+
+.worktree-header:hover .worktree-task-btn {
+  opacity: 0.7;
+}
+
+.worktree-header .worktree-task-btn.running {
+  opacity: 1;
+}
+
+.task-popover {
+  position: fixed;
+  z-index: 10020;
+  max-height: min(440px, calc(100vh - 16px));
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 9px;
+  background: #1b1b26;
+  box-shadow: 0 14px 40px rgba(0,0,0,0.48);
+}
+
+.task-popover-header {
+  padding: 6px 8px 7px;
+  color: #85859b;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.task-popover-stop-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 5px;
+  color: #b65a6c;
+  background: transparent;
+  font: inherit;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.task-popover-stop-all:hover {
+  color: #e26b7e;
+  background: rgba(224,80,112,0.1);
+}
+
+.task-popover-stop-all:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.task-popover-error {
+  padding: 8px;
+  color: #e58a94;
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.task-popover-empty {
+  padding: 10px 8px 11px;
+  color: #85859b;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.task-popover-row {
+  width: 100%;
+  min-height: 43px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  color: #c9c9dc;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.task-popover-row:hover {
+  background: rgba(128,136,255,0.1);
+}
+
+.task-popover-row.unsupported {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.task-row-copy {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.task-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.task-row-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #77778d;
+  font-size: 10px;
+}
+
+.task-row-state {
+  flex: 0 0 auto;
+  color: #77778d;
+  font-size: 10px;
+}
+
+.task-row-state.running { color: #55cf69; }
+.task-row-state.failed { color: #e36a78; }
+
+.task-row-action {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: #8d93ff;
+  background: transparent;
+  cursor: pointer;
+}
+
+.task-row-action:hover {
+  background: rgba(128,136,255,0.16);
+}
+
+.task-row-action.stop {
+  color: #d45a70;
+}
+
+.task-row-action.stop:hover {
+  background: rgba(212,90,112,0.14);
+}
+
+.task-log-container {
+  background: #0d0d12;
+}
+
 /* ========== SETTINGS VIEWER ========== */
 #settings-viewer {
   position: absolute;
@@ -3444,6 +3869,18 @@ body { display: flex; flex-direction: column; }
   border-radius: 3px;
 }
 
+/* Every harness mark is 16px so the labels line up; the base 18px predates
+   there being more than one. */
+.popover-option-icon.codex-icon,
+.popover-option-icon.terminal-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.popover-option-icon.codex-icon {
+  color: #10a37f;
+}
+
 .popover-option-terminal .popover-option-icon,
 .terminal-icon {
   color: #3ecf5a;
@@ -3454,16 +3891,6 @@ body { display: flex; flex-direction: column; }
 }
 
 /* ========== TERMINAL BADGE ========== */
-.terminal-badge {
-  display: inline-flex;
-  align-items: center;
-  color: #3ecf5a;
-  margin-right: 5px;
-  vertical-align: middle;
-  position: relative;
-  top: -1px;
-}
-
 /* Terminal sessions: green status dot */
 .session-item.is-terminal .session-status-dot.running {
   background: #3ecf5a;
@@ -3569,8 +3996,156 @@ body { display: flex; flex-direction: column; }
 #file-panel-content {
   flex: 1;
   display: flex;
+  flex-direction: row;
+  min-height: 0;
+  min-width: 0;
+}
+
+#file-panel-workspace {
+  flex: 1;
+  display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 280px;
+}
+
+#project-file-browser {
+  width: 238px;
+  min-width: 190px;
+  max-width: 42%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex-shrink: 0;
+  background: #14141c;
+  border-right: 1px solid rgba(255,255,255,0.06);
+}
+
+#file-panel-content.browser-only #project-file-browser {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  border-right: none;
+}
+
+#project-file-browser-header {
+  height: 41px;
+  padding: 0 8px 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+#project-file-browser-root {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #aaaabd;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+#project-file-browser-refresh {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 5px;
+  color: #77778d;
+  background: transparent;
+  cursor: pointer;
+}
+
+#project-file-browser-refresh:hover {
+  color: #8a91ff;
+  background: rgba(120,130,255,0.1);
+}
+
+#project-file-browser-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 5px 0 10px;
+}
+
+.project-file-tree-row {
+  width: 100%;
+  height: 25px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  border-radius: 0;
+  color: #a2a2b4;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: left;
+  cursor: default;
+}
+
+.project-file-tree-row.directory,
+.project-file-tree-row.file:not(:disabled) {
+  cursor: pointer;
+}
+
+.project-file-tree-row:hover:not(:disabled) {
+  color: #d0d0df;
+  background: rgba(255,255,255,0.045);
+}
+
+.project-file-tree-row.selected {
+  color: #d8d9ff;
+  background: rgba(120,130,255,0.13);
+}
+
+.project-file-tree-row:disabled {
+  opacity: 0.38;
+}
+
+.project-file-tree-chevron,
+.project-file-tree-spacer {
+  width: 10px;
+  flex-shrink: 0;
+  color: #68687c;
+  text-align: center;
+}
+
+.project-file-tree-icon {
+  width: 16px;
+  flex-shrink: 0;
+  font-size: 12px;
+  filter: saturate(0.45);
+}
+
+.project-file-tree-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-file-tree-loading,
+.project-file-browser-message {
+  padding: 8px 12px;
+  color: #69697d;
+  font-size: 11px;
+}
+
+.project-file-browser-message.error {
+  color: #d66b80;
+  white-space: normal;
 }
 
 #file-panel-viewer,
@@ -3689,4 +4264,53 @@ body { display: flex; flex-direction: column; }
   background: #8088ff;
   margin-right: 5px;
   vertical-align: middle;
+}
+
+/* The running dot means "running", not "which CLI" — it stays one colour for
+   every harness. The logo beside it is what carries the brand. */
+
+/* A CLI that is not installed shows its toggle greyed rather than hidden, so
+   the list explains itself. */
+.settings-toggle input:disabled + .settings-toggle-slider {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ---- Quota gauge: one group per CLI ---- */
+/* Each CLI's windows sit behind its own logo, with a wider gap between groups
+   than between bars so the two read as separate blocks rather than one run. */
+.quota-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.quota-runtime-icon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+
+.quota-group-codex .quota-runtime-icon { color: #10a37f; }
+
+/* Bars are tinted by the CLI that reported them too — the label alone
+   ("Week") is ambiguous once two CLIs are on the bar. */
+.quota-item-codex .quota-label { color: #10a37f; }
+.quota-item-codex .quota-fill { background: #10a37f; }
+.quota-item-codex .quota-fill.quota-mid { background: #d6a53c; }
+.quota-item-codex .quota-fill.quota-high { background: #e5714d; }
+
+/* Plan, credit balance and reset credits — codex reports these, Claude does not. */
+.usage-account-facts {
+  margin-top: 10px;
+  text-align: right;
+  opacity: 0.85;
+}
+
+/* A session that never started shows a dismiss cross where the stop square
+   would be — there is no process to stop, only a row to clear. */
+.session-dismiss-btn:hover {
+  color: #e5714d;
 }

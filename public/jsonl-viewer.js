@@ -1,6 +1,7 @@
 // --- JSONL Message History Viewer ---
-// Depends on globals: escapeHtml (utils.js), hideAllViewers, placeholder,
-// terminalArea, jsonlViewer, jsonlViewerTitle, jsonlViewerSessionId, jsonlViewerBody (app.js)
+// Depends on globals: escapeHtml (utils.js), hideAllViewers, setActiveSession,
+// placeholder, terminalArea, jsonlViewer, jsonlViewerTitle,
+// jsonlViewerSessionId, jsonlViewerBody (app.js)
 
 function renderJsonlText(text) {
   if (window.marked) {
@@ -553,6 +554,14 @@ function renderJsonlEntry(entry, toolResultMap) {
 }
 
 async function showJsonlViewer(session) {
+  // Viewing a transcript is another way of navigating to a session. Keep the
+  // sidebar highlight and persisted selection in sync even though the action
+  // button stops the session row's normal click handler.
+  document.querySelectorAll('.session-item.active').forEach(el => el.classList.remove('active'));
+  const item = document.querySelector(`.session-item[data-session-id="${session.sessionId}"]`);
+  if (item) item.classList.add('active');
+  setActiveSession(session.sessionId);
+
   const result = await window.api.readSessionJsonl(session.sessionId);
   hideAllViewers();
   placeholder.style.display = 'none';

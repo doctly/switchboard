@@ -1,6 +1,6 @@
 {
   "name": "switchboard",
-  "version": "0.0.30",
+  "version": "0.0.35",
   "private": true,
   "description": "A desktop app for browsing, searching, and managing CLI coding sessions",
   "author": "Doctly <support@doctly.ai>",
@@ -9,6 +9,7 @@
     "start": "npm run bundle:codemirror && electron .",
     "test": "node --test",
     "electron": "electron .",
+    "electron-dev": "SWITCHBOARD_DATA_DIR=\"$HOME/.switchboard-dev\" electron .",
     "bundle:codemirror": "esbuild public/codemirror-setup.js --bundle --outfile=public/codemirror-bundle.js --format=iife --platform=browser --minify",
     "generate-icons": "node scripts/generate-icons.js && node scripts/generate-dmg-background.js",
     "build": "npm run bundle:codemirror && electron-builder",
@@ -27,12 +28,14 @@
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
     "better-sqlite3": "^12.0.0",
+    "dotenv": "^17.4.2",
     "electron-log": "^5.3.0",
-    "electron-updater": "^6.3.0",
+    "electron-updater": "^6.8.9",
+    "jsonc-parser": "^3.3.1",
     "marked": "^17.0.4",
     "morphdom": "^2.7.8",
     "node-pty": "^1.0.0",
-    "ws": "^8.18.0"
+    "ws": "^8.21.1"
   },
   "devDependencies": {
     "@codemirror/commands": "^6.10.2",
@@ -56,6 +59,7 @@
     "productName": "Switchboard",
     "files": [
       "*.js",
+      "harnesses/**/*",
       "workers/**/*",
       "public/**/*",
       "node_modules/**/*"

@@ -1,0 +1,20 @@
+{
+  // These make the task runner immediately testable while developing Switchboard.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Test",
+      "type": "npm",
+      "script": "test",
+      "group": "test",
+      "detail": "Run the full Node test suite"
+    },
+    {
+      "label": "Rebuild editor bundle",
+      "type": "npm",
+      "script": "bundle:codemirror",
+      "group": "build",
+      "detail": "Regenerate the browser CodeMirror bundle"
+    }
+  ]
+}

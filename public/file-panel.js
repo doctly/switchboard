@@ -23,6 +23,13 @@ let filePanelContentEl = null;  // container for ViewerPanel or diff content
 let filePanelResizeHandle = null;
 let terminalSplitEl = null;
 let currentPanelSessionId = null;
+let filePanelWorkspaceEl = null;
+
+// Project browser DOM
+let projectBrowserEl = null;
+let projectBrowserTreeEl = null;
+let projectBrowserRootEl = null;
+let projectBrowserToggleEl = null;
 
 // ViewerPanel instance for file-type tabs
 let fpViewerPanel = null;
@@ -36,6 +43,7 @@ let diffToggleBtn = null;
 const PANEL_WIDTH_KEY = 'filePanelWidth';
 const DEFAULT_PANEL_WIDTH = parseInt(localStorage.getItem(PANEL_WIDTH_KEY), 10) || 450;
 const MIN_PANEL_WIDTH = 280;
+const DEFAULT_BROWSER_PANEL_WIDTH = 620;
 
 const DIFF_MODE_KEY = 'filePanelDiffMode';
 let diffMode = localStorage.getItem(DIFF_MODE_KEY) || 'side-by-side';
@@ -68,14 +76,21 @@ function initFilePanel() {
   filePanelContentEl.id = 'file-panel-content';
   filePanelEl.appendChild(filePanelContentEl);
 
+  createProjectBrowser();
+
+  filePanelWorkspaceEl = document.createElement('div');
+  filePanelWorkspaceEl.id = 'file-panel-workspace';
+  filePanelContentEl.appendChild(filePanelWorkspaceEl);
+
   // ── ViewerPanel for file-type tabs ──
   const vpContainer = document.createElement('div');
   vpContainer.id = 'file-panel-viewer';
   vpContainer.style.display = 'none';
-  filePanelContentEl.appendChild(vpContainer);
+  filePanelWorkspaceEl.appendChild(vpContainer);
 
   fpViewerPanel = new ViewerPanel(vpContainer, {
     language: 'auto',
+    storageKey: 'markdownPreviewMode',
     onSave: (filePath, content) => window.api.saveFileForPanel(filePath, content),
     onClose: handleClose,
   });
@@ -84,7 +99,7 @@ function initFilePanel() {
   const diffContainer = document.createElement('div');
   diffContainer.id = 'file-panel-diff';
   diffContainer.style.display = 'none';
-  filePanelContentEl.appendChild(diffContainer);
+  filePanelWorkspaceEl.appendChild(diffContainer);
 
   // Diff toolbar
   diffToolbarEl = document.createElement('div');
@@ -137,6 +152,7 @@ function initFilePanel() {
   wireIpcListeners();
   setupPanelResizeHandle();
   addMcpToggle();
+  addProjectBrowserToggle();
 }
 
 // ── Handlers ────────────────────────────────────────────────────────
@@ -156,12 +172,18 @@ function handleClose() {
     }
     if (tab.type === 'file') {
       fpViewerPanel.destroy();
+      state.selectedPath = '';
     }
     state.currentTab = null;
   }
 
-  state.panelVisible = false;
-  hidePanel();
+  state.panelVisible = state.explorerVisible;
+  if (state.panelVisible) {
+    showPanel(state);
+    renderPanel(currentPanelSessionId);
+  } else {
+    hidePanel();
+  }
 }
 
 async function handleDiffSave() {
@@ -229,6 +251,14 @@ function getSessionState(sessionId) {
       panelVisible: false,
       panelWidth: DEFAULT_PANEL_WIDTH,
       mcpActive: false,
+      explorerVisible: false,
+      projectPath: '',
+      expandedPaths: new Set(),
+      directoryCache: new Map(),
+      loadingDirectories: new Set(),
+      selectedPath: '',
+      browserError: '',
+      browserGeneration: 0,
     });
   }
   return filePanelState.get(sessionId);
@@ -246,6 +276,22 @@ function rekeyFilePanelState(oldId, newId) {
     filePanelState.delete(oldId);
     filePanelState.set(newId, state);
   }
+  if (currentPanelSessionId === newId) {
+    updateProjectBrowserToggle();
+    const currentState = getSessionState(newId);
+    if (currentState.panelVisible && (currentState.currentTab || currentState.explorerVisible)) {
+      showPanel(currentState);
+      renderPanel(newId);
+    }
+  }
+}
+
+function sessionIdForState(state, fallbackId) {
+  if (filePanelState.get(fallbackId) === state) return fallbackId;
+  for (const [sessionId, candidate] of filePanelState) {
+    if (candidate === state) return sessionId;
+  }
+  return null;
 }
 
 // ── Tab Operations ──────────────────────────────────────────────────
@@ -319,6 +365,34 @@ async function openFileInPanel(sessionId, filePath) {
   openFileTab(sessionId, { filePath, content: result.content });
 }
 
+async function openProjectFile(sessionId, relativePath) {
+  const state = getSessionState(sessionId);
+  if (!state.projectPath) return;
+  if (state.currentTab?.type === 'diff' && !state.currentTab.resolved) {
+    state.browserError = 'Resolve or close the current diff before previewing another file';
+    renderProjectBrowser(sessionId);
+    return;
+  }
+  const requestedRoot = state.projectPath;
+
+  state.selectedPath = relativePath;
+  state.browserError = '';
+  renderProjectBrowser(sessionId);
+
+  const result = await window.api.readProjectFile(requestedRoot, relativePath);
+  if (state.projectPath !== requestedRoot) return;
+  const effectiveSessionId = sessionIdForState(state, sessionId);
+  if (!effectiveSessionId) return;
+  if (!result.ok) {
+    state.selectedPath = '';
+    state.browserError = result.error || 'Unable to preview file';
+    if (currentPanelSessionId === effectiveSessionId) renderProjectBrowser(effectiveSessionId);
+    return;
+  }
+
+  openFileTab(effectiveSessionId, { filePath: result.filePath, content: result.content });
+}
+
 function closeAllDiffs(sessionId) {
   const state = filePanelState.get(sessionId);
   if (!state) return;
@@ -326,8 +400,11 @@ function closeAllDiffs(sessionId) {
   if (state.currentTab?.type === 'diff') {
     destroyCurrentTab(state);
     state.currentTab = null;
-    state.panelVisible = false;
-    if (currentPanelSessionId === sessionId) hidePanel();
+    state.panelVisible = state.explorerVisible;
+    if (currentPanelSessionId === sessionId) {
+      if (state.panelVisible) renderPanel(sessionId);
+      else hidePanel();
+    }
   }
 }
 
@@ -339,8 +416,11 @@ function closeDiffByDiffId(sessionId, diffId) {
   state.currentTab.resolved = true;
   destroyCurrentTab(state);
   state.currentTab = null;
-  state.panelVisible = false;
-  if (currentPanelSessionId === sessionId) hidePanel();
+  state.panelVisible = state.explorerVisible;
+  if (currentPanelSessionId === sessionId) {
+    if (state.panelVisible) renderPanel(sessionId);
+    else hidePanel();
+  }
 }
 
 // ── Panel Show/Hide ─────────────────────────────────────────────────
@@ -364,6 +444,7 @@ function hidePanel() {
 function switchPanel(sessionId) {
   currentPanelSessionId = sessionId;
   updateMcpIndicator();
+  updateProjectBrowserToggle();
 
   if (!sessionId) {
     hidePanel();
@@ -372,7 +453,7 @@ function switchPanel(sessionId) {
 
   const state = getSessionState(sessionId);
 
-  if (state.panelVisible && state.currentTab) {
+  if (state.panelVisible && (state.currentTab || state.explorerVisible)) {
     showPanel(state);
     renderPanel(sessionId);
   } else {
@@ -390,6 +471,13 @@ function updateMcpIndicator() {
   mcpIndicatorEl.style.display = (state && state.mcpActive) ? '' : 'none';
 }
 
+function updateProjectBrowserToggle() {
+  if (!projectBrowserToggleEl) return;
+  const state = currentPanelSessionId ? filePanelState.get(currentPanelSessionId) : null;
+  projectBrowserToggleEl.classList.toggle('active', !!state?.explorerVisible);
+  projectBrowserToggleEl.setAttribute('aria-pressed', state?.explorerVisible ? 'true' : 'false');
+}
+
 // ── Panel Rendering ─────────────────────────────────────────────────
 
 function renderPanel(sessionId) {
@@ -398,6 +486,7 @@ function renderPanel(sessionId) {
   const state = getSessionState(sessionId);
   if (!state) return;
 
+  renderProjectBrowser(sessionId);
   renderTabContent(sessionId, state.currentTab);
 }
 
@@ -406,10 +495,15 @@ function renderTabContent(sessionId, tab) {
   const diffContainer = document.getElementById('file-panel-diff');
 
   if (!tab) {
+    filePanelContentEl.classList.add('browser-only');
+    filePanelWorkspaceEl.style.display = 'none';
     vpContainer.style.display = 'none';
     diffContainer.style.display = 'none';
     return;
   }
+
+  filePanelContentEl.classList.remove('browser-only');
+  filePanelWorkspaceEl.style.display = 'flex';
 
   if (tab.type === 'file') {
     // Use ViewerPanel
@@ -519,6 +613,217 @@ function addMcpToggle() {
     controls.insertBefore(mcpIndicatorEl, stopBtn);
   } else {
     controls.appendChild(mcpIndicatorEl);
+  }
+}
+
+function addProjectBrowserToggle() {
+  const controls = document.getElementById('terminal-header-controls');
+  if (!controls) return;
+
+  projectBrowserToggleEl = document.createElement('button');
+  projectBrowserToggleEl.id = 'project-files-btn';
+  projectBrowserToggleEl.title = 'Browse project files';
+  projectBrowserToggleEl.setAttribute('aria-label', 'Browse project files');
+  projectBrowserToggleEl.setAttribute('aria-pressed', 'false');
+  projectBrowserToggleEl.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4H9l2 2h7.5A2.5 2.5 0 0 1 21 8.5v9A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5z"/><path d="M8 11v6M11 13v4M14 15v2"/></svg>';
+  projectBrowserToggleEl.addEventListener('click', toggleProjectBrowser);
+
+  const stopBtn = document.getElementById('terminal-stop-btn');
+  controls.insertBefore(projectBrowserToggleEl, mcpIndicatorEl || stopBtn || null);
+}
+
+function toggleProjectBrowser() {
+  if (!currentPanelSessionId) return;
+  const state = getSessionState(currentPanelSessionId);
+  state.explorerVisible = !state.explorerVisible;
+
+  if (state.explorerVisible) {
+    state.panelVisible = true;
+    state.panelWidth = Math.max(state.panelWidth || 0, DEFAULT_BROWSER_PANEL_WIDTH);
+    syncProjectPath(currentPanelSessionId, state);
+    showPanel(state);
+    if (state.currentTab) renderProjectBrowser(currentPanelSessionId);
+    else renderPanel(currentPanelSessionId);
+  } else if (!state.currentTab) {
+    state.panelVisible = false;
+    hidePanel();
+  } else {
+    renderProjectBrowser(currentPanelSessionId);
+  }
+
+  updateProjectBrowserToggle();
+}
+
+function createProjectBrowser() {
+  projectBrowserEl = document.createElement('div');
+  projectBrowserEl.id = 'project-file-browser';
+  projectBrowserEl.style.display = 'none';
+
+  const header = document.createElement('div');
+  header.id = 'project-file-browser-header';
+
+  projectBrowserRootEl = document.createElement('span');
+  projectBrowserRootEl.id = 'project-file-browser-root';
+  header.appendChild(projectBrowserRootEl);
+
+  const refreshBtn = document.createElement('button');
+  refreshBtn.id = 'project-file-browser-refresh';
+  refreshBtn.title = 'Refresh project files';
+  refreshBtn.setAttribute('aria-label', 'Refresh project files');
+  refreshBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6v5h-5"/><path d="M4 18v-5h5"/><path d="M18.5 9A7 7 0 0 0 6 6.5L4 9m16 6-2 2.5A7 7 0 0 1 5.5 15"/></svg>';
+  refreshBtn.addEventListener('click', () => {
+    if (!currentPanelSessionId) return;
+    const state = getSessionState(currentPanelSessionId);
+    state.directoryCache.clear();
+    state.loadingDirectories.clear();
+    state.browserError = '';
+    state.browserGeneration++;
+    renderProjectBrowser(currentPanelSessionId);
+  });
+  header.appendChild(refreshBtn);
+
+  projectBrowserTreeEl = document.createElement('div');
+  projectBrowserTreeEl.id = 'project-file-browser-tree';
+
+  projectBrowserEl.appendChild(header);
+  projectBrowserEl.appendChild(projectBrowserTreeEl);
+  filePanelContentEl.appendChild(projectBrowserEl);
+}
+
+function getProjectPathForSession(sessionId) {
+  let session = null;
+  if (typeof openSessions !== 'undefined') session = openSessions.get(sessionId)?.session;
+  if (!session && typeof sessionMap !== 'undefined') session = sessionMap.get(sessionId);
+  if (!session && typeof pendingSessions !== 'undefined') session = pendingSessions.get(sessionId)?.session;
+  return session?.projectPath || '';
+}
+
+function syncProjectPath(sessionId, state) {
+  const projectPath = getProjectPathForSession(sessionId);
+  if (state.projectPath === projectPath) return;
+  state.projectPath = projectPath;
+  state.expandedPaths.clear();
+  state.directoryCache.clear();
+  state.loadingDirectories.clear();
+  state.selectedPath = '';
+  state.browserError = '';
+  state.browserGeneration++;
+}
+
+function renderProjectBrowser(sessionId) {
+  if (!projectBrowserEl || currentPanelSessionId !== sessionId) return;
+  const state = getSessionState(sessionId);
+  syncProjectPath(sessionId, state);
+
+  projectBrowserEl.style.display = state.explorerVisible ? 'flex' : 'none';
+  if (!state.explorerVisible) return;
+
+  projectBrowserRootEl.textContent = state.projectPath ? basename(state.projectPath) : 'Project files';
+  projectBrowserRootEl.title = state.projectPath || 'No project folder is available for this session';
+  projectBrowserTreeEl.innerHTML = '';
+
+  if (!state.projectPath) {
+    appendBrowserMessage('No project folder available', 'empty');
+    return;
+  }
+
+  if (state.browserError) appendBrowserMessage(state.browserError, 'error');
+
+  const rootEntries = state.directoryCache.get('');
+  if (!rootEntries) {
+    appendBrowserMessage('Loading files…', 'loading');
+    loadProjectDirectory(sessionId, state, '');
+    return;
+  }
+
+  if (!rootEntries.length) {
+    appendBrowserMessage('This project folder is empty', 'empty');
+    return;
+  }
+  appendTreeEntries(sessionId, state, projectBrowserTreeEl, rootEntries, 0);
+}
+
+function appendBrowserMessage(message, kind) {
+  const el = document.createElement('div');
+  el.className = `project-file-browser-message ${kind}`;
+  el.textContent = message;
+  projectBrowserTreeEl.appendChild(el);
+}
+
+function loadProjectDirectory(sessionId, state, relativePath) {
+  if (state.loadingDirectories.has(relativePath)) return;
+  const requestedRoot = state.projectPath;
+  const requestedGeneration = state.browserGeneration;
+  state.loadingDirectories.add(relativePath);
+
+  window.api.listProjectDirectory(requestedRoot, relativePath).then(result => {
+    if (state.projectPath !== requestedRoot || state.browserGeneration !== requestedGeneration) return;
+    if (result.ok) {
+      state.directoryCache.set(relativePath, result.entries || []);
+    } else {
+      state.browserError = result.error || 'Unable to list project files';
+      state.expandedPaths.delete(relativePath);
+    }
+  }).catch(err => {
+    if (state.projectPath !== requestedRoot || state.browserGeneration !== requestedGeneration) return;
+    state.browserError = err?.message || 'Unable to list project files';
+    state.expandedPaths.delete(relativePath);
+  }).finally(() => {
+    if (state.projectPath !== requestedRoot || state.browserGeneration !== requestedGeneration) return;
+    state.loadingDirectories.delete(relativePath);
+    const effectiveSessionId = sessionIdForState(state, sessionId);
+    if (effectiveSessionId && currentPanelSessionId === effectiveSessionId) {
+      renderProjectBrowser(effectiveSessionId);
+    }
+  });
+}
+
+function appendTreeEntries(sessionId, state, container, entries, depth) {
+  for (const entry of entries) {
+    const row = document.createElement('button');
+    row.className = 'project-file-tree-row';
+    row.style.paddingLeft = `${8 + depth * 14}px`;
+    row.dataset.path = entry.relativePath;
+
+    if (entry.type === 'directory') {
+      const expanded = state.expandedPaths.has(entry.relativePath);
+      row.classList.add('directory');
+      row.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      row.innerHTML = `<span class="project-file-tree-chevron">${expanded ? '⌄' : '›'}</span><span class="project-file-tree-icon">${expanded ? '📂' : '📁'}</span><span class="project-file-tree-name"></span>`;
+      row.querySelector('.project-file-tree-name').textContent = entry.name;
+      row.addEventListener('click', () => {
+        if (expanded) state.expandedPaths.delete(entry.relativePath);
+        else state.expandedPaths.add(entry.relativePath);
+        renderProjectBrowser(sessionId);
+        if (!expanded && !state.directoryCache.has(entry.relativePath)) {
+          loadProjectDirectory(sessionId, state, entry.relativePath);
+        }
+      });
+      container.appendChild(row);
+
+      if (expanded) {
+        const childEntries = state.directoryCache.get(entry.relativePath);
+        if (childEntries) {
+          appendTreeEntries(sessionId, state, container, childEntries, depth + 1);
+        } else {
+          const loading = document.createElement('div');
+          loading.className = 'project-file-tree-loading';
+          loading.style.paddingLeft = `${12 + (depth + 1) * 14}px`;
+          loading.textContent = 'Loading…';
+          container.appendChild(loading);
+        }
+      }
+      continue;
+    }
+
+    row.classList.add('file');
+    row.classList.toggle('selected', state.selectedPath === entry.relativePath);
+    row.disabled = !entry.viewable;
+    row.title = entry.viewable ? entry.relativePath : 'This file type cannot be previewed';
+    row.innerHTML = '<span class="project-file-tree-spacer"></span><span class="project-file-tree-icon">📄</span><span class="project-file-tree-name"></span>';
+    row.querySelector('.project-file-tree-name').textContent = entry.name;
+    if (entry.viewable) row.addEventListener('click', () => openProjectFile(sessionId, entry.relativePath));
+    container.appendChild(row);
   }
 }
 

@@ -20,55 +20,55 @@ const CHUNK_BYTES = 256 * 1024;
  *   tail     — trailing bytes with no newline; NOT counted in `consumed`,
  *              because a partial line will be re-read on the next pass
  *   stopped  — whether onLine asked to stop
+ *
+ * Accepts a path or an already-open descriptor. Reads only through endByte
+ * (default: the size at entry), so appends cannot make a scan run forever.
+ * I/O errors propagate: callers must not persist a partial scan as complete.
  */
-function scanLines(filePath, startByte, onLine) {
-  let fd = null;
+function scanLines(filePath, startByte, onLine, endByte) {
+  const ownsFd = typeof filePath !== 'number';
+  const fd = ownsFd ? fs.openSync(filePath, 'r') : filePath;
   let consumed = startByte;
   let read = 0;
-  let tail = '';
-  let stopped = false;
-
   try {
-    fd = fs.openSync(filePath, 'r');
-    const buf = Buffer.allocUnsafe(CHUNK_BYTES);
-    let pending = Buffer.alloc(0);
+    if (endByte === undefined) endByte = fs.fstatSync(fd).size;
+    let pending = [];
+    let pendingBytes = 0;
     let pos = startByte;
-    let n;
-
-    while ((n = fs.readSync(fd, buf, 0, CHUNK_BYTES, pos)) > 0) {
-      pos += n;
+    while (pos < endByte) {
+      // Each chunk owns its bytes. Pending slices never alias a reused buffer.
+      const buf = Buffer.allocUnsafe(Math.min(CHUNK_BYTES, endByte - pos));
+      const n = fs.readSync(fd, buf, 0, buf.length, pos);
+      if (n === 0) throw new Error('JSONL file truncated during scan');
       read += n;
-      // `pending` carries the partial line from the previous chunk, so `data`
-      // always starts at offset `consumed`. That is what keeps the byte
-      // accounting exact across chunk boundaries and multi-byte UTF-8.
-      const data = pending.length
-        ? Buffer.concat([pending, buf.subarray(0, n)])
-        : Buffer.from(buf.subarray(0, n));
-
       let from = 0;
       let nl;
+      const data = buf.subarray(0, n);
       while ((nl = data.indexOf(0x0A, from)) !== -1) {
-        if (nl > from && onLine(data.toString('utf8', from, nl)) === false) {
-          consumed += nl - from + 1;
-          stopped = true;
-          return { consumed, read, tail: '', stopped };
+        const piece = data.subarray(from, nl);
+        // Concatenate once per line, avoiding quadratic copies of long lines.
+        const line = pendingBytes
+          ? Buffer.concat([...pending, piece], pendingBytes + piece.length).toString('utf8')
+          : piece.toString('utf8');
+        pending = [];
+        pendingBytes = 0;
+        consumed = pos + nl + 1;
+        if (line && onLine(line) === false) {
+          return { consumed, read, tail: '', stopped: true };
         }
-        consumed += nl - from + 1;
         from = nl + 1;
       }
-      pending = data.subarray(from);
+      if (from < n) {
+        pending.push(data.subarray(from));
+        pendingBytes += n - from;
+      }
+      pos += n;
     }
-
-    if (pending.length) tail = pending.toString('utf8');
-  } catch {
-    // Fall through with whatever was gathered — callers treat this as "no data".
+    const tail = pendingBytes ? Buffer.concat(pending, pendingBytes).toString('utf8') : '';
+    return { consumed, read, tail, stopped: false };
   } finally {
-    if (fd !== null) {
-      try { fs.closeSync(fd); } catch {}
-    }
+    if (ownsFd) fs.closeSync(fd);
   }
-
-  return { consumed, read, tail, stopped };
 }
 
 /** Read at most `maxBytes` from the start of a file. Returns '' on failure. */

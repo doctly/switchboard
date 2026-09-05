@@ -9,28 +9,35 @@ const log = require('electron-log');
 const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer, cleanStaleLockFiles } = require('./mcp-bridge');
 const { fetchAndTransformUsage } = require('./claude-auth');
 const { readHead } = require('./jsonl-scan');
+const codexAuth = require('./codex-auth');
+
+// SWITCHBOARD_DATA_DIR isolates a dev/test instance from the installed app:
+// db.js puts switchboard.db under it, and pointing userData there gives the
+// instance its own single-instance lock (requestSingleInstanceLock keys on
+// userData), so both can run side by side.
+if (process.env.SWITCHBOARD_DATA_DIR) {
+  app.setPath('userData', path.resolve(process.env.SWITCHBOARD_DATA_DIR, 'electron'));
+}
+
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
 log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 
 try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
 
-// Clean env for child processes — strip Electron internals that cause nested
-// Electron apps (or node-pty inside them) to malfunction.
-const cleanPtyEnv = Object.fromEntries(
-  Object.entries(process.env).filter(([k]) =>
-    !k.startsWith('ELECTRON_') &&
-    !k.startsWith('GOOGLE_API_KEY') &&
-    k !== 'NODE_OPTIONS' &&
-    k !== 'ORIGINAL_XDG_CURRENT_DESKTOP' &&
-    k !== 'WT_SESSION'
-  )
-);
+// Clean env for child processes — strips Electron internals that cause nested
+// Electron apps (or node-pty inside them) to malfunction, and pins a UTF-8
+// LC_CTYPE when the launch environment has no locale. See pty-env.js.
+const { buildPtyEnv } = require('./pty-env');
+const cleanPtyEnv = buildPtyEnv(process.env);
+const { shouldStartFresh } = require('./session-launch');
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
 const { startScheduler } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
-
+const { resolveEffectiveSettings } = require('./resolve-effective-settings');
+const { listProjectDirectory, readProjectFile } = require('./project-files');
+const { createTaskManager } = require('./task-manager');
 
 
 // --- Auto-updater (only in packaged builds) ---
@@ -62,7 +69,8 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
 }
 const {
   getMeta, getAllMeta, toggleStar, setName, setArchived,
-  isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, upsertCachedSessions,
+  isCachePopulated, getAllCached, getCachedByFolder, getCachedSession, upsertCachedSessions,
+  updateCachedAiTitle,
   deleteCachedSession, deleteCachedFolder,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
@@ -71,7 +79,10 @@ const {
   closeDb,
 } = require('./db');
 
-const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
+const { getHarness, DEFAULT_HARNESS, transcriptPath, availableHarnesses, allHarnesses, progressBusyState,
+        harnessForFolder: getHarnessForFolder } = require('./harnesses');
+const claudeHarness = getHarness(DEFAULT_HARNESS);
+const PROJECTS_DIR = claudeHarness.sessionsRoot();
 const PLANS_DIR = path.join(os.homedir(), '.claude', 'plans');
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const STATS_CACHE_PATH = path.join(CLAUDE_DIR, 'stats-cache.json');
@@ -203,6 +214,7 @@ function createWindow() {
       }
       activeSessions.delete(id);
     }
+    taskManager.shutdown();
     mainWindow = null;
   });
 }
@@ -251,7 +263,7 @@ function buildMenu() {
 
 // --- Session cache helpers ---
 
-const { deriveProjectPath } = require('./derive-project-path');
+const { deriveProjectPath } = claudeHarness;
 
 // Session cache → session-cache.js
 const sessionCache = require('./session-cache');
@@ -263,12 +275,13 @@ sessionCache.init({
   db: {
     deleteCachedFolder, getCachedByFolder, getCachedSession, upsertCachedSessions, deleteCachedSession,
     deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
-    setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName,
+    setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, setSetting, getMeta, setName,
+    updateCachedAiTitle, updateSearchTitle,
   },
 });
-const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCacheFromFilesystem,
-        buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker } = sessionCache;
-
+const { refreshFolder, reconcileCacheFromFilesystem, buildProjectsFromCache,
+        notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker,
+        refreshHarnessTitles, initializeHiddenProjectTimestamps } = sessionCache;
 
 // --- IPC: browse-folder ---
 ipcMain.handle('browse-folder', async () => {
@@ -291,6 +304,9 @@ ipcMain.handle('add-project', (_event, projectPath) => {
     const global = getSetting('global') || {};
     if (global.hiddenProjects && global.hiddenProjects.includes(projectPath)) {
       global.hiddenProjects = global.hiddenProjects.filter(p => p !== projectPath);
+      if (global.hiddenProjectTimestamps) {
+        delete global.hiddenProjectTimestamps[projectPath];
+      }
       setSetting('global', global);
     }
 
@@ -328,6 +344,10 @@ ipcMain.handle('remove-project', (_event, projectPath) => {
     const hidden = global.hiddenProjects || [];
     if (!hidden.includes(projectPath)) hidden.push(projectPath);
     global.hiddenProjects = hidden;
+    global.hiddenProjectTimestamps = {
+      ...(global.hiddenProjectTimestamps || {}),
+      [projectPath]: Date.now(),
+    };
     setSetting('global', global);
 
     // Clean up DB cache and search index for this folder
@@ -366,6 +386,22 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
   try {
     const content = fs.readFileSync(filePath, 'utf8');
     return { ok: true, content };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('list-project-directory', async (_event, projectPath, relativePath) => {
+  try {
+    return { ok: true, entries: listProjectDirectory(projectPath, relativePath) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('read-project-file', async (_event, projectPath, relativePath) => {
+  try {
+    return { ok: true, ...readProjectFile(projectPath, relativePath) };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -429,6 +465,10 @@ ipcMain.handle('get-projects', (_event, showArchived) => {
     // older build, so sessions/worktrees don't silently go missing. Stat-gated,
     // so it's cheap when nothing has changed.
     reconcileCacheFromFilesystem();
+    // Backstop for a dropped fs.watch event: a session waiting for its
+    // transcript would otherwise stay stuck under its temporary id. Only runs
+    // while something is actually waiting.
+    if (hasPendingLaunches()) sweepPendingLaunches();
     return buildProjectsFromCache(showArchived);
   } catch (err) {
     console.error('Error listing projects:', err);
@@ -502,6 +542,7 @@ ipcMain.handle('save-plan', (_event, filePath, content) => {
 
 // --- IPC: get-stats ---
 ipcMain.handle('get-stats', () => {
+  if (!harnessEnabled(DEFAULT_HARNESS)) return null;
   try {
     if (!fs.existsSync(STATS_CACHE_PATH)) return null;
     const raw = fs.readFileSync(STATS_CACHE_PATH, 'utf8');
@@ -600,6 +641,10 @@ ipcMain.handle('refresh-stats', async () => {
     });
   }
 
+  // A switched-off CLI is not spawned and not queried — the PTY run below is
+  // the most expensive thing in the app to do for a CLI the user has hidden.
+  if (!harnessEnabled(DEFAULT_HARNESS)) return { stats: null, usage: {} };
+
   try {
     // Run /stats via PTY (for heatmap/chart data) and fetch usage via API in parallel
     const [, usage] = await Promise.all([
@@ -624,10 +669,24 @@ ipcMain.handle('refresh-stats', async () => {
 
 // --- IPC: get-usage (lightweight, API-only, no PTY) ---
 ipcMain.handle('get-usage', async () => {
+  if (!harnessEnabled(DEFAULT_HARNESS)) return {};
   try {
     return await fetchAndTransformUsage() || {};
   } catch (err) {
     log.error('Error fetching usage:', err);
+    return {};
+  }
+});
+
+// --- IPC: get-codex-usage --- (same idea for the codex account)
+ipcMain.handle('get-codex-usage', async () => {
+  // Nothing is fetched for a CLI the user switched off, or one that was never
+  // signed in — no request, no error surfaced.
+  if (!harnessEnabled('codex')) return {};
+  try {
+    return await codexAuth.fetchAndTransformUsage() || {};
+  } catch (err) {
+    log.error('Error fetching codex usage:', err);
     return {};
   }
 });
@@ -813,7 +872,47 @@ ipcMain.handle('get-setting', (_event, key) => {
 });
 
 ipcMain.handle('set-setting', (_event, key, value) => {
+  const beforeSet = key === 'global' ? disabledHarnessIds() : null;
+  const before = beforeSet ? [...beforeSet].sort().join(',') : null;
+
+  if (key === 'global' && Array.isArray(value?.disabledHarnesses)) {
+    // At least one CLI has to stay on, or the app has nothing to show and no
+    // way to start anything. The settings panel already prevents this; this is
+    // the guard for any other writer. The id that was just switched off is the
+    // one refused, which is what the UI does too.
+    const launchable = allHarnesses().filter(h => h.buildLaunchArgs).map(h => h.id);
+    const disabled = new Set(value.disabledHarnesses);
+    if (launchable.length && launchable.every(id => disabled.has(id))) {
+      const justAdded = launchable.filter(id => disabled.has(id) && !beforeSet.has(id));
+      const keep = justAdded[0] || launchable[0];
+      log.warn(`[harness-toggle] refusing to disable every CLI; keeping ${keep} on`);
+      value = { ...value, disabledHarnesses: value.disabledHarnesses.filter(id => id !== keep) };
+    }
+  }
+
   setSetting(key, value);
+
+  if (key === 'global') {
+    const after = [...disabledHarnessIds()].sort().join(',');
+    if (before !== after) {
+      // Something was switched on or off. Watchers follow the new set, and a
+      // reconcile picks up whatever a newly-enabled harness did while it was
+      // being ignored — incremental, because its cached rows were kept and the
+      // folder mtime gate re-reads only what actually changed.
+      stopHarnessWatchers();
+      startHarnessWatchers();
+      try { projectsWatcher?.close(); } catch {}
+      projectsWatcher = null;
+      startProjectsWatcher();
+      try { reconcileCacheFromFilesystem(); } catch (err) { log.error('[harness-toggle]', err.message); }
+      notifyRendererProjectsChanged();
+      // The status bar quota gauge only re-reads on a 5-minute timer, so
+      // without this a switched-off CLI keeps its bars until the next tick.
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('harnesses-changed');
+      }
+    }
+  }
   return { ok: true };
 });
 
@@ -838,27 +937,70 @@ const SETTING_DEFAULTS = {
   terminalTheme: 'switchboard',
   mcpEmulation: false,
   shellProfile: 'auto',
+  // Codex equivalents of the permission settings above. Kept separate because
+  // the vocabularies do not map: codex has no permission modes, and Claude has
+  // no sandbox policy. An empty value means "leave it to codex's own config".
+  codexSandbox: '',
+  codexApproval: '',
+  codexModel: '',
 };
+
+// --- Harness enablement ---
+//
+// A disabled harness is not scanned, not watched, not listed as something to
+// start, and its sessions are hidden. Its cached rows are deliberately KEPT:
+// re-enabling then costs an incremental reconcile rather than a full re-index,
+// and nothing is lost if the toggle was a mistake.
+function disabledHarnessIds() {
+  const global = getSetting('global') || {};
+  return new Set(global.disabledHarnesses || []);
+}
+
+function harnessEnabled(id) {
+  return !disabledHarnessIds().has(id || DEFAULT_HARNESS);
+}
+
+// --- IPC: harnesses --- (which CLIs this machine has, and which are switched on)
+ipcMain.handle('get-harnesses', () => {
+  const disabled = disabledHarnessIds();
+  return allHarnesses()
+    .filter(h => h.buildLaunchArgs)
+    .map(h => ({ id: h.id, label: h.label, enabled: !disabled.has(h.id) }));
+});
 
 ipcMain.handle('get-shell-profiles', () => {
   _shellProfiles = null; // refresh on each request
   return getShellProfiles();
 });
 
-ipcMain.handle('get-effective-settings', (_event, projectPath) => {
+function effectiveSettings(projectPath) {
   const global = getSetting('global') || {};
   const project = projectPath ? (getSetting('project:' + projectPath) || {}) : {};
-  const effective = { ...SETTING_DEFAULTS };
-  for (const key of Object.keys(SETTING_DEFAULTS)) {
-    if (global[key] !== undefined && global[key] !== null) {
-      effective[key] = global[key];
-    }
-    if (project[key] !== undefined && project[key] !== null) {
-      effective[key] = project[key];
-    }
-  }
-  return effective;
+  return resolveEffectiveSettings(SETTING_DEFAULTS, global, project);
+}
+
+ipcMain.handle('get-effective-settings', (_event, projectPath) => effectiveSettings(projectPath));
+
+// Task processes deliberately live outside activeSessions. A server can be
+// stopped, restarted, or reattached without changing an AI session lifecycle.
+const taskManager = createTaskManager({
+  baseEnv: cleanPtyEnv,
+  getShellProfile: (projectPath) => resolveShell(effectiveSettings(projectPath).shellProfile),
+  log,
+  send: (channel, ...args) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...args);
+  },
 });
+
+ipcMain.handle('list-project-tasks', (_event, projectPath) => taskManager.listTasks(projectPath));
+ipcMain.handle('list-tasks-for-projects', (_event, projectPaths) => taskManager.listTasksForProjects(projectPaths));
+ipcMain.handle('get-task-run', (_event, projectPath, label) => taskManager.getRun(projectPath, label));
+ipcMain.handle('start-task', (_event, projectPath, label) => taskManager.startTask(projectPath, label));
+ipcMain.handle('stop-task', (_event, projectPath, label) => taskManager.stopTask(projectPath, label));
+ipcMain.handle('stop-all-tasks', (_event, projectPath) => taskManager.stopAllTasks(projectPath));
+ipcMain.handle('restart-task', (_event, projectPath, label) => taskManager.restartTask(projectPath, label));
+ipcMain.on('task-input', (_event, projectPath, label, data) => taskManager.sendInput(projectPath, label, data));
+ipcMain.on('task-resize', (_event, projectPath, label, cols, rows) => taskManager.resize(projectPath, label, cols, rows));
 
 // --- IPC: get-active-sessions ---
 ipcMain.handle('get-active-sessions', () => {
@@ -884,6 +1026,7 @@ ipcMain.handle('get-active-terminals', () => {
 ipcMain.handle('stop-session', (_event, sessionId) => {
   const session = activeSessions.get(sessionId);
   if (!session || session.exited) return { ok: false, error: 'not running' };
+  session.stopRequested = true;
   session.pty.kill();
   return { ok: true };
 });
@@ -906,9 +1049,12 @@ ipcMain.handle('rename-session', (_event, sessionId, name) => {
 
 // --- IPC: archive-session ---
 ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
-  const folder = getCachedFolder(sessionId);
-  if (!folder) return { error: 'Session not found in cache' };
-  const jsonlPath = path.join(PROJECTS_DIR, folder, sessionId + '.jsonl');
+  const row = getCachedSession(sessionId);
+  if (!row) return { error: 'Session not found in cache' };
+  // The harness owns its transcript naming — Claude uses <sessionId>.jsonl,
+  // others do not — so resolve through it rather than rebuilding the path here.
+  const jsonlPath = transcriptPath(row);
+  const harness = getHarness(row.runtime);
   try {
     const content = fs.readFileSync(jsonlPath, 'utf-8');
     const entries = [];
@@ -916,7 +1062,9 @@ ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
       if (!line.trim()) continue;
       try { entries.push(JSON.parse(line)); } catch {}
     }
-    return { entries };
+    // Normalised here rather than in the renderer, so the viewer never has to
+    // know which CLI wrote the transcript it is showing.
+    return { entries: harness.toViewerEntries(entries) };
   } catch (err) {
     return { error: err.message };
   }
@@ -964,6 +1112,35 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
 
   const isPlainTerminal = sessionOptions?.type === 'terminal';
 
+  // A session that never wrote a transcript cannot be resumed — the CLI has no
+  // record of the id, and asking it to resume one produces an error the user
+  // can do nothing about ("No saved session found with ID ..."). Start it
+  // fresh instead, which is what re-opening a session that never got going
+  // means in practice.
+  const cachedSession = getCachedSession(sessionId);
+  const startFresh = shouldStartFresh({
+    isNew,
+    isPlainTerminal,
+    hasCachedSession: !!cachedSession,
+    resumeExisting: !!sessionOptions?.resumeExisting,
+  });
+  if (startFresh && !isNew && !isPlainTerminal) {
+    log.info(`[open-terminal] ${sessionId} has no transcript; starting a new session instead of resuming`);
+  }
+
+  // Which CLI drives this session. The cached row is authoritative for anything
+  // that already exists on disk; the caller only gets to say for a brand-new
+  // session, which has no row yet.
+  const runtimeId = isPlainTerminal
+    ? null
+    : (cachedSession?.runtime || sessionOptions?.runtime || DEFAULT_HARNESS);
+  const harness = runtimeId ? getHarness(runtimeId) : null;
+  const isClaudeSession = runtimeId === DEFAULT_HARNESS;
+
+  if (harness && !harness.buildLaunchArgs) {
+    return { ok: false, error: `${harness.label} sessions cannot be launched yet` };
+  }
+
   // Resolve shell profile from effective settings
   const effectiveProfileId = (() => {
     const global = getSetting('global') || {};
@@ -995,7 +1172,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   let sessionSlug = null;
   let projectFolder = null;
 
-  if (!isPlainTerminal) {
+  if (isClaudeSession) {
     // Snapshot existing .jsonl files before spawning (for new session + fork/plan detection)
     projectFolder = encodeProjectPath(projectPath);
     const claudeProjectDir = path.join(PROJECTS_DIR, projectFolder);
@@ -1008,7 +1185,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     }
 
     // Read slug from the session's jsonl file (for plan-accept detection)
-    if (!isNew) {
+    if (!startFresh) {
       try {
         const jsonlPath = path.join(claudeProjectDir, sessionId + '.jsonl');
         const head = readHead(jsonlPath, 8192);
@@ -1051,50 +1228,14 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         }
       }, 300);
     } else {
-      // Build claude command, using array to prevent accidental shell injection
-      const claudeArgs = [];
-      if (sessionOptions?.forkFrom) {
-        claudeArgs.push('--resume', String(sessionOptions.forkFrom), '--fork-session');
-      } else if (isNew) {
-        claudeArgs.push('--session-id', String(sessionId));
-      } else {
-        claudeArgs.push('--resume', String(sessionId));
-      }
+      // Argv is built by the harness and quoted here, so a value can never be
+      // spliced into the command line as shell syntax.
+      const cliArgs = harness.buildLaunchArgs({
+        sessionId, isNew: startFresh, options: sessionOptions,
+      });
 
-      if (sessionOptions) {
-        if (sessionOptions.dangerouslySkipPermissions) {
-          claudeArgs.push('--dangerously-skip-permissions');
-        } else if (sessionOptions.permissionMode) {
-          claudeArgs.push('--permission-mode', String(sessionOptions.permissionMode));
-        }
-        // --worktree only applies when STARTING a session — it creates a fresh
-        // isolated git worktree. Resuming (isNew === false) must reuse the
-        // session's existing directory, so ignore the worktree option on resume
-        // regardless of which call site supplied it (sidebar click, schedule
-        // creator, fork, …). Otherwise a resume tries to spin up a new worktree
-        // and fails to attach.
-        if (isNew && sessionOptions.worktree) {
-          claudeArgs.push('--worktree');
-          if (sessionOptions.worktreeName) {
-            claudeArgs.push(String(sessionOptions.worktreeName));
-          }
-        }
-        if (sessionOptions.chrome) {
-          claudeArgs.push('--chrome');
-        }
-        if (sessionOptions.addDirs) {
-          const dirs = String(sessionOptions.addDirs).split(',').map(d => d.trim()).filter(Boolean);
-          for (const dir of dirs) {
-            claudeArgs.push('--add-dir', dir);
-          }
-        }
-      }
-
-      if (sessionOptions?.appendSystemPrompt) {
-        claudeArgs.push('--append-system-prompt', String(sessionOptions.appendSystemPrompt));
-      }
-
-      let claudeCmd = 'claude ' + quoteArgvForShell(shell, claudeArgs);
+      let claudeCmd = harness.binary;
+      if (cliArgs.length) claudeCmd += ' ' + quoteArgvForShell(shell, cliArgs);
 
       // preLaunchCmd is raw shell by design (e.g. "aws-vault exec profile --") — block newlines only
       if (sessionOptions?.preLaunchCmd) {
@@ -1107,7 +1248,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
 
       // Start MCP server for this session so Claude CLI sends diffs/file opens to Switchboard
       // (skip if user disabled IDE emulation in global settings)
-      if (sessionOptions?.mcpEmulation !== false) {
+      if (isClaudeSession && sessionOptions?.mcpEmulation !== false) {
         try {
           mcpServer = await startMcpServer(sessionId, [projectPath], mainWindow, log);
           claudeCmd += ' --ide';
@@ -1121,6 +1262,9 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         TERM: 'xterm-256color', COLORTERM: 'truecolor',
         TERM_PROGRAM: 'iTerm.app', TERM_PROGRAM_VERSION: '3.6.6', FORCE_COLOR: '3', ITERM_SESSION_ID: '1',
       };
+      // A harness that cannot be told its session id up front gets to stamp the
+      // environment instead, so its transcript can be recognised afterwards.
+      if (startFresh && harness.launchEnv) Object.assign(ptyEnv, harness.launchEnv(sessionId));
       if (mcpServer) {
         ptyEnv.CLAUDE_CODE_SSE_PORT = String(mcpServer.port);
       }
@@ -1146,7 +1290,17 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     outputBuffer: [], outputBufferSize: 0, altScreen: false,
     projectPath, firstResize: true,
     projectFolder, knownJsonlFiles, sessionSlug,
-    isPlainTerminal, forkFrom: sessionOptions?.forkFrom || null,
+    isPlainTerminal, runtime: runtimeId, forkFrom: sessionOptions?.forkFrom || null,
+    // Set for a harness whose real session id only appears once its transcript
+    // does; cleared by resolvePendingLaunches when the transcript is matched.
+    pendingLaunch: (harness?.needsIdDetection?.({ isNew: startFresh, options: sessionOptions })) ? {
+      tag: harness.originatorTag ? harness.originatorTag(sessionId) : null,
+      // A fork is identified by its parent, not by our env tag — codex copies
+      // the originator from the thread being forked.
+      forkFrom: sessionOptions?.forkFrom || null,
+      projectPath,
+      spawnedAt: Date.now(),
+    } : null,
     mcpServer, _openedAt: Date.now(),
   };
   activeSessions.set(sessionId, session);
@@ -1161,11 +1315,35 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         const code = m[1];
         const payload = m[2].slice(0, 120);
         // Detect Claude CLI busy state from OSC 0 title (spinner chars = busy, ✳ = idle)
-        if (code === '0') {
-          const firstChar = payload.charAt(0);
-          const isBusy = firstChar.charCodeAt(0) >= 0x2800 && firstChar.charCodeAt(0) <= 0x28FF;
-          const isIdle = firstChar === '\u2733'; // ✳
-          log.debug(`[OSC 0] session=${currentId} char=U+${firstChar.charCodeAt(0).toString(16).toUpperCase()} busy=${isBusy} idle=${isIdle} wasBusy=${!!session._cliBusy}`);
+        if (code === '0' && harness) {
+          // What a title means is the harness's business: Claude marks idle with
+          // ✳, codex drops the spinner prefix and says "Action Required" when
+          // it is blocked on the user.
+          const titleState = harness.parseTitleState(payload);
+          // Remembered for the OSC 9;4 handler below, which trusts the title
+          // over a progress report from any process in the PTY.
+          if (titleState) session._titleBusy = titleState === 'busy';
+          const isBusy = titleState === 'busy';
+          const isIdle = titleState === 'idle' || titleState === 'attention';
+          log.debug(`[OSC 0] session=${currentId} state=${titleState || 'none'} wasBusy=${!!session._cliBusy}`);
+
+          // A blocked session is announced by OSC 9 too, but only when the CLI's
+          // notifications are on — which a session started before Switchboard
+          // began forcing them is not. The title is the signal that is always
+          // there, so it raises attention on its own. Latched, because the title
+          // is rewritten on every repaint.
+          if (titleState === 'attention') {
+            if (!session._titleAttention) {
+              session._titleAttention = true;
+              log.info(`[OSC 0] session=${currentId} → ATTENTION "${payload}"`);
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('terminal-notification', currentId, payload, 'attention');
+              }
+            }
+          } else if (titleState) {
+            session._titleAttention = false;
+          }
+
           if (isBusy && !session._cliBusy) {
             session._cliBusy = true;
             session._oscIdle = false;
@@ -1190,21 +1368,37 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         // OSC 9;4 progress: 4;0; = clear/done, 4;1;N = running at N%, 4;2;N = error, 4;3; = indeterminate
         if (payload.startsWith('4;')) {
           const level = payload.split(';')[1];
-          if (level === '0') continue; // 4;0 is also used for clearing, making it unreliable as an idle signal
-          log.debug(`[OSC 9;4] session=${currentId} level=${level} payload="${payload}" wasBusy=${!!session._cliBusy}`);
-          if ((level === '1' || level === '2' || level === '3') && !session._cliBusy) {
+          const progressState = progressBusyState({ level, titleBusy: !!session._titleBusy });
+          log.debug(`[OSC 9;4] session=${currentId} level=${level} payload="${payload}" state=${progressState || 'none'} titleBusy=${!!session._titleBusy} wasBusy=${!!session._cliBusy}`);
+          if (progressState === 'busy' && !session._cliBusy) {
             session._cliBusy = true;
             session._oscIdle = false;
             log.debug(`[OSC 9;4] session=${currentId} → BUSY`);
             if (mainWindow && !mainWindow.isDestroyed()) {
               mainWindow.webContents.send('cli-busy-state', currentId, true);
             }
+          } else if (progressState === 'idle' && session._cliBusy) {
+            // The end of the progress run. Without acting on this, a busy state
+            // raised by 9;4 could only be cleared by a spinner-to-idle title
+            // change, which does not come for a slash command — the session sat
+            // spinning until Claude's "waiting for your input" notice a full
+            // minute later.
+            session._cliBusy = false;
+            session._oscIdle = true;
+            log.debug(`[OSC 9;4] session=${currentId} → IDLE`);
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('cli-busy-state', currentId, false);
+            }
           }
         } else {
-          // Regular notification (attention, permission, etc.)
-          log.info(`[OSC 9] session=${currentId} message="${payload}"`);
+          // Regular notification (attention, permission, etc.). The harness
+          // decides what its own wording means — codex says "Approval
+          // requested: …" where Claude says "needs your permission…" — so the
+          // renderer is handed a kind rather than re-deriving one from text.
+          const kind = harness ? harness.classifyNotification(payload) : null;
+          log.info(`[OSC 9] session=${currentId} kind=${kind || 'none'} message="${payload}"`);
           if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('terminal-notification', currentId, payload);
+            mainWindow.webContents.send('terminal-notification', currentId, payload, kind);
           }
         }
       }
@@ -1241,7 +1435,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     }
   });
 
-  ptyProcess.onExit(({ exitCode }) => {
+  ptyProcess.onExit(({ exitCode, signal }) => {
     session.exited = true;
     // Clean up MCP server
     const mcpId = session.realSessionId || sessionId;
@@ -1249,13 +1443,18 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     session.mcpServer = null;
 
     const realId = session.realSessionId || sessionId;
+    // The renderer needs to tell "the user ended this" from "this died" to
+    // decide whether to tear the terminal down or leave it up with a banner.
+    // A signal kill reports exitCode 0, so pass the signal and the
+    // stop-session flag along rather than making it guess from the code.
+    const stopRequested = !!session.stopRequested;
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('process-exited', realId, exitCode);
+      mainWindow.webContents.send('process-exited', realId, exitCode, signal, stopRequested);
       // If a fork/plan-accept transition re-keyed this session under realId
       // but the PTY exited before transition detection ran, also notify the
       // renderer for the original sessionId so it doesn't stay stuck as "Running".
       if (realId !== sessionId && activeSessions.has(sessionId)) {
-        mainWindow.webContents.send('process-exited', sessionId, exitCode);
+        mainWindow.webContents.send('process-exited', sessionId, exitCode, signal, stopRequested);
       }
     }
     activeSessions.delete(realId);
@@ -1328,6 +1527,7 @@ let projectsWatcher = null;
 
 function startProjectsWatcher() {
   if (!fs.existsSync(PROJECTS_DIR)) return;
+  if (!harnessEnabled(DEFAULT_HARNESS)) return;
 
   const pendingFolders = new Set();
   let debounceTimer = null;
@@ -1336,6 +1536,18 @@ function startProjectsWatcher() {
     debounceTimer = null;
     const folders = new Set(pendingFolders);
     pendingFolders.clear();
+
+    // Claim a fork's transcript before indexing it, so the renderer learns the
+    // real id in the same beat the row appears. A Claude fork mints its own id
+    // (--fork-session ignores --session-id), so it needs this exactly as codex
+    // sessions do.
+    if (hasPendingLaunches()) {
+      const candidates = [];
+      for (const folder of folders) {
+        try { candidates.push(...claudeHarness.listTranscripts(path.join(PROJECTS_DIR, folder))); } catch {}
+      }
+      resolvePendingLaunches(candidates);
+    }
 
     let changed = false;
     for (const folder of folders) {
@@ -1385,6 +1597,177 @@ function startProjectsWatcher() {
   }
 }
 
+/**
+ * Adopt a just-written transcript as the real identity of a pending session.
+ *
+ * A harness that cannot be told its session id up front (codex) is launched
+ * under a temporary uuid. When its transcript appears, the session is re-keyed
+ * onto the real id — everything downstream (terminal data, exit, the renderer's
+ * sidebar row) follows session.realSessionId, exactly as fork detection does.
+ */
+function resolvePendingLaunches(candidatePaths) {
+  for (const [tempId, session] of [...activeSessions]) {
+    if (session.exited || !session.pendingLaunch || session.realSessionId) continue;
+    const harness = getHarness(session.runtime);
+    if (!harness.matchesLaunch) continue;
+
+    for (const filePath of candidatePaths) {
+      const signals = harness.readLaunchSignals(filePath);
+      if (!harness.matchesLaunch(signals, session.pendingLaunch)) continue;
+      // Another live session already owns this transcript.
+      if (activeSessions.has(signals.sessionId)) continue;
+
+      const realId = signals.sessionId;
+      log.info(`[launch-detect] ${tempId} → ${realId} (originator=${signals.originator || 'none'})`);
+      session.realSessionId = realId;
+      session.pendingLaunch = null;
+      activeSessions.delete(tempId);
+      activeSessions.set(realId, session);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('session-detected', tempId, realId);
+      }
+      break;
+    }
+  }
+}
+
+/**
+ * Look through every folder a pending session could have landed in.
+ *
+ * Only the folders that changed since the launch are worth reading, which in
+ * practice is today's date directory.
+ */
+function sweepPendingLaunches() {
+  const roots = new Map(); // harness → earliest spawn time still waiting
+  for (const session of activeSessions.values()) {
+    if (session.exited || !session.pendingLaunch || session.realSessionId) continue;
+    const h = getHarness(session.runtime);
+    if (!h.matchesLaunch) continue;
+    const at = session.pendingLaunch.spawnedAt;
+    roots.set(h, Math.min(roots.get(h) ?? at, at));
+  }
+
+  for (const [h, since] of roots) {
+    const candidates = [];
+    // Claude's folders live under the injected PROJECTS_DIR, not its own root.
+    const dirs = h.folderPrefix
+      ? h.listFolders().map(f => h.folderPath(f.slice(h.folderPrefix.length)))
+      : h.listFolders().map(f => path.join(PROJECTS_DIR, f));
+    for (const dir of dirs) {
+      for (const filePath of h.listTranscripts(dir)) {
+        try {
+          if (fs.statSync(filePath).mtimeMs >= since - 60000) candidates.push(filePath);
+        } catch {}
+      }
+    }
+    resolvePendingLaunches(candidates);
+  }
+}
+
+/** Is any session still waiting for its transcript to appear? */
+function hasPendingLaunches() {
+  for (const session of activeSessions.values()) {
+    if (!session.exited && session.pendingLaunch && !session.realSessionId) return true;
+  }
+  return false;
+}
+
+// --- fs.watch on each non-Claude harness's sessions directory ---
+//
+// Separate from startProjectsWatcher because the path shape is different: a
+// Claude event names <project-folder>/<file>, a codex event names
+// <YYYY>/<MM>/<DD>/<file>. Both end up calling refreshFolder with a folder key.
+const harnessWatchers = [];
+
+function resolveHarnessFolderPath(folder) {
+  const h = getHarnessForFolder(folder);
+  return h.folderPath(h.folderPrefix ? folder.slice(h.folderPrefix.length) : folder);
+}
+
+function stopHarnessWatchers() {
+  while (harnessWatchers.length) {
+    try { harnessWatchers.pop().close(); } catch {}
+  }
+}
+
+function startHarnessWatchers() {
+  for (const h of availableHarnesses()) {
+    if (!h.folderPrefix) continue; // Claude's root is startProjectsWatcher's job
+    if (!harnessEnabled(h.id)) continue;
+    const root = h.sessionsRoot();
+    if (!fs.existsSync(root)) continue;
+
+    const pendingFolders = new Set();
+    let debounceTimer = null;
+
+    function flush() {
+      debounceTimer = null;
+      const folders = new Set(pendingFolders);
+      pendingFolders.clear();
+
+      // Claim transcripts before indexing them, so the renderer learns the real
+      // session id in the same beat the row appears.
+      if (hasPendingLaunches()) {
+        const candidates = [];
+        for (const folder of folders) {
+          try { candidates.push(...h.listTranscripts(resolveHarnessFolderPath(folder))); } catch {}
+        }
+        resolvePendingLaunches(candidates);
+      }
+
+      for (const folder of folders) {
+        try { refreshFolder(folder); } catch (err) { log.error('[harness-watch]', folder, err.message); }
+      }
+      const titlesChanged = refreshHarnessTitles(h);
+      if (folders.size || titlesChanged) notifyRendererProjectsChanged();
+    }
+
+    try {
+      const watcher = fs.watch(root, { recursive: true }, (_eventType, filename) => {
+        if (!filename) return;
+        const parts = filename.split(path.sep);
+        // Transcripts sit at <YYYY>/<MM>/<DD>/<file>; anything shallower is a
+        // directory being created, which the next file event will cover.
+        if (parts.length < 4 || !parts[parts.length - 1].endsWith('.jsonl')) return;
+        pendingFolders.add(h.folderPrefix + parts.slice(0, 3).join('/'));
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(flush, 500);
+      });
+      watcher.on('error', (err) => log.error(`[harness-watch] ${h.id}:`, err.message));
+      harnessWatchers.push(watcher);
+      log.info(`[harness-watch] watching ${h.id} at ${root}`);
+    } catch (err) {
+      log.error(`[harness-watch] failed to watch ${h.id}:`, err.message);
+    }
+
+    // Codex names live next to sessions/, not underneath it, so the recursive
+    // transcript watcher above can never observe an auto-title or `/rename`.
+    // Watch the containing directory so atomic replacement of the index is
+    // handled as well as ordinary appends.
+    if (h.titleIndexPath && h.readSessionTitles) {
+      const indexPath = h.titleIndexPath();
+      const indexDir = path.dirname(indexPath);
+      const indexName = path.basename(indexPath);
+      let titleTimer = null;
+      try {
+        const titleWatcher = fs.watch(indexDir, (_eventType, filename) => {
+          if (filename && String(filename) !== indexName) return;
+          if (titleTimer) clearTimeout(titleTimer);
+          titleTimer = setTimeout(() => {
+            titleTimer = null;
+            if (refreshHarnessTitles(h)) notifyRendererProjectsChanged();
+          }, 300);
+        });
+        titleWatcher.on('error', (err) => log.error(`[harness-title-watch] ${h.id}:`, err.message));
+        harnessWatchers.push(titleWatcher);
+        log.info(`[harness-title-watch] watching ${h.id} at ${indexPath}`);
+      } catch (err) {
+        log.error(`[harness-title-watch] failed to watch ${h.id}:`, err.message);
+      }
+    }
+  }
+}
+
 // --- IPC: app version ---
 ipcMain.handle('get-app-version', () => app.getVersion());
 
@@ -1423,8 +1806,10 @@ if (!gotSingleInstanceLock) {
 
   app.whenReady().then(() => {
     buildMenu();
+    initializeHiddenProjectTimestamps();
     createWindow();
     startProjectsWatcher();
+    startHarnessWatchers();
     scheduleIpc.ensureScheduleCreatorCommand();
 
     // Shared runCommand for cron scheduler and "run now" — takes argv, not a shell string
@@ -1485,6 +1870,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   // Shut down all MCP servers
   shutdownAllMcp();
+  taskManager.shutdown();
 
   // Close filesystem watcher
   if (projectsWatcher) {

@@ -33,6 +33,23 @@ const PERMISSION_MODES = [
   { value: 'bypassPermissions', label: 'Bypass', desc: 'Auto-accept all tool calls' },
 ];
 
+// Codex's equivalents. Deliberately a separate list rather than a translation
+// of PERMISSION_MODES: codex has a sandbox policy and an approval policy where
+// Claude has one permission mode, and the values are passed to the CLI verbatim.
+// Must stay in sync with the sets buildLaunchArgs validates against.
+const CODEX_SANDBOX_MODES = [
+  { value: '', label: 'Default', desc: "Use codex's own config" },
+  { value: 'read-only', label: 'Read Only', desc: 'No writes, no commands that change things' },
+  { value: 'workspace-write', label: 'Workspace Write', desc: 'Write inside the project directory' },
+  { value: 'danger-full-access', label: 'Full Access', desc: 'No sandbox at all' },
+];
+
+const CODEX_APPROVAL_POLICIES = [
+  { value: '', label: 'Default', desc: "Use codex's own config" },
+  { value: 'on-request', label: 'On Request', desc: 'Codex decides when to ask' },
+  { value: 'never', label: 'Never', desc: 'Never ask; failures go back to the model' },
+];
+
 // Mirror Claude CLI's project-folder naming. Must stay in sync with
 // encode-project-path.js (main process). Reverse-engineered from claude CLI 2.1.126.
 function encodeProjectPath(projectPath) {

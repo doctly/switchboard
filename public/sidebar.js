@@ -1,13 +1,23 @@
 // --- Sidebar rendering ---
 // Depends on globals: sidebarContent, openSessions, activeSessionId, activePtyIds,
-// pendingSessions, sessionMap, lastActivityTime, sortedOrder, searchMatchIds,
+// pendingSessions, sessionMap, sortedOrder, searchMatchIds,
 // searchMatchProjectPaths, showStarredOnly, showRunningOnly, showTodayOnly,
 // visibleSessionCount, sessionMaxAgeDays, attentionSessions, responseReadySessions,
 // sessionBusyState, cachedProjects, cachedAllProjects, gridCards, gridViewActive (app.js)
 // Depends on: cleanDisplayName, formatDate, escapeHtml (utils.js), ICONS (icons.js),
 // showSession (terminal-manager.js), confirmAndStopSession, pollActiveSessions,
 // showNewSessionPopover, openSettingsViewer, showResumeSessionDialog,
-// showJsonlViewer, forkSession, openSession, loadProjects (app.js/dialogs.js)
+// showJsonlViewer, forkSession, openSession, loadProjects, markUnread,
+// clearUnread, refreshSidebar (app.js/dialogs.js)
+
+// A session counts as running while its PTY is alive, or while it's pending —
+// a just-launched session has no PTY in activePtyIds until the next poll. A
+// pending session whose process died is marked exited and no longer counts.
+function isSessionRunning(sessionId) {
+  if (activePtyIds.has(sessionId)) return true;
+  const pending = pendingSessions.get(sessionId);
+  return !!pending && !pending.exited;
+}
 
 function slugId(slug) {
   return 'slug-' + slug.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -24,13 +34,10 @@ function buildSlugGroup(slug, sessions) {
   group.className = expanded ? 'slug-group' : 'slug-group collapsed';
   group.id = id;
 
-  const mostRecent = sessions.reduce((a, b) => {
-    const aTime = lastActivityTime.get(a.sessionId) || new Date(a.modified);
-    const bTime = lastActivityTime.get(b.sessionId) || new Date(b.modified);
-    return bTime > aTime ? b : a;
-  });
+  const mostRecent = sessions.reduce((a, b) =>
+    new Date(b.modified) > new Date(a.modified) ? b : a);
   const displayName = cleanDisplayName(mostRecent.name || mostRecent.aiTitle || mostRecent.summary || slug);
-  const mostRecentTime = lastActivityTime.get(mostRecent.sessionId) || new Date(mostRecent.modified);
+  const mostRecentTime = new Date(mostRecent.modified);
   const timeStr = formatDate(mostRecentTime);
 
   const header = document.createElement('div');
@@ -166,8 +173,8 @@ function renderProjects(projects, resort) {
 
     // Sort
     filtered = [...filtered].sort((a, b) => {
-      const aRunning = activePtyIds.has(a.sessionId) || pendingSessions.has(a.sessionId);
-      const bRunning = activePtyIds.has(b.sessionId) || pendingSessions.has(b.sessionId);
+      const aRunning = isSessionRunning(a.sessionId);
+      const bRunning = isSessionRunning(b.sessionId);
       const aPri = (a.starred && aRunning ? 3 : aRunning ? 2 : a.starred ? 1 : 0);
       const bPri = (b.starred && bRunning ? 3 : bRunning ? 2 : b.starred ? 1 : 0);
       if (aPri !== bPri) return bPri - aPri;
@@ -187,12 +194,12 @@ function renderProjects(projects, resort) {
     }
     const allItems = [];
     for (const session of ungrouped) {
-      const isRunning = activePtyIds.has(session.sessionId) || pendingSessions.has(session.sessionId);
+      const isRunning = isSessionRunning(session.sessionId);
       allItems.push({ sortTime: new Date(session.modified).getTime(), pinned: !!session.starred, running: isRunning, element: buildSessionItem(session) });
     }
     for (const [slug, sessions] of slugMap) {
       const mostRecentTime = Math.max(...sessions.map(s => new Date(s.modified).getTime()));
-      const hasRunning = sessions.some(s => activePtyIds.has(s.sessionId) || pendingSessions.has(s.sessionId));
+      const hasRunning = sessions.some(s => isSessionRunning(s.sessionId));
       const hasPinned = sessions.some(s => s.starred);
       const element = sessions.length === 1 ? buildSessionItem(sessions[0]) : buildSlugGroup(slug, sessions);
       allItems.push({ sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning, element });
@@ -254,12 +261,28 @@ function renderProjects(projects, resort) {
       const moreBtn = document.createElement('div');
       moreBtn.className = 'sessions-more-toggle';
       moreBtn.id = 'older-' + fId;
-      moreBtn.textContent = `+ ${older.length} older`;
+
+      const moreLabel = document.createElement('span');
+      moreLabel.className = 'sessions-more-label';
+
+      const archiveOlderBtn = document.createElement('button');
+      archiveOlderBtn.className = 'sessions-older-archive-btn';
+      archiveOlderBtn.title = 'Archive all older sessions';
+      archiveOlderBtn.setAttribute('aria-label', 'Archive all older sessions');
+      archiveOlderBtn.innerHTML = ICONS.archive(14);
+
+      moreBtn.appendChild(moreLabel);
+      moreBtn.appendChild(archiveOlderBtn);
       const olderList = document.createElement('div');
       olderList.className = 'sessions-older';
       olderList.id = 'older-list-' + fId;
       olderList.style.display = 'none';
       for (const item of older) olderList.appendChild(item.element);
+      // An older render item can be a slug group containing several sessions.
+      // Count the actual unarchived session rows so this label matches the
+      // archive confirmation and the work the archive button will perform.
+      const olderSessionCount = olderList.querySelectorAll('.session-item:not(.archived-item)').length;
+      moreLabel.textContent = `+ ${olderSessionCount} older`;
       sessionsList.appendChild(moreBtn);
       sessionsList.appendChild(olderList);
     }
@@ -286,6 +309,9 @@ function renderProjects(projects, resort) {
     header.id = 'ph-' + fId;
     const shortName = shortProjectPath(project.projectPath);
     header.innerHTML = `<span class="arrow">&#9660;</span> <span class="project-name">${shortName}</span>`;
+
+    const taskBtn = createProjectTaskButton(project);
+    if (taskBtn) header.appendChild(taskBtn);
 
     const scheduleBtn = document.createElement('button');
     scheduleBtn.className = 'project-schedule-btn';
@@ -351,6 +377,9 @@ function renderProjects(projects, resort) {
       wtHideBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
       wtHeader.appendChild(wtHideBtn);
 
+      const wtTaskBtn = createProjectTaskButton(wt, true);
+      if (wtTaskBtn) wtHeader.appendChild(wtTaskBtn);
+
       const wtNewBtn = document.createElement('button');
       wtNewBtn.className = 'project-new-btn worktree-new-btn';
       wtNewBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="6" y1="2" x2="6" y2="10"/><line x1="2" y1="6" x2="10" y2="6"/></svg>';
@@ -408,7 +437,8 @@ function renderProjects(projects, resort) {
       }
       if (fromEl.classList.contains('sessions-more-toggle') && fromEl.classList.contains('expanded')) {
         toEl.classList.add('expanded');
-        toEl.textContent = '- hide older';
+        const label = toEl.querySelector('.sessions-more-label');
+        if (label) label.textContent = '- hide older';
       }
       if (fromEl.classList.contains('slug-group-older') && fromEl.style.display !== 'none') {
         toEl.style.display = '';
@@ -446,6 +476,10 @@ function rebindSidebarEvents(projects) {
     if (newBtn) {
       newBtn.onclick = (e) => { e.stopPropagation(); showNewSessionPopover(project, newBtn); };
     }
+    const taskBtn = header.querySelector('.project-task-btn');
+    if (taskBtn) {
+      taskBtn.onclick = (e) => { e.stopPropagation(); showTaskPopover(project, taskBtn); };
+    }
     const scheduleBtn = header.querySelector('.project-schedule-btn');
     if (scheduleBtn) {
       scheduleBtn.onclick = (e) => { e.stopPropagation(); launchScheduleCreator(project); };
@@ -474,7 +508,7 @@ function rebindSidebarEvents(projects) {
       };
     }
     header.onclick = (e) => {
-      if (e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn') || e.target.closest('.project-schedule-btn')) return;
+      if (e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn') || e.target.closest('.project-schedule-btn') || e.target.closest('.project-task-btn')) return;
       header.classList.toggle('collapsed');
     };
   }
@@ -489,6 +523,10 @@ function rebindSidebarEvents(projects) {
     if (wtNewBtn) {
       wtNewBtn.onclick = (e) => { e.stopPropagation(); showNewSessionPopover(wtProject, wtNewBtn); };
     }
+    const wtTaskBtn = wtHeader.querySelector('.worktree-task-btn');
+    if (wtTaskBtn) {
+      wtTaskBtn.onclick = (e) => { e.stopPropagation(); showTaskPopover(wtProject, wtTaskBtn); };
+    }
     const wtHideBtn = wtHeader.querySelector('.worktree-hide-btn');
     if (wtHideBtn) {
       wtHideBtn.onclick = async (e) => {
@@ -500,7 +538,7 @@ function rebindSidebarEvents(projects) {
       };
     }
     wtHeader.onclick = (e) => {
-      if (e.target.closest('.worktree-new-btn') || e.target.closest('.worktree-hide-btn')) return;
+      if (e.target.closest('.worktree-new-btn') || e.target.closest('.worktree-hide-btn') || e.target.closest('.project-task-btn')) return;
       wtHeader.classList.toggle('collapsed');
     };
   });
@@ -544,13 +582,36 @@ function rebindSidebarEvents(projects) {
   sidebarContent.querySelectorAll('.sessions-more-toggle').forEach(moreBtn => {
     const olderList = moreBtn.nextElementSibling;
     if (!olderList || !olderList.classList.contains('sessions-older')) return;
-    const count = olderList.children.length;
-    moreBtn.onclick = () => {
+    const count = olderList.querySelectorAll('.session-item:not(.archived-item)').length;
+    const moreLabel = moreBtn.querySelector('.sessions-more-label');
+    moreBtn.onclick = (e) => {
+      if (e.target.closest('.sessions-older-archive-btn')) return;
       const showing = olderList.style.display !== 'none';
       olderList.style.display = showing ? 'none' : '';
       moreBtn.classList.toggle('expanded', !showing);
-      moreBtn.textContent = showing ? `+ ${count} older` : '- hide older';
+      if (moreLabel) moreLabel.textContent = showing ? `+ ${count} older` : '- hide older';
     };
+
+    const archiveOlderBtn = moreBtn.querySelector('.sessions-older-archive-btn');
+    if (archiveOlderBtn) {
+      archiveOlderBtn.onclick = async (e) => {
+        e.stopPropagation();
+        const sessions = [...olderList.querySelectorAll('.session-item')]
+          .map(item => sessionMap.get(item.dataset.sessionId))
+          .filter(session => session && !session.archived);
+        if (sessions.length === 0) return;
+        if (!confirm(`Archive all ${sessions.length} older session${sessions.length > 1 ? 's' : ''}?`)) return;
+        for (const session of sessions) {
+          if (activePtyIds.has(session.sessionId)) {
+            await window.api.stopSession(session.sessionId);
+          }
+          await window.api.archiveSession(session.sessionId, 1);
+          session.archived = 1;
+        }
+        pollActiveSessions();
+        loadProjects();
+      };
+    }
   });
 
   sidebarContent.querySelectorAll('.session-item').forEach(item => {
@@ -579,7 +640,23 @@ function rebindSidebarEvents(projects) {
     if (stopBtn) {
       stopBtn.onclick = (e) => {
         e.stopPropagation();
-        confirmAndStopSession(session.sessionId);
+        // Nothing to stop on a session that never started: the same control
+        // clears the row instead, which is otherwise unremovable.
+        if (isDismissibleSession(session.sessionId)) dismissSession(session.sessionId);
+        else confirmAndStopSession(session.sessionId);
+      };
+    }
+
+    const unreadBtn = item.querySelector('.session-unread-btn');
+    if (unreadBtn) {
+      unreadBtn.onclick = (e) => {
+        e.stopPropagation();
+        if (responseReadySessions.has(session.sessionId)) {
+          clearUnread(session.sessionId);
+        } else {
+          markUnread(session.sessionId);
+        }
+        refreshSidebar();
       };
     }
 
@@ -645,6 +722,7 @@ function buildSessionItem(session) {
   item.className = 'session-item';
   item.id = 'si-' + session.sessionId;
   if (session.type === 'terminal') item.classList.add('is-terminal');
+  if (session.runtime && session.runtime !== 'claude') item.classList.add('is-' + session.runtime);
   if (session.archived) item.classList.add('archived-item');
   if (activePtyIds.has(session.sessionId)) item.classList.add('has-running-pty');
   if (attentionSessions.has(session.sessionId)) item.classList.add('needs-attention');
@@ -652,7 +730,7 @@ function buildSessionItem(session) {
   if (sessionBusyState.get(session.sessionId)) item.classList.add('cli-busy');
   item.dataset.sessionId = session.sessionId;
 
-  const modified = lastActivityTime.get(session.sessionId) || new Date(session.modified);
+  const modified = new Date(session.modified);
   const timeStr = formatDate(modified);
   const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary);
 
@@ -666,9 +744,29 @@ function buildSessionItem(session) {
     ? '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.707.707c-.28-.28-.576-.49-.888-.656L10.073 9.333l-.07 3.181a.5.5 0 0 1-.853.354l-3.535-3.536-4.243 4.243a.5.5 0 1 1-.707-.707l4.243-4.243L1.372 5.11a.5.5 0 0 1 .354-.854l3.18-.07L8.37 .722A3.37 3.37 0 0 1 9.12.074a.5.5 0 0 1 .708.002l-.707.707z"/></svg>'
     : '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.707.707c-.28-.28-.576-.49-.888-.656L10.073 9.333l-.07 3.181a.5.5 0 0 1-.853.354l-3.535-3.536-4.243 4.243a.5.5 0 1 1-.707-.707l4.243-4.243L1.372 5.11a.5.5 0 0 1 .354-.854l3.18-.07L8.37 .722A3.37 3.37 0 0 1 9.12.074a.5.5 0 0 1 .708.002l-.707.707z"/></svg>';
 
-  // Running status dot
+  // Which CLI this session belongs to, and whether it is running — one mark in
+  // the gutter rather than a badge inline with the title, which pushed titles
+  // out of alignment with rows that had none. The dot keeps its own element so
+  // the busy/attention/response-ready states still drive it.
+  const mark = document.createElement('span');
+  mark.className = 'session-mark';
+
+  const markIcon = document.createElement('span');
+  markIcon.className = 'session-mark-icon';
+  if (session.type === 'terminal') {
+    markIcon.innerHTML = ICONS.terminal(14);
+    mark.title = 'Terminal session';
+  } else if (session.runtime === 'codex') {
+    markIcon.innerHTML = ICONS.codex(14);
+    mark.title = 'Codex session';
+  } else {
+    markIcon.innerHTML = ICONS.claude(14);
+    mark.title = 'Claude session';
+  }
+
   const dot = document.createElement('span');
   dot.className = 'session-status-dot' + (activePtyIds.has(session.sessionId) ? ' running' : '');
+  mark.append(markIcon, dot);
 
   // Info block
   const info = document.createElement('div');
@@ -678,22 +776,21 @@ function buildSessionItem(session) {
   summaryEl.className = 'session-summary';
   summaryEl.textContent = displayName;
 
-  const idEl = document.createElement('div');
-  idEl.className = 'session-id';
-  idEl.textContent = session.sessionId;
-
+  // Compact meta line: time + msgs on the left, first UUID segment on the right
+  // (replaces the full-width session-id line). The 30s label ticker in app.js
+  // updates .session-time only, so it must stay its own span.
   const metaEl = document.createElement('div');
   metaEl.className = 'session-meta';
-  metaEl.textContent = timeStr + (session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '');
+  const timeEl = document.createElement('span');
+  timeEl.className = 'session-time';
+  timeEl.textContent = timeStr + (session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '');
+  const shortIdEl = document.createElement('span');
+  shortIdEl.className = 'session-short-id';
+  shortIdEl.title = session.sessionId;
+  shortIdEl.textContent = session.sessionId.split('-')[0];
+  metaEl.append(timeEl, shortIdEl);
 
-  if (session.type === 'terminal') {
-    const badge = document.createElement('span');
-    badge.className = 'terminal-badge';
-    badge.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>';
-    summaryEl.prepend(badge);
-  }
   info.appendChild(summaryEl);
-  info.appendChild(idEl);
   info.appendChild(metaEl);
 
   // Action buttons container
@@ -701,9 +798,12 @@ function buildSessionItem(session) {
   actions.className = 'session-actions';
 
   const stopBtn = document.createElement('button');
-  stopBtn.className = 'session-stop-btn';
-  stopBtn.title = 'Stop session';
-  stopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>';
+  const dismissible = typeof isDismissibleSession === 'function' && isDismissibleSession(session.sessionId);
+  stopBtn.className = 'session-stop-btn' + (dismissible ? ' session-dismiss-btn' : '');
+  stopBtn.title = dismissible ? 'Dismiss session' : 'Stop session';
+  stopBtn.innerHTML = dismissible
+    ? '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 3l6 6M9 3l-6 6"/></svg>'
+    : '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>';
 
   const archiveBtn = document.createElement('button');
   archiveBtn.className = 'session-archive-btn';
@@ -725,7 +825,14 @@ function buildSessionItem(session) {
   launchConfigBtn.title = 'Resume with config';
   launchConfigBtn.innerHTML = ICONS.launchConfig(14);
 
+  const isUnread = responseReadySessions.has(session.sessionId);
+  const unreadBtn = document.createElement('button');
+  unreadBtn.className = 'session-unread-btn';
+  unreadBtn.title = isUnread ? 'Mark as read' : 'Mark as unread';
+  unreadBtn.innerHTML = isUnread ? ICONS.markRead(14) : ICONS.markUnread(14);
+
   actions.appendChild(stopBtn);
+  actions.appendChild(unreadBtn);
   if (session.type !== 'terminal') {
     actions.appendChild(forkBtn);
     actions.appendChild(jsonlBtn);
@@ -733,8 +840,14 @@ function buildSessionItem(session) {
     actions.appendChild(launchConfigBtn);
   }
 
-  row.appendChild(pin);
-  row.appendChild(dot);
+  // Logo and pin stack vertically in a single gutter column — the logo beside
+  // the title, the pin beside the meta line under it. Side by side they cost
+  // every row a second column of horizontal space the title needs more.
+  const gutter = document.createElement('div');
+  gutter.className = 'session-gutter';
+  gutter.append(mark, pin);
+
+  row.appendChild(gutter);
   row.appendChild(info);
   row.appendChild(actions);
   item.appendChild(row);
