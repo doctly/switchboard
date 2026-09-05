@@ -169,6 +169,17 @@ if (migrations.length > currentDbVersion) {
   // getHarness(), which treats null as Claude.
   if (!cols.has('runtime')) db.exec("ALTER TABLE session_cache ADD COLUMN runtime TEXT DEFAULT 'claude'");
   if (!cols.has('sessionFile')) db.exec('ALTER TABLE session_cache ADD COLUMN sessionFile TEXT');
+  // Resume state for Claude's incremental parser. Add by column presence even
+  // when a parallel branch already advanced db_version. Existing rows keep
+  // their cache/search data and get a full read on their next modification.
+  // Raw timestamp bounds are separate from created/modified, whose fallback
+  // to file times must not become an accumulator value on a later append.
+  for (const col of [
+    'customTitle TEXT', 'textContent TEXT', 'headHash TEXT',
+    'indexedBytes INTEGER DEFAULT 0', 'firstTimestamp TEXT', 'lastTimestamp TEXT',
+  ]) {
+    if (!cols.has(col.split(' ')[0])) db.exec(`ALTER TABLE session_cache ADD COLUMN ${col}`);
+  }
 }
 
 // --- FTS5 full-text search ---
@@ -206,17 +217,26 @@ const stmts = {
   `),
   // Session cache statements
   cacheCount: db.prepare('SELECT COUNT(*) as cnt FROM session_cache'),
-  cacheGetAll: db.prepare('SELECT * FROM session_cache'),
+  // Frequent sidebar/title refreshes do not need the potentially large search
+  // text or parser state. Keep the harness and transcript-location fields.
+  cacheGetAll: db.prepare(`
+    SELECT sessionId, folder, projectPath, summary, firstPrompt, created, modified,
+           messageCount, slug, aiTitle, fileMtime, runtime, sessionFile
+    FROM session_cache
+  `),
   cacheUpsert: db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, fileMtime, runtime, sessionFile)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, fileMtime, runtime, sessionFile, customTitle, textContent, headHash, indexedBytes, firstTimestamp, lastTimestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
       folder = excluded.folder, projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
       created = excluded.created, modified = excluded.modified,
       messageCount = excluded.messageCount, slug = excluded.slug,
       aiTitle = excluded.aiTitle, fileMtime = excluded.fileMtime,
-      runtime = excluded.runtime, sessionFile = excluded.sessionFile
+      runtime = excluded.runtime, sessionFile = excluded.sessionFile,
+      customTitle = excluded.customTitle, textContent = excluded.textContent,
+      headHash = excluded.headHash, indexedBytes = excluded.indexedBytes,
+      firstTimestamp = excluded.firstTimestamp, lastTimestamp = excluded.lastTimestamp
   `),
   cacheGetByFolder: db.prepare('SELECT sessionId, fileMtime FROM session_cache WHERE folder = ?'),
   cacheGetSession: db.prepare('SELECT * FROM session_cache WHERE sessionId = ?'),
@@ -304,7 +324,9 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
       s.sessionId, s.folder, s.projectPath, s.summary,
       s.firstPrompt, s.created, s.modified, s.messageCount || 0,
       s.slug || null, s.aiTitle || null, s.fileMtime || null,
-      s.runtime || 'claude', s.sessionFile || null
+      s.runtime || 'claude', s.sessionFile || null,
+      s.customTitle || null, s.textContent || null, s.headHash || null,
+      s.indexedBytes || 0, s.firstTimestamp || null, s.lastTimestamp || null
     );
   }
 });
