@@ -34,6 +34,7 @@ const { shouldStartFresh } = require('./session-launch');
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
 const { startScheduler } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
+const { resolveEffectiveSettings } = require('./resolve-effective-settings');
 const { listProjectDirectory, readProjectFile } = require('./project-files');
 const { createTaskManager } = require('./task-manager');
 
@@ -974,16 +975,7 @@ ipcMain.handle('get-shell-profiles', () => {
 function effectiveSettings(projectPath) {
   const global = getSetting('global') || {};
   const project = projectPath ? (getSetting('project:' + projectPath) || {}) : {};
-  const effective = { ...SETTING_DEFAULTS };
-  for (const key of Object.keys(SETTING_DEFAULTS)) {
-    if (global[key] !== undefined && global[key] !== null) {
-      effective[key] = global[key];
-    }
-    if (project[key] !== undefined && project[key] !== null) {
-      effective[key] = project[key];
-    }
-  }
-  return effective;
+  return resolveEffectiveSettings(SETTING_DEFAULTS, global, project);
 }
 
 ipcMain.handle('get-effective-settings', (_event, projectPath) => effectiveSettings(projectPath));
