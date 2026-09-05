@@ -18,7 +18,10 @@ function withTempDir(fn) {
 }
 
 for (const name of SPECIAL_NAMES) {
-  test(`findFiles returns the exact, unmangled path for filename: ${name}`, () => {
+  test(`findFiles returns the exact, unmangled path for filename: ${name}`, {
+    // Quotes are invalid and backslashes are path separators on Windows.
+    skip: process.platform === 'win32' && /["\\]/.test(name),
+  }, () => {
     withTempDir(dir => {
       const expected = path.join(dir, name);
       fs.writeFileSync(expected, '');
@@ -30,7 +33,9 @@ for (const name of SPECIAL_NAMES) {
   });
 }
 
-test('findFiles descends into directories whose name contains a backslash', () => {
+test('findFiles descends into directories whose name contains a backslash', {
+  skip: process.platform === 'win32',
+}, () => {
   withTempDir(dir => {
     const subdir = path.join(dir, 'sub\\dir');
     fs.mkdirSync(subdir);
@@ -43,18 +48,16 @@ test('findFiles descends into directories whose name contains a backslash', () =
 
 for (const name of SPECIAL_NAMES) {
   test(`codesignFile passes filename unchanged to the signer for: ${name}`, () => {
-    withTempDir(dir => {
-      const file = path.join(dir, name);
-      fs.writeFileSync(file, '');
-      const calls = [];
-      const stubSign = (...args) => calls.push(args);
-      codesignFile(file, stubSign);
-      assert.equal(calls.length, 1);
-      assert.deepEqual(calls[0], [
-        'codesign',
-        ['--sign', '-', '--force', file],
-        { stdio: 'ignore' },
-      ]);
-    });
+    // A stubbed signer only needs a path string, not a real filesystem entry.
+    const file = path.join(os.tmpdir(), name);
+    const calls = [];
+    const stubSign = (...args) => calls.push(args);
+    codesignFile(file, stubSign);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], [
+      'codesign',
+      ['--sign', '-', '--force', file],
+      { stdio: 'ignore' },
+    ]);
   });
 }
