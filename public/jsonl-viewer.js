@@ -553,7 +553,11 @@ function renderJsonlEntry(entry, toolResultMap) {
   return div;
 }
 
+let jsonlViewRequest = 0;
+
 async function showJsonlViewer(session) {
+  const request = ++jsonlViewRequest;
+  if (typeof leaveTaskLogView === 'function') leaveTaskLogView();
   // Viewing a transcript is another way of navigating to a session. Keep the
   // sidebar highlight and persisted selection in sync even though the action
   // button stops the session row's normal click handler.
@@ -562,7 +566,6 @@ async function showJsonlViewer(session) {
   if (item) item.classList.add('active');
   setActiveSession(session.sessionId);
 
-  const result = await window.api.readSessionJsonl(session.sessionId);
   hideAllViewers();
   placeholder.style.display = 'none';
   terminalArea.style.display = 'none';
@@ -571,6 +574,17 @@ async function showJsonlViewer(session) {
   const displayName = session.name || session.aiTitle || session.summary || session.sessionId;
   jsonlViewerTitle.textContent = displayName;
   jsonlViewerSessionId.textContent = session.sessionId;
+  jsonlViewerBody.innerHTML = '<div class="plans-empty">Loading messages…</div>';
+  if (typeof onMessagesShown === 'function') onMessagesShown(session);
+
+  let result;
+  try {
+    result = await window.api.readSessionJsonl(session.sessionId);
+  } catch (error) {
+    result = { error: error.message };
+  }
+  // A slow transcript must not reopen the viewer or replace a newer selection.
+  if (request !== jsonlViewRequest || activeSessionId !== session.sessionId || jsonlViewer.style.display === 'none') return;
   jsonlViewerBody.innerHTML = '';
 
   if (result.error) {

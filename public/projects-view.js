@@ -869,6 +869,8 @@ function refreshProjectViews({ reason = 'project' } = {}) {
  */
 function ensureWorkingTerminalVisible(project, { refit = false } = {}) {
   if (!projectsUi.working || gridViewActive || activeTaskView || !activeSessionId) return;
+  // The transcript occupies the same content pane as the terminal.
+  if (jsonlViewer.style.display !== 'none') return;
   const entry = openSessions.get(activeSessionId);
   const session = sessionMap.get(activeSessionId) || entry?.session;
   const rememberedHere = projectNavigation(project).mode === 'session' &&
@@ -971,6 +973,13 @@ function onSessionShown(sessionId) {
   const info = projectForSession(session);
   if (!info) { leaveWorking(); return; }
   enterWorking(info.project, session);
+}
+
+/** Messages use the working layout too, including sessions with no live PTY. */
+function onMessagesShown(session) {
+  if (activeTab !== 'projects') return;
+  const info = projectForSession(session);
+  if (info) enterWorking(info.project, session);
 }
 
 /** Called by showTaskLog. A task log opens beside the pane, not over the whole project. */

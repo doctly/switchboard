@@ -5529,7 +5529,8 @@ body { display: flex; flex-direction: column; }
   z-index: 2;
 }
 
-#main.project-working #terminal-area {
+#main.project-working #terminal-area,
+#main.project-working #jsonl-viewer {
   top: 44px;
   left: var(--pane-w, 288px);
 }
