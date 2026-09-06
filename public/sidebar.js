@@ -650,14 +650,6 @@ function bindSessionListEvents(container) {
 
     item.onclick = () => openSession(session);
 
-    const moveBtn = item.querySelector('.session-move-btn');
-    if (moveBtn) {
-      moveBtn.onclick = (e) => {
-        e.stopPropagation();
-        if (typeof showMovePopover === 'function') showMovePopover(session, moveBtn);
-      };
-    }
-
     const pin = item.querySelector('.session-pin');
     if (pin) {
       pin.onclick = async (e) => {
@@ -697,14 +689,6 @@ function bindSessionListEvents(container) {
       };
     }
 
-    const launchConfigBtn = item.querySelector('.session-launch-config-btn');
-    if (launchConfigBtn) {
-      launchConfigBtn.onclick = (e) => {
-        e.stopPropagation();
-        showResumeSessionDialog(session);
-      };
-    }
-
     const forkBtn = item.querySelector('.session-fork-btn');
     if (forkBtn) {
       forkBtn.onclick = async (e) => {
@@ -719,11 +703,26 @@ function bindSessionListEvents(container) {
       };
     }
 
-    const jsonlBtn = item.querySelector('.session-jsonl-btn');
-    if (jsonlBtn) {
-      jsonlBtn.onclick = (e) => {
+    const moreBtn = item.querySelector('.session-more-btn');
+    if (moreBtn) {
+      moreBtn.onclick = (e) => {
         e.stopPropagation();
-        showJsonlViewer(session);
+        const menuItems = [
+          { label: 'Rename session', onClick: () => startRename(item.querySelector('.session-summary'), session) },
+        ];
+        if (session.type !== 'terminal') {
+          menuItems.push(
+            { label: 'View messages', onClick: () => showJsonlViewer(session) },
+            { label: 'Move to project…', onClick: () => showMovePopover(session, moreBtn) },
+          );
+          if (!activePtyIds.has(session.sessionId)) {
+            menuItems.push({ label: 'Resume with config…', onClick: () => showResumeSessionDialog(session) });
+          }
+        }
+        if (isDismissibleSession(session.sessionId)) {
+          menuItems.push({ label: 'Dismiss session', onClick: () => dismissSession(session.sessionId) });
+        }
+        showContextMenu(menuItems, { anchor: moreBtn });
       };
     }
 
@@ -775,17 +774,16 @@ function buildSessionItem(session) {
   const row = document.createElement('div');
   row.className = 'session-row';
 
-  // Pin
-  const pin = document.createElement('span');
+  // Title and star share the top line; status and actions sit below.
+  const pin = document.createElement('button');
   pin.className = 'session-pin' + (session.starred ? ' pinned' : '');
-  pin.innerHTML = session.starred
-    ? '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.707.707c-.28-.28-.576-.49-.888-.656L10.073 9.333l-.07 3.181a.5.5 0 0 1-.853.354l-3.535-3.536-4.243 4.243a.5.5 0 1 1-.707-.707l4.243-4.243L1.372 5.11a.5.5 0 0 1 .354-.854l3.18-.07L8.37 .722A3.37 3.37 0 0 1 9.12.074a.5.5 0 0 1 .708.002l-.707.707z"/></svg>'
-    : '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.707.707c-.28-.28-.576-.49-.888-.656L10.073 9.333l-.07 3.181a.5.5 0 0 1-.853.354l-3.535-3.536-4.243 4.243a.5.5 0 1 1-.707-.707l4.243-4.243L1.372 5.11a.5.5 0 0 1 .354-.854l3.18-.07L8.37 .722A3.37 3.37 0 0 1 9.12.074a.5.5 0 0 1 .708.002l-.707.707z"/></svg>';
+  pin.type = 'button';
+  pin.title = session.starred ? 'Unstar session' : 'Star session';
+  pin.setAttribute('aria-label', pin.title);
+  pin.setAttribute('aria-pressed', String(!!session.starred));
+  pin.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="${session.starred ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.78 5.63L21 9.54l-4.5 4.39 1.06 6.2L12 17.2l-5.56 2.93 1.06-6.2L3 9.54l6.22-.91L12 3z"/></svg>`;
 
-  // Which CLI this session belongs to, and whether it is running — one mark in
-  // the gutter rather than a badge inline with the title, which pushed titles
-  // out of alignment with rows that had none. The dot keeps its own element so
-  // the busy/attention/response-ready states still drive it.
+  // Keep the status dot separate so running, busy and unread updates still apply.
   const mark = document.createElement('span');
   mark.className = 'session-mark';
 
@@ -806,30 +804,23 @@ function buildSessionItem(session) {
   dot.className = 'session-status-dot' + (activePtyIds.has(session.sessionId) ? ' running' : '');
   mark.append(markIcon, dot);
 
-  // Info block
-  const info = document.createElement('div');
-  info.className = 'session-info';
-
+  const header = document.createElement('div');
+  header.className = 'session-header';
   const summaryEl = document.createElement('div');
   summaryEl.className = 'session-summary';
   summaryEl.textContent = displayName;
+  header.append(summaryEl, pin);
 
-  // Compact meta line: time + msgs on the left, first UUID segment on the right
-  // (replaces the full-width session-id line). The 30s label ticker in app.js
-  // updates .session-time only, so it must stay its own span.
+  const footer = document.createElement('div');
+  footer.className = 'session-footer';
   const metaEl = document.createElement('div');
   metaEl.className = 'session-meta';
+  // The 30-second ticker updates this span, including the message count.
   const timeEl = document.createElement('span');
   timeEl.className = 'session-time';
+  timeEl.title = session.sessionId;
   timeEl.textContent = timeStr + (session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '');
-  const shortIdEl = document.createElement('span');
-  shortIdEl.className = 'session-short-id';
-  shortIdEl.title = session.sessionId;
-  shortIdEl.textContent = session.sessionId.split('-')[0];
-  metaEl.append(timeEl, shortIdEl);
-
-  info.appendChild(summaryEl);
-  info.appendChild(metaEl);
+  metaEl.append(mark, timeEl);
 
   // Action buttons container
   const actions = document.createElement('div');
@@ -853,49 +844,29 @@ function buildSessionItem(session) {
   forkBtn.title = 'Fork session';
   forkBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M8 3h-5v5"/><path d="M21 3l-7.536 7.536a5 5 0 0 0-1.464 3.534v6.93"/><path d="M3 3l7.536 7.536a5 5 0 0 1 1.464 3.534v.93"/></svg>';
 
-  const jsonlBtn = document.createElement('button');
-  jsonlBtn.className = 'session-jsonl-btn';
-  jsonlBtn.title = 'View messages';
-  jsonlBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>';
-
-  const launchConfigBtn = document.createElement('button');
-  launchConfigBtn.className = 'session-launch-config-btn';
-  launchConfigBtn.title = 'Resume with config';
-  launchConfigBtn.innerHTML = ICONS.launchConfig(14);
-
   const isUnread = responseReadySessions.has(session.sessionId);
   const unreadBtn = document.createElement('button');
   unreadBtn.className = 'session-unread-btn';
   unreadBtn.title = isUnread ? 'Mark as read' : 'Mark as unread';
   unreadBtn.innerHTML = isUnread ? ICONS.markRead(14) : ICONS.markUnread(14);
 
-  // File the session into a project (projects-view.js). Sessions stay where
-  // they are unless moved, so this is the one way an old session joins one.
-  const moveBtn = document.createElement('button');
-  moveBtn.className = 'session-move-btn';
-  moveBtn.title = 'Move to project…';
-  moveBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M9 13h6"/><path d="m12 10 3 3-3 3"/></svg>';
+  const moreBtn = document.createElement('button');
+  moreBtn.className = 'session-more-btn';
+  moreBtn.title = 'More session actions';
+  moreBtn.setAttribute('aria-haspopup', 'menu');
+  moreBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>';
 
-  actions.appendChild(stopBtn);
-  actions.appendChild(unreadBtn);
   if (session.type !== 'terminal') {
-    actions.appendChild(forkBtn);
-    actions.appendChild(jsonlBtn);
-    actions.appendChild(archiveBtn);
-    actions.appendChild(moveBtn);
-    actions.appendChild(launchConfigBtn);
+    actions.append(archiveBtn, forkBtn);
+  }
+  actions.append(unreadBtn, stopBtn, moreBtn);
+  for (const button of actions.children) {
+    button.type = 'button';
+    button.setAttribute('aria-label', button.title);
   }
 
-  // Logo and pin stack vertically in a single gutter column — the logo beside
-  // the title, the pin beside the meta line under it. Side by side they cost
-  // every row a second column of horizontal space the title needs more.
-  const gutter = document.createElement('div');
-  gutter.className = 'session-gutter';
-  gutter.append(mark, pin);
-
-  row.appendChild(gutter);
-  row.appendChild(info);
-  row.appendChild(actions);
+  footer.append(metaEl, actions);
+  row.append(header, footer);
   item.appendChild(row);
 
   return item;

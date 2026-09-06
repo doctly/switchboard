@@ -803,24 +803,63 @@ body { display: flex; flex-direction: column; }
   background: rgba(120,130,255,0.14);
 }
 
-/* ---- Gutter: logo above, pin below ---- */
-.session-gutter {
-  display: flex;
+/* Session cards use two lines, leaving the entire title width available. */
+.session-item[data-session-id] .session-row {
   flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+}
+
+.session-header,
+.session-footer {
+  display: flex;
   align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
+  gap: 8px;
+  min-width: 0;
 }
 
-/* Dim until the row is hovered or the session is actually pinned, so an
-   unpinned pin does not compete with the logo above it. */
-.session-gutter .session-pin {
-  opacity: 0.4;
+.session-header .session-summary,
+.session-header .session-rename-input {
+  flex: 1;
+  min-width: 0;
 }
 
-.session-item:hover .session-gutter .session-pin,
-.session-gutter .session-pin.pinned {
+.session-header .session-pin {
+  background: none;
+  border: none;
+  padding: 3px;
+  opacity: 0.65;
+}
+
+.session-header .session-pin.pinned,
+.session-header .session-pin:hover,
+.session-header .session-pin:focus-visible {
   opacity: 1;
+}
+
+.session-footer {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.session-item .session-footer .session-meta {
+  margin-top: 0;
+  align-items: center;
+  justify-content: flex-start;
+  flex: 1 0 auto;
+  white-space: nowrap;
+}
+
+.session-footer .session-mark {
+  margin-top: 0;
+}
+
+.session-footer .session-actions {
+  position: static;
+  opacity: 1;
+  background: none;
+  padding: 0;
+  margin-left: auto;
 }
 
 /* ---- Pin ---- */
@@ -846,10 +885,7 @@ body { display: flex; flex-direction: column; }
 }
 
 /* ---- Running dot ---- */
-/* Gutter mark: the session's CLI logo with its running dot tucked into the
-   corner. One column shared with the pin, so titles line up whatever the
-   session type is. The dot stays a separate element because the busy,
-   attention and response-ready states all restyle it. */
+/* The CLI logo and its status dot lead the session footer. */
 .session-mark {
   position: relative;
   width: 16px;
@@ -979,18 +1015,12 @@ body { display: flex; flex-direction: column; }
   margin-top: 3px;
 }
 
-/* Sidebar session items: time on the left, short session id on the right */
+/* Shared session metadata layout */
 .session-item .session-meta {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-}
-
-.session-short-id {
-  font-family: 'SF Mono', 'Fira Code', Menlo, monospace;
-  color: #5a5a72;
-  flex-shrink: 0;
 }
 
 /* ---- Session action buttons ---- */
@@ -1013,6 +1043,7 @@ body { display: flex; flex-direction: column; }
   opacity: 1;
 }
 
+.session-more-btn,
 .session-stop-btn,
 .session-launch-config-btn,
 .session-fork-btn,
@@ -1029,6 +1060,15 @@ body { display: flex; flex-direction: column; }
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.session-more-btn {
+  color: #929bb2;
+}
+
+.session-more-btn:hover {
+  color: #d0d0e8;
+  background: rgba(255,255,255,0.08);
 }
 
 .session-stop-btn {
@@ -5764,7 +5804,8 @@ body { display: flex; flex-direction: column; }
 .ctx-menu {
   position: fixed;
   z-index: 10040;
-  min-width: 220px;
+  min-width: 0;
+  width: max-content;
   max-width: 320px;
   background: #1b1b26;
   border: 1px solid rgba(255,255,255,0.12);
@@ -5783,7 +5824,7 @@ body { display: flex; flex-direction: column; }
   align-items: center;
   gap: 9px;
   height: 30px;
-  padding: 0 9px;
+  padding: 0 6px;
   border-radius: 6px;
   font-size: 12.5px;
   color: #c8c8dc;
@@ -5799,6 +5840,8 @@ body { display: flex; flex-direction: column; }
 .ctx-item.disabled:hover { background: none; }
 .ctx-item.muted { color: #8888a0; }
 .ctx-icon { width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; color: #8088ff; flex-shrink: 0; }
+/* Text-only menus do not need an empty icon column. */
+.ctx-menu:not(:has(.ctx-icon > *)) .ctx-icon { display: none; }
 .ctx-icon .codex-icon { color: #10a37f; }
 .ctx-item.danger .ctx-icon { color: #e05070; }
 .ctx-item.muted .ctx-icon, .ctx-item.disabled .ctx-icon { color: #6a6a80; }
