@@ -45,6 +45,40 @@ function inspectDb(dataDir) {
 
 const PROJECT_TABLES = ['projects', 'project_folders', 'tracks'];
 
+test('session search scopes before limiting and supports archived and title-only matches', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-scoped-search-'));
+  try {
+    const r = runInElectronNode(`
+      const assert = require('node:assert/strict');
+      const db = require('./db');
+      db.upsertSearchEntries([
+        ...Array.from({ length: 1000 }, (_, i) => ({ id: 'outside-' + i, type: 'session', title: 'needle' })),
+        { id: 'active', type: 'session', title: 'needle active' },
+        { id: 'archived', type: 'session', title: 'older session', body: 'needle in transcript' },
+      ]);
+      db.setArchived('archived', 1);
+      const scope = ['active', 'archived'];
+      assert.deepEqual(new Set(db.searchByType('session', 'needle', 50, false, scope).map(r => r.id)), new Set(scope));
+      assert.deepEqual(db.searchByType('session', 'needle', 50, true, scope).map(r => r.id), ['active']);
+      assert.deepEqual(db.searchByType('session', 'needle', 50, false, []), []);
+      assert.equal(db.searchByType('session', 'needle').length, 50);
+      assert.deepEqual(new Set(db.searchSessionIds('needle', scope)), new Set(scope));
+      assert.deepEqual(db.searchSessionIds('transcript', scope), ['archived']);
+      assert.deepEqual(db.searchSessionIds('needle', []), []);
+      assert.deepEqual(db.searchSessionIds('', scope), []);
+      assert.deepEqual(db.searchSessionIds('" OR needle', scope), []);
+      const start = performance.now();
+      for (let i = 0; i < 100; i++) db.searchSessionIds('needle', scope);
+      console.log('Scoped ID search average ms:', (performance.now() - start) / 100);
+      db.closeDb();
+    `, dir);
+    assert.equal(r.status, 0, r.stderr);
+    console.log(r.stdout.trim());
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('fresh database gets fileMtime column', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-db-fresh-'));
   try {

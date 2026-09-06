@@ -981,6 +981,11 @@ ipcMain.handle('save-memory', (_event, filePath, content) => {
 });
 
 // --- IPC: search ---
+ipcMain.handle('search-session-ids', (_event, query, sessionIds) => {
+  if (typeof query !== 'string' || !Array.isArray(sessionIds) || sessionIds.some(id => typeof id !== 'string')) return [];
+  return dbModule.searchSessionIds(query, sessionIds);
+});
+
 ipcMain.handle('search', (_event, type, query, titleOnly) => {
   return searchByType(type, query, 50, !!titleOnly);
 });

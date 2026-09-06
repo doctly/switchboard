@@ -5557,6 +5557,21 @@ body { display: flex; flex-direction: column; }
   height: 100%;
 }
 
+.pane-search { position: relative; margin: 0 12px 8px; flex-shrink: 0; }
+.pane-search input {
+  box-sizing: border-box; width: 100%; padding: 8px 54px 8px 10px;
+  border: 1px solid rgba(255,255,255,0.08); border-radius: 7px;
+  background: rgba(255,255,255,0.04); color: #c0c0d0; font: inherit; font-size: 12px;
+}
+.pane-search input:focus { outline: none; border-color: rgba(120,130,255,0.5); }
+.pane-search button {
+  position: absolute; top: 0; bottom: 0; padding: 0 5px;
+  background: none; border: 0; color: #7a7a90; cursor: pointer;
+}
+.pane-search-clear { right: 27px; font-size: 16px; }
+.pane-search-titles { right: 5px; font-size: 11px; font-weight: 700; }
+.pane-search button:hover, .pane-search-titles.active { color: #fff; }
+
 .pane-label {
   font-size: 10px;
   font-weight: 700;

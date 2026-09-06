@@ -36,6 +36,7 @@ const projectsUi = {
   trackByProject: (() => { try { return JSON.parse(sessionStorage.getItem('projects.track') || '{}'); } catch { return {}; } })(),
   groupBy: (() => { try { return JSON.parse(sessionStorage.getItem('projects.groupBy') || '{}'); } catch { return {}; } })(),
   expandedLists: {},
+  sessionSearchByProject: new Map(),
   lastStateKey: '',
   working: false,
   doneOpen: false,
@@ -2365,19 +2366,8 @@ function renderStrip(project) {
     <button type="button" class="ws-btn ws-btn--sm ws-btn--icon" id="strip-more" title="More">${PICONS.dots(13)}</button>`;
   projectStrip.querySelector('#strip-back').onclick = () => { setProjectTab(project, 'overview'); showProjectOverview(); };
   projectStrip.querySelector('#strip-tasks').onclick = (e) => showTaskPopover(taskPseudoProject(project), e.currentTarget);
-  projectStrip.querySelector('#strip-new').onclick = (e) => showNewSessionMenu(project, currentTrack(project), e.currentTarget);
+  projectStrip.querySelector('#strip-new').onclick = (e) => showNewSessionMenu(project, null, e.currentTarget);
   projectStrip.querySelector('#strip-more').onclick = (e) => showContextMenu(projectMenuItems(project, { fromPage: true }), { anchor: e.currentTarget });
-}
-
-function currentTrackKey(project) {
-  const key = projectsUi.trackByProject[project.id];
-  if (key && key !== 'general' && !(project.tracks || []).some(t => t.id === key)) return 'general';
-  return key || ((project.tracks || [])[0]?.id) || 'general';
-}
-
-function currentTrack(project) {
-  const key = currentTrackKey(project);
-  return key === 'general' ? null : (project.tracks || []).find(t => t.id === key) || null;
 }
 
 function trackCwdLabel(project, track) {
@@ -2463,31 +2453,98 @@ function groupSessions(project, mode) {
  * grouped by time, track or state, with plan progress and open todos at the
  * foot.
  */
-function renderPanes(project) {
+function projectSessionSearch(project) {
+  if (!projectsUi.sessionSearchByProject.has(project.id)) {
+    projectsUi.sessionSearchByProject.set(project.id, {
+      query: '', displayQuery: '', titlesOnly: searchTitlesOnly, ids: new Set(), pending: false, error: false, version: 0, timer: null,
+    });
+  }
+  return projectsUi.sessionSearchByProject.get(project.id);
+}
+
+function updateProjectSessionSearch(project, state) {
+  clearTimeout(state.timer);
+  const version = ++state.version;
+  const query = state.query.trim();
+  state.pending = !!query && !state.titlesOnly;
+  state.error = false;
+  // Keep the last completed query and its matches together while the next
+  // request is pending. Background pane rerenders must use that snapshot too.
+  if (!state.pending) {
+    state.ids = new Set();
+    state.displayQuery = query;
+  }
+  const redraw = (updateResults = true) => {
+    if (projectsUi.working && selectedProject()?.id === project.id) {
+      const bar = projectPanes.querySelector('.pane-search');
+      if (bar) {
+        const input = bar.querySelector('input');
+        if (input.value !== state.query) input.value = state.query;
+        bar.querySelector('.pane-search-clear').hidden = !state.query;
+        const toggle = bar.querySelector('.pane-search-titles');
+        toggle.classList.toggle('active', state.titlesOnly);
+        toggle.setAttribute('aria-pressed', String(state.titlesOnly));
+      }
+      if (updateResults) {
+        const current = projectPanes.querySelector('.pane-scroll');
+        if (current) {
+          const next = buildSessionPaneList(selectedProject());
+          // Don't remount identical results or jump back to the top on each
+          // refinement of a query.
+          if (current.innerHTML !== next.innerHTML) {
+            const scrollTop = current.scrollTop;
+            current.replaceWith(next);
+            next.scrollTop = scrollTop;
+          }
+        }
+      }
+    }
+  };
+  redraw(!state.pending);
+  if (!query || state.titlesOnly) return;
+  state.timer = setTimeout(async () => {
+    try {
+      const full = cachedProjectTreeAll?.projects.find(p => p.id === project.id) || project;
+      const ids = projectSessionsAll(full).map(s => s.sessionId);
+      const results = ids.length ? await window.api.searchSessionIds(query, ids) : [];
+      if (state.version !== version) return;
+      state.ids = new Set(results);
+      state.displayQuery = query;
+    } catch {
+      if (state.version !== version) return;
+      state.error = true;
+    }
+    state.pending = false;
+    redraw();
+  }, 100);
+}
+
+function buildSessionPaneList(project) {
+  const search = projectSessionSearch(project);
+  const searching = !!search.displayQuery;
   const mode = paneGroupMode(project);
-  const plan = parsePlan(fileContent(project, 'plan-tracker.md'));
-  const todos = parseTodos(fileContent(project, 'todos.md'));
-  const open = todos.filter(t => !t.done).length;
-  const pct = plan.phases.length ? Math.round((plan.done / plan.phases.length) * 100) : 0;
   const expanded = projectsUi.expandedLists;
-
-  const pane = document.createElement('div');
-  pane.className = 'pane';
-  pane.innerHTML = `<div class="pane-label"><span>Sessions</span><span class="ws-flex"></span>` +
-    `<span class="pane-seg">${GROUP_MODES.map(([m, label]) => `<button type="button" class="pane-seg-btn${m === mode ? ' on' : ''}" data-mode="${m}">${label}</button>`).join('')}</span>` +
-    `<button type="button" class="pane-icon-btn pane-icon-btn--primary" id="pane-new-session" title="New session in the project">${PICONS.plus(12)}</button></div>`;
-  pane.querySelectorAll('.pane-seg-btn').forEach(btn => {
-    btn.onclick = () => { projectsUi.groupBy[project.id] = btn.dataset.mode; saveProjectsUi(); renderPanes(project); };
-  });
-  pane.querySelector('#pane-new-session').onclick = (e) => showNewSessionMenu(project, currentTrack(project), e.currentTarget);
-
   const scroll = document.createElement('div');
   scroll.className = 'pane-scroll';
-  const groups = groupSessions(project, mode);
+  let groups = groupSessions(project, mode);
+  if (searching) {
+    const full = cachedProjectTreeAll?.projects.find(p => p.id === project.id) || project;
+    const query = search.displayQuery.toLowerCase();
+    const matches = projectSessionsAll(full).filter(s => search.ids.has(s.sessionId) ||
+      (!search.titlesOnly && s.formerTrackName?.toLowerCase().includes(query)) ||
+      [s.name, s.aiTitle, s.summary].some(title => title?.toLowerCase().includes(query)))
+      .sort((a, b) => sessionEventTime(b) - sessionEventTime(a));
+    groups = [
+      { key: 'matches', title: 'Active', sessions: matches.filter(s => !s.archived), unlimited: true },
+      { key: 'archived-matches', title: 'Archived', sessions: matches.filter(s => s.archived), unlimited: true },
+    ].filter(g => g.sessions.length);
+  }
   if (!groups.length) {
     const none = document.createElement('div');
     none.className = 'pane-empty';
-    none.textContent = 'No sessions yet. Start one from the + above.';
+    none.textContent = searching
+      ? (search.error ? 'Search failed. Try again.' : 'No matching sessions in this project.')
+      : 'No sessions yet. Start one from the + above.';
     scroll.appendChild(none);
   }
   for (const group of groups) {
@@ -2504,7 +2561,10 @@ function renderPanes(project) {
 
     const id = `${project.id}:${mode}:${group.key}`;
     const limit = group.unlimited || expanded[id] ? Infinity : PANE_GROUP_LIMIT;
-    for (const s of group.sessions.slice(0, limit)) scroll.appendChild(buildSessionRow(project, s, { showTrack: mode !== 'track' }));
+    for (const s of group.sessions.slice(0, limit)) scroll.appendChild(buildSessionRow(project, s, {
+      showTrack: searching || mode !== 'track',
+      className: s.archived ? 'pane-session pane-session--archived' : 'pane-session',
+    }));
     if (!group.sessions.length) {
       const none = document.createElement('div');
       none.className = 'pane-empty';
@@ -2521,8 +2581,56 @@ function renderPanes(project) {
     }
   }
   const archived = archivedSessionsOf(project);
-  if (archived.length) scroll.appendChild(buildArchivedSection(project, archived, `pane:${project.id}`, { showTrack: mode !== 'track', rowClass: 'pane-session pane-session--archived' }));
-  pane.appendChild(scroll);
+  if (!searching && archived.length) scroll.appendChild(buildArchivedSection(project, archived, `pane:${project.id}`, { showTrack: mode !== 'track', rowClass: 'pane-session pane-session--archived' }));
+  return scroll;
+}
+
+function renderPanes(project) {
+  const search = projectSessionSearch(project);
+  const searching = !!search.query.trim();
+  const oldInput = projectPanes.querySelector('#pane-search-input');
+  const selection = oldInput === document.activeElement && oldInput?.dataset.projectId === project.id
+    ? [oldInput.selectionStart, oldInput.selectionEnd] : null;
+  const mode = paneGroupMode(project);
+  const plan = parsePlan(fileContent(project, 'plan-tracker.md'));
+  const todos = parseTodos(fileContent(project, 'todos.md'));
+  const open = todos.filter(t => !t.done).length;
+  const pct = plan.phases.length ? Math.round((plan.done / plan.phases.length) * 100) : 0;
+  const expanded = projectsUi.expandedLists;
+
+  const pane = document.createElement('div');
+  pane.className = 'pane';
+  pane.innerHTML = `<div class="pane-label"><span>Sessions</span><span class="ws-flex"></span>` +
+    `<span class="pane-seg">${GROUP_MODES.map(([m, label]) => `<button type="button" class="pane-seg-btn${m === mode ? ' on' : ''}" data-mode="${m}">${label}</button>`).join('')}</span>` +
+    `<button type="button" class="pane-icon-btn pane-icon-btn--primary" id="pane-new-session" title="New session in the project">${PICONS.plus(12)}</button></div>`;
+  pane.querySelectorAll('.pane-seg-btn').forEach(btn => {
+    btn.onclick = () => { projectsUi.groupBy[project.id] = btn.dataset.mode; saveProjectsUi(); renderPanes(project); };
+  });
+  pane.querySelector('#pane-new-session').onclick = (e) => showNewSessionMenu(project, null, e.currentTarget);
+
+  const searchBar = document.createElement('div');
+  searchBar.className = 'pane-search';
+  searchBar.innerHTML = `<input id="pane-search-input" type="text" placeholder="Search active & archived…" aria-label="Search sessions in this project" />
+    <button type="button" class="pane-search-clear" aria-label="Clear session search" ${search.query ? '' : 'hidden'}>×</button>
+    <button type="button" class="pane-search-titles${search.titlesOnly ? ' active' : ''}" title="Search titles only" aria-label="Search titles only" aria-pressed="${search.titlesOnly}">Tt</button>`;
+  const input = searchBar.querySelector('input');
+  input.value = search.query;
+  input.dataset.projectId = project.id;
+  input.oninput = () => { search.query = input.value; updateProjectSessionSearch(project, search); };
+  const clear = () => {
+    search.query = '';
+    updateProjectSessionSearch(project, search);
+    projectPanes.querySelector('#pane-search-input')?.focus();
+  };
+  input.onkeydown = e => { if (e.key === 'Escape') { e.stopPropagation(); clear(); } };
+  searchBar.querySelector('.pane-search-clear').onclick = clear;
+  searchBar.querySelector('.pane-search-titles').onclick = () => {
+    search.titlesOnly = !search.titlesOnly;
+    updateProjectSessionSearch(project, search);
+  };
+  pane.appendChild(searchBar);
+
+  pane.appendChild(buildSessionPaneList(project));
 
   const foot = document.createElement('div');
   foot.className = 'pane-foot';
@@ -2534,9 +2642,13 @@ function renderPanes(project) {
   pane.appendChild(foot);
 
   projectPanes.replaceChildren(pane);
+  if (selection) {
+    input.focus({ preventScroll: true });
+    input.setSelectionRange(...selection);
+  }
   projectsUi.lastStateKey = projectSessionsAll(project).map(s => s.sessionId + ':' + sessionState(s)).join('|');
   const active = pane.querySelector('.pane-session.here');
-  if (active) active.scrollIntoView({ block: 'nearest' });
+  if (active && !searching) active.scrollIntoView({ block: 'nearest' });
   // renderPanes has several direct callers (most notably the first busy signal
   // from a newly started CLI). They do not pass through refreshProjectViews,
   // so reassert the terminal invariant here after every pane replacement.

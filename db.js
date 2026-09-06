@@ -333,8 +333,17 @@ const stmts = {
     FROM search_fts
     JOIN search_map ON search_fts.rowid = search_map.rowid
     WHERE search_map.type = ? AND search_fts MATCH ?
+      AND (? IS NULL OR search_map.id IN (SELECT value FROM json_each(?)))
     ORDER BY rank
     LIMIT ?
+  `),
+  searchSessionIds: db.prepare(`
+    SELECT search_map.id
+    FROM search_map
+    CROSS JOIN search_fts ON search_fts.rowid = search_map.rowid
+    WHERE search_map.type = 'session'
+      AND search_map.id IN (SELECT value FROM json_each(?))
+      AND search_fts MATCH ?
   `),
   // Project statements
   projectList: db.prepare('SELECT * FROM projects ORDER BY created'),
@@ -510,17 +519,24 @@ function updateSearchTitle(id, type, title) {
   } catch {}
 }
 
-function searchByType(type, query, limit = 50, titleOnly = false) {
+function searchByType(type, query, limit = 50, titleOnly = false, sessionIds = null) {
   try {
     // Wrap in double quotes for exact substring matching with trigram tokenizer.
     // This prevents FTS5 from splitting on punctuation (e.g. "spec.md" → "spec" + "md")
     const escaped = '"' + query.replace(/"/g, '""') + '"';
     // FTS5 column filter: prefix with "title:" to restrict match to title column
     const match = titleOnly ? 'title:' + escaped : escaped;
-    return stmts.searchQuery.all(type, match, limit);
+    const scope = sessionIds === null ? null : JSON.stringify(sessionIds);
+    return stmts.searchQuery.all(type, match, scope, scope, limit);
   } catch {
     return [];
   }
+}
+
+function searchSessionIds(query, sessionIds) {
+  if (!query.trim() || !sessionIds.length) return [];
+  const match = '"' + query.replace(/"/g, '""') + '"';
+  return stmts.searchSessionIds.all(JSON.stringify(sessionIds), match).map(row => row.id);
 }
 
 function isSearchIndexPopulated() {
@@ -704,7 +720,7 @@ module.exports = {
   deleteCachedSession, deleteCachedFolder,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
-  searchByType, isSearchIndexPopulated, searchFtsRecreated,
+  searchByType, searchSessionIds, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting,
   listProjects, getProject, getProjectBySlug, insertProject, updateProject, deleteProject,
   listProjectFolders, listAllProjectFolders, upsertProjectFolder, deleteProjectFolder,
