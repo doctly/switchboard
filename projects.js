@@ -993,14 +993,14 @@ function updateTrack(id, patch) {
   return { ok: true, track: trackNode(db.getTrack(id)) };
 }
 
-/** Rows only. Its sessions keep their project and lose the track. */
-function deleteTrack(id) {
+/** Sessions keep their project and a snapshot of the deleted track's name. */
+function deleteTrack(id, { archiveSessions = false } = {}) {
   const track = db.getTrack(id);
   if (!track) return { error: 'Track not found' };
-  db.deleteTrack(id);
+  const sessionIds = db.deleteTrack(id, { archiveSessions }) || [];
   db.updateProject(track.projectId, { modified: new Date().toISOString() });
   notifyRendererProjectsChanged();
-  return { ok: true, projectId: track.projectId };
+  return { ok: true, projectId: track.projectId, formerTrackName: track.name, sessionIds };
 }
 
 // --- Session assignment ---

@@ -59,6 +59,46 @@ test('fresh database gets fileMtime column', () => {
   }
 });
 
+test('deleting tracks retains their names and optionally archives only their sessions', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-delete-track-'));
+  try {
+    const r = runInElectronNode(`
+      const assert = require('node:assert/strict');
+      const db = require('./db');
+      db.insertTrack({ id: 'keep', projectId: 'project', name: 'Keep work', created: '2026-09-05' });
+      db.insertTrack({ id: 'archive', projectId: 'project', name: 'Finished work', created: '2026-09-05' });
+      db.setSessionAssignment('active', 'project', 'keep');
+      db.setSessionAssignment('done', 'project', 'archive');
+      db.setSessionAssignment('already-archived', 'project', 'archive');
+      db.setArchived('already-archived', 1);
+      db.setSessionAssignment('unrelated', 'project', null);
+      assert.deepEqual(db.deleteTrack('keep'), ['active']);
+      assert.equal(db.getMeta('active').archived, 0);
+      assert.equal(db.getMeta('active').formerTrackName, 'Keep work');
+      assert.equal(db.getMeta('active').trackId, null);
+      assert.deepEqual(new Set(db.deleteTrack('archive', { archiveSessions: true })), new Set(['done', 'already-archived']));
+      for (const id of ['done', 'already-archived']) {
+        const meta = db.getMeta(id);
+        assert.equal(meta.projectId, 'project');
+        assert.equal(meta.trackId, null);
+        assert.equal(meta.formerTrackName, 'Finished work');
+        assert.equal(meta.archived, 1);
+      }
+      assert.equal(db.getTrack('keep'), null);
+      assert.equal(db.getTrack('archive'), null);
+      assert.equal(db.getMeta('unrelated').archived, 0);
+      db.closeDb();
+      delete require.cache[require.resolve('./db')];
+      const reopened = require('./db');
+      assert.equal(reopened.getMeta('done').formerTrackName, 'Finished work');
+      reopened.closeDb();
+    `, dir);
+    assert.equal(r.status, 0, r.stderr);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // The project tables and the two session_meta columns are added by inspecting
 // the schema, not by db_version, so a database from before projects existed
 // gets them without losing its names, stars or archive flags.

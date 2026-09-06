@@ -425,7 +425,28 @@ ipcMain.handle('set-session-assignment', guarded((sessionId, projectId, trackId)
 }));
 ipcMain.handle('create-track', guarded((projectId, spec) => projects.createTrack(projectId, spec || {})));
 ipcMain.handle('update-track', guarded((id, patch) => projects.updateTrack(id, patch || {})));
-ipcMain.handle('delete-track', guarded((id) => projects.deleteTrack(id)));
+ipcMain.handle('delete-track', guarded((id, options = {}) => {
+  const track = dbModule.getTrack(id);
+  if (!track) return { error: 'Track not found' };
+  const archiveSessions = options.archiveSessions === true;
+  // Raw terminals have no transcript row, but participate in track deletion.
+  for (const [sid, session] of activeSessions) {
+    if (session.trackId === id && session.isPlainTerminal) dbModule.setSessionAssignment(sid, track.projectId, id);
+  }
+  const result = projects.deleteTrack(id, { archiveSessions });
+  if (result.error) return result;
+  const affected = new Set(result.sessionIds);
+  for (const [sid, session] of activeSessions) {
+    if (session.trackId !== id && !affected.has(sid)) continue;
+    session.trackId = null;
+    session.formerTrackName = track.name;
+    if (archiveSessions && !session.exited) {
+      session.stopRequested = true;
+      try { session.pty.kill(); } catch (error) { log.error('[delete-track] stop failed', error); }
+    }
+  }
+  return result;
+}));
 ipcMain.handle('get-projects-root', guarded(() => projects.projectsRoot()));
 ipcMain.handle('get-project-git-status', guarded((id, opts) => projects.folderGitStatus(id, opts || {})));
 ipcMain.handle('get-project-git-info', guarded((id) => projects.projectGitInfo(id)));

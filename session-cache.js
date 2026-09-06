@@ -378,6 +378,7 @@ function buildProjectsFromCache(showArchived) {
       // session was never filed; the tree builder then falls back to cwd.
       projectId: meta?.projectId || null,
       trackId: meta?.trackId || null,
+      formerTrackName: meta?.formerTrackName || null,
     };
     if (!showArchived && s.archived) continue;
     if (!projectMap.has(row.projectPath)) {
@@ -439,6 +440,7 @@ function buildProjectsFromCache(showArchived) {
         type: 'terminal',
         projectId: session.projectId || null,
         trackId: session.trackId || null,
+        formerTrackName: session.formerTrackName || null,
       });
     }
   }

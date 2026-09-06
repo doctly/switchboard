@@ -531,7 +531,9 @@ function buildSessionRow(project, session, { showTrack = true, className = 'pane
   const track = session.trackId ? (project.tracks || []).find(t => t.id === session.trackId) : null;
   const parts = [];
   parts.push(`<span class="session-status-dot pane-dot${state === 'running' ? ' running' : ''}${state === 'attention' ? ' needs-attention' : ''}"></span>`);
-  if (showTrack) parts.push(trackTagHtml(project, track));
+  if (!track && session.formerTrackName) {
+    parts.push(`<span class="pane-tag" title="Previously in a deleted track">Formerly: ${escapeHtml(session.formerTrackName)}</span>`);
+  } else if (showTrack) parts.push(trackTagHtml(project, track));
   // The CLI mark, same as the status bar: the logo says which CLI, no word needed.
   parts.push(`<span class="pane-cli-icon${session.runtime === 'codex' ? ' is-codex' : ''}${session.type === 'terminal' ? ' is-terminal' : ''}" title="${escapeHtml(cliLabel(session))}">${cliIcon(session, 12)}</span>`);
   parts.push(`<span>${escapeHtml(formatDate(new Date(sessionEventTime(session))))}</span>`);
@@ -2946,11 +2948,47 @@ async function detachFolderFlow(project, folder) {
 }
 
 async function deleteTrackFlow(project, track) {
-  if (!confirm(`Delete track ${track.name}?\n\nIts sessions stay in ${project.name}.`)) return;
-  const result = await window.api.deleteTrack(track.id);
+  const choice = await new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'add-project-overlay';
+    const dialog = document.createElement('div');
+    dialog.className = 'add-project-dialog ws-prompt';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', 'delete-track-title');
+    dialog.innerHTML = `
+      <h3 id="delete-track-title">Delete track ${escapeHtml(track.name)}?</h3>
+      <div class="add-project-hint">Sessions stay in ${escapeHtml(project.name)} and retain their former track name.</div>
+      <label class="new-project-label"><input type="checkbox" class="delete-track-archive"> Also archive all sessions in this track</label>
+      <div class="add-project-hint">If selected, running sessions will stop and raw terminals will close.</div>
+      <div class="add-project-actions">
+        <button class="add-project-cancel-btn" type="button">Cancel</button>
+        <button class="add-project-add-btn" type="button">Delete track</button>
+      </div>`;
+    const finish = value => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(value); };
+    const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); finish(null); } };
+    dialog.querySelector('.add-project-cancel-btn').onclick = () => finish(null);
+    dialog.querySelector('.add-project-add-btn').onclick = () => finish({ archiveSessions: dialog.querySelector('input').checked });
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    document.addEventListener('keydown', onKey);
+    dialog.querySelector('.add-project-cancel-btn').focus();
+  });
+  if (!choice) return;
+  const result = await window.api.deleteTrack(track.id, choice);
   if (result?.error) { alert(result.error); return; }
+  for (const session of sessionMap.values()) {
+    if (session.trackId !== track.id && !result.sessionIds?.includes(session.sessionId)) continue;
+    session.trackId = null;
+    session.formerTrackName = result.formerTrackName;
+    if (choice.archiveSessions) {
+      session.archived = 1;
+      forgetTerminalHistory(session.sessionId);
+      if (session.type === 'terminal') forgetPersistedTerminalSession(session.sessionId);
+    } else if (session.type === 'terminal') persistTerminalSession(session);
+  }
   if (projectsUi.trackByProject[project.id] === track.id) delete projectsUi.trackByProject[project.id];
-  loadProjects();
+  await loadProjects();
 }
 
 /** After marking a project done: offer to remove its worktrees, one confirm each for dirty ones. */

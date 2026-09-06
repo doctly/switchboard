@@ -76,7 +76,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   createTrack: (projectId, spec) => ipcRenderer.invoke('create-track', projectId, spec),
   updateTrack: (id, patch) => ipcRenderer.invoke('update-track', id, patch),
-  deleteTrack: (id) => ipcRenderer.invoke('delete-track', id),
+  deleteTrack: (id, options) => ipcRenderer.invoke('delete-track', id, options),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   openPath: (target) => ipcRenderer.invoke('open-path', target),
   writeClipboard: (text) => ipcRenderer.invoke('clipboard-write-text', text),

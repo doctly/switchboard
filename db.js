@@ -222,6 +222,7 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_tracks_project ON tracks(projectId)');
   const cols = new Set(db.prepare('PRAGMA table_info(session_meta)').all().map(c => c.name));
   if (!cols.has('projectId')) db.exec('ALTER TABLE session_meta ADD COLUMN projectId TEXT');
   if (!cols.has('trackId')) db.exec('ALTER TABLE session_meta ADD COLUMN trackId TEXT');
+  if (!cols.has('formerTrackName')) db.exec('ALTER TABLE session_meta ADD COLUMN formerTrackName TEXT');
 }
 {
   // Where a project's sessions start by default (null = the project folder).
@@ -658,13 +659,18 @@ function updateTrack(id, patch) {
   return updatePatch('tracks', TRACK_PATCH_KEYS, id, patch);
 }
 
-const deleteTrackTx = db.transaction((id) => {
-  stmts.assignmentClearTrack.run(id);
+const deleteTrackTx = db.transaction((id, archiveSessions) => {
+  const track = stmts.trackGet.get(id);
+  if (!track) return [];
+  const sessionIds = db.prepare('SELECT sessionId FROM session_meta WHERE trackId = ?').all(id).map(row => row.sessionId);
+  db.prepare(`UPDATE session_meta SET formerTrackName = ?, trackId = NULL,
+    archived = CASE WHEN ? THEN 1 ELSE archived END WHERE trackId = ?`).run(track.name, archiveSessions ? 1 : 0, id);
   stmts.trackDelete.run(id);
+  return sessionIds;
 });
 
-function deleteTrack(id) {
-  deleteTrackTx(id);
+function deleteTrack(id, { archiveSessions = false } = {}) {
+  return deleteTrackTx(id, archiveSessions);
 }
 
 function setSessionAssignment(sessionId, projectId, trackId) {
