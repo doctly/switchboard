@@ -538,7 +538,9 @@ function buildSessionRow(project, session, { showTrack = true, className = 'pane
   } else if (showTrack) parts.push(trackTagHtml(project, track));
   // The CLI mark, same as the status bar: the logo says which CLI, no word needed.
   parts.push(`<span class="pane-cli-icon${session.runtime === 'codex' ? ' is-codex' : ''}${session.type === 'terminal' ? ' is-terminal' : ''}" title="${escapeHtml(cliLabel(session))}">${cliIcon(session, 12)}</span>`);
-  parts.push(`<span>${escapeHtml(formatDate(new Date(sessionEventTime(session))))}</span>`);
+  // The last message's time, the same as the Sessions tab. A session with no
+  // transcript yet shows when it started.
+  parts.push(`<span>${escapeHtml(formatDate(new Date(session.modified || sessionEventTime(session))))}</span>`);
   if (session.messageCount) parts.push(`<span class="pane-sep">·</span><span>${session.messageCount} msgs</span>`);
   row.innerHTML = `<span class="pane-title">${escapeHtml(sessionTitle(session))}</span><span class="pane-meta">${parts.join('')}</span>`;
   // A floating button, shown on hover: dismiss a session that never started
@@ -1937,9 +1939,6 @@ async function renderFileTree(project, list, state) {
   async function walk(rel, depth) {
     const entries = await listProjectDir(project, state, rel);
     for (const entry of entries) {
-      // Worktrees live under repos/ and are browsed from their own sessions;
-      // listing a whole checkout here would swamp the project's own files.
-      if (depth === 0 && entry.type === 'directory' && entry.name === 'repos') continue;
       if (entry.type === 'other') continue;
       rows.push({ entry, depth });
       if (entry.type === 'directory' && state.expanded.has(entry.relativePath)) await walk(entry.relativePath, depth + 1);
@@ -2603,6 +2602,11 @@ function renderPanes(project) {
   const oldInput = projectPanes.querySelector('#pane-search-input');
   const selection = oldInput === document.activeElement && oldInput?.dataset.projectId === project.id
     ? [oldInput.selectionStart, oldInput.selectionEnd] : null;
+  // Rebuilding the pane resets its scroll. Keep the offset when it is the
+  // same project's list, so a click or a status change does not shift the
+  // rows under the pointer.
+  const keepScroll = oldInput?.dataset.projectId === project.id
+    ? projectPanes.querySelector('.pane-scroll')?.scrollTop || 0 : 0;
   const mode = paneGroupMode(project);
   const plan = parsePlan(fileContent(project, 'plan-tracker.md'));
   const todos = parseTodos(fileContent(project, 'todos.md'));
@@ -2654,6 +2658,7 @@ function renderPanes(project) {
   pane.appendChild(foot);
 
   projectPanes.replaceChildren(pane);
+  if (keepScroll) pane.querySelector('.pane-scroll').scrollTop = keepScroll;
   if (selection) {
     input.focus({ preventScroll: true });
     input.setSelectionRange(...selection);
@@ -3205,8 +3210,8 @@ function slugifyClient(name) {
 
 /**
  * New project: a form on the left, and on the right what Create will make:
- * the project folder and its files, each worktree on its branch, folders
- * used in place, and the tracks the template adds. Pass `folders` to open
+ * the project folder and its files, each worktree on its branch, and folders
+ * used in place. Pass `folders` to open
  * with folders already attached (a "new project from this folder" flow).
  */
 async function showNewProjectDialog({ name: initialName = '', folders: initialFolders = [] } = {}) {
@@ -3222,9 +3227,6 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
       <div class="folder-input-row">
         <input type="text" id="np-name" placeholder="Website redesign" autocomplete="off" spellcheck="false" value="${escapeHtml(initialName)}">
       </div>
-      <label class="new-project-label">Start from</label>
-      <div class="np-chips" id="np-templates"></div>
-      <div class="np-help" id="np-template-hint"></div>
       <div class="np-row-head">
         <label class="new-project-label">Works in</label>
         <button type="button" class="np-link" id="np-add-folder">${PICONS.plus(11)}<span>Add folder</span></button>
@@ -3252,8 +3254,6 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
 
   const q = (sel) => dialog.querySelector(sel);
   const nameInput = q('#np-name');
-  const templatesEl = q('#np-templates');
-  const templateHint = q('#np-template-hint');
   const foldersEl = q('#np-folders');
   const branchSection = q('#np-branch');
   const branchLine = q('#np-branch-line');
@@ -3267,34 +3267,14 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
   // mode is null until the folder is known: a plain folder becomes in-place on
   // its own, a repository asks. A caller may decide up front with f.mode.
   const folders = initialFolders.map(f => ({ path: f.path, mode: f.mode || null, branch: '', git: null, envFiles: [], copyEnv: new Set() }));
-  let templateKind = '';
   let root = '~/Switchboard';
   try { root = (await window.api.getProjectsRoot()) || root; } catch {}
-  let templates = [];
-  try { templates = (await window.api.listTemplates())?.templates || []; } catch {}
   const shortPath = (p) => (typeof shortProjectPath === 'function' ? shortProjectPath(p) : p);
   const slug = () => slugifyClient(nameInput.value);
   const branchName = () => (sharedBox.checked && branchInput.value.trim()) || slug();
   // With one shared name every worktree uses it; otherwise each repo names its own, defaulting to the slug.
   const branchFor = (folder) => (sharedBox.checked ? branchName() : (folder.branch.trim() || slug()));
-  const template = () => templates.find(t => t.kind === templateKind) || null;
   const hasWorktree = () => folders.some(f => f.mode === 'worktree');
-
-  function renderTemplates() {
-    templatesEl.replaceChildren();
-    const chips = [{ kind: '', name: 'Blank' }, ...templates];
-    for (const t of chips) {
-      const chip = document.createElement('button');
-      chip.type = 'button';
-      chip.className = 'np-chip' + (t.kind === templateKind ? ' on' : '');
-      chip.dataset.kind = t.kind;
-      chip.textContent = t.name;
-      chip.onclick = () => { templateKind = t.kind; renderTemplates(); renderPreview(); };
-      templatesEl.appendChild(chip);
-    }
-    const t = template();
-    templateHint.textContent = t ? t.description : 'The brief, and nothing else until a session needs it.';
-  }
 
   function renderBranchLine() {
     const any = hasWorktree();
@@ -3448,7 +3428,6 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
 
   function renderPreview() {
     const s = slug();
-    const t = template();
     const worktrees = folders.filter(f => f.mode === 'worktree');
     // A repository still being asked about is left out until it is decided.
     const inPlace = folders.filter(f => f.mode === 'in-place' || (f.mode === null && f.git?.git !== true));
@@ -3466,16 +3445,10 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
         if (env.length) tree.push(`<span class="np-tree-sub np-tree-env"><em>copied in: ${escapeHtml(env.join(', '))}</em></span>`);
       }
     }
-    const hue = projectHue(s);
-    const tracks = (t?.tracks || []).map((track, i) => {
-      const h = Math.round((hue + 40 + i * 137.5) % 360);
-      return `<span class="pane-tag" style="color:hsl(${h},78%,72%);background:hsla(${h},70%,60%,0.16)">${escapeHtml(track.name)}</span>`;
-    });
     previewEl.innerHTML = `
       <div class="np-preview-title">What you get</div>
       <div class="np-tree mono">${tree.join('')}</div>
       ${inPlace.length ? `<div class="np-preview-sec"><span class="np-preview-label">Also works in place</span>${inPlace.map(f => `<span class="np-preview-row mono" title="${escapeHtml(f.path)}">${PICONS.folder(11)}<span>${escapeHtml(shortPath(f.path))}</span></span>`).join('')}</div>` : ''}
-      ${tracks.length ? `<div class="np-preview-sec"><span class="np-preview-label">Tracks</span><div class="np-tags">${tracks.join('')}</div></div>` : ''}
       <div class="np-preview-foot">Sessions start in the project folder and can read every folder listed here.</div>`;
   }
 
@@ -3526,7 +3499,6 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
         })),
         sharedBranch: sharedBox.checked,
         branchName: branchInput.value.trim(),
-        template: templateKind || undefined,
       });
     } catch (err) {
       result = { error: err.message };
@@ -3560,7 +3532,6 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
   }
   document.addEventListener('keydown', onKey);
 
-  renderTemplates();
   renderFolders();
   renderPreview();
   for (const folder of folders) {

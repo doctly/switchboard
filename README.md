@@ -160,7 +160,7 @@ Opening a session from there switches to working mode: a slim project strip on t
 
 - **Grouping** — Group the list by **Time** (today, yesterday, this week...), **Track**, or **State** (needs input, running, idle).
 - **Rows** — Each row shows the title, the track, the CLI, its age, and message count. Right-click a project, track, or session for its actions.
-- **Ordering** — Projects and sessions are ordered by their last event: started, finished a turn, asked for something, or was opened. A session that is still working does not move while its transcript grows, so two working sessions hold their places instead of leapfrogging.
+- **Ordering** — Projects and sessions are ordered by their last event: a new session started, a turn finished, or the CLI asked for something. Opening or resuming a session does not move it, so the list holds still under a click. A session that is still working does not move while its transcript grows, so two working sessions hold their places instead of leapfrogging.
 - **Archived** — Archived sessions sit in a closed "Archived" line at the foot of the list and under each track card. One click opens them, dimmed, in place.
 
 The project's **Settings** tab is a list of rows: the name, the start folder, folders, the worktree branch, and the tracks. Changes save as you make them. Folder rows show the branch each folder is on, read from git when the page opens, and "modified" when there are uncommitted changes.
@@ -170,7 +170,6 @@ The project's **Settings** tab is a list of rows: the name, the start folder, fo
 ![Project View new session menu](build/project-view-new-session-menu.png)
 
 - **New project** — Name it, pick a template, and attach the folders it works in. The dialog shows what Create will make: the project folder and its files, each worktree on its branch, and the tracks the template adds. Sessions started from the overview are filed under the project and still show under their folder in the Sessions tab.
-- **Templates** — New project offers **Feature**, **Research**, and **Customer**. A template is a folder under the app's data directory with a `template.json` (name, description, tracks) and the files a new project starts with. Its `CLAUDE.md` becomes the top of the brief. Edit them or add your own from Global Settings.
 - **Tracks** — Optional lines of work inside a project, each with its own sessions, start folder, and CLI. A track card's "Resume latest" reopens its most recent session. "New" starts one there.
 - **Move to project** — Any session row has a move action. Nothing is filed until you launch it from a project or move it there.
 - **Mark as done** — Done projects drop to the bottom, collapsed. Removing a project only forgets it. The folder and the sessions stay on disk.

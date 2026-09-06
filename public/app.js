@@ -141,10 +141,11 @@ const sessionBusyState = new Map(); // sessionId → boolean (currently active)
 // it (or Mark as read) clears it. Busy is not saved: nothing is running yet.
 const SESSION_NOTICES_KEY = 'sessionNotices';
 
-// When something last happened to a session that is worth moving it for: it
-// started, finished a turn, asked for something, or was opened. A working
-// session rewrites its transcript constantly, so the Projects tab sorts on
-// this clock instead of the file's modified time and holds still mid-turn.
+// When something last happened to a session that is worth moving it for: a
+// new session started, a turn finished, or the CLI asked for something.
+// Opening or resuming a session does not count, so the list holds still under
+// a click. Not persisted: every event coincides with a transcript write, so
+// after a restart the transcript's own last-message time says the same thing.
 const sessionEventTimes = new Map(); // sessionId → ms since epoch
 
 function bumpSessionEvent(sessionId) {
@@ -154,27 +155,32 @@ function bumpSessionEvent(sessionId) {
   if (typeof refreshProjectViews === 'function') refreshProjectViews({ reason: 'sessions' });
 }
 
-/** The time to sort a session by: its last event, else the transcript's modified time. */
+/**
+ * The time to sort a session by: the later of its last event and the
+ * transcript's last message. A working session rewrites its transcript
+ * constantly, so while the CLI is busy the session keeps the time it had when
+ * the turn began (frozen in setActivity); the turn ending moves it.
+ */
 function sessionEventTime(session) {
-  const known = sessionEventTimes.get(session.sessionId);
-  if (known) return known;
+  const id = session.sessionId;
+  const known = sessionEventTimes.get(id) || 0;
   const t = new Date(session.modified).getTime();
-  return Number.isFinite(t) ? t : 0;
+  const modified = Number.isFinite(t) ? t : 0;
+  if (known && sessionBusyState.get(id) === true) return known;
+  return Math.max(known, modified);
 }
 
 function saveSessionNotices() {
   try {
     // Ids of sessions that no longer exist cost nothing but should not pile up.
     const cap = (set) => [...set].slice(-200);
-    const events = Object.fromEntries([...sessionEventTimes].sort((a, b) => b[1] - a[1]).slice(0, 500));
-    localStorage.setItem(SESSION_NOTICES_KEY, JSON.stringify({ ready: cap(responseReadySessions), attention: cap(attentionSessions), events }));
+    localStorage.setItem(SESSION_NOTICES_KEY, JSON.stringify({ ready: cap(responseReadySessions), attention: cap(attentionSessions) }));
   } catch {}
 }
 try {
   const saved = JSON.parse(localStorage.getItem(SESSION_NOTICES_KEY) || 'null');
   for (const id of saved?.ready || []) responseReadySessions.add(id);
   for (const id of saved?.attention || []) attentionSessions.add(id);
-  for (const [id, t] of Object.entries(saved?.events || {})) if (Number.isFinite(t)) sessionEventTimes.set(id, t);
 } catch {}
 
 // Some CLIs (notably Codex) start under a temporary ID and are re-keyed once
@@ -219,6 +225,11 @@ function setActivity(sessionId, active) {
   const wasActive = sessionBusyState.get(sessionId) || false;
   sessionBusyState.set(sessionId, active);
   if (active && typeof hideSessionHoverPreview === 'function') hideSessionHoverPreview(sessionId);
+  // A turn is starting: pin the row where it is until the turn ends.
+  if (active && !wasActive) {
+    const session = sessionMap.get(sessionId);
+    if (session) sessionEventTimes.set(sessionId, sessionEventTime(session));
+  }
 
   if (wasActive && !active) {
     bumpSessionEvent(sessionId);
@@ -264,7 +275,8 @@ function markUnread(sessionId) {
 }
 
 function clearNotifications(sessionId) {
-  bumpSessionEvent(sessionId);
+  // Opening a session is not an event: the row stays where it is so the
+  // list does not reshuffle under the pointer.
   clearUnread(sessionId);
   attentionSessions.delete(sessionId);
   forEachSessionItem(sessionId, item => item.classList.remove('needs-attention'));
@@ -765,8 +777,13 @@ function scheduleActiveSessionsPoll() {
 async function pollActiveSessions() {
   try {
     const ids = await window.api.getActiveSessions();
-    // A session that just came alive, whoever started it, is news.
-    for (const id of ids) if (!activePtyIds.has(id)) { sessionEventTimes.set(id, Date.now()); }
+    // A new session that just came alive is news. A resumed one keeps its
+    // place until the agent does something.
+    for (const id of ids) {
+      if (activePtyIds.has(id)) continue;
+      const pending = pendingSessions.get(id);
+      if (pending && !pending.restored) sessionEventTimes.set(id, Date.now());
+    }
     activePtyIds = new Set(ids);
     updateRunningIndicators();
     updateTerminalHeader();

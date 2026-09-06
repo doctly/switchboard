@@ -107,6 +107,9 @@ function taskStateText(run) {
 }
 
 function renderTaskPopover(project, popover) {
+  // The popover scrolls, and every task state change rebuilds it. Keep the
+  // offset so starting a task near the bottom does not jump to the top.
+  const scrollTop = popover.scrollTop;
   popover.replaceChildren();
   const header = document.createElement('div');
   header.className = 'task-popover-header';
@@ -198,7 +201,21 @@ function renderTaskPopover(project, popover) {
         await runProjectTask(taskPath, task.label, { showLog: false });
       }
     });
-    row.append(copy, state, action);
+    row.append(copy, state);
+    if (task.run?.running) {
+      // A running server gets restart beside stop, the same pair as the log header.
+      const restart = document.createElement('button');
+      restart.className = 'task-row-action restart';
+      restart.title = `Restart ${task.label}`;
+      restart.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8.1 8.1 0 1 0 2 5.3"/><path d="M20 4v7h-7"/></svg>';
+      restart.addEventListener('click', async event => {
+        event.stopPropagation();
+        restart.disabled = true;
+        await restartProjectTask(taskPath, task.label, { showLog: false });
+      });
+      row.appendChild(restart);
+    }
+    row.appendChild(action);
 
     row.addEventListener('click', async () => {
       if (task.supported === false) return;
@@ -211,6 +228,7 @@ function renderTaskPopover(project, popover) {
     });
     popover.appendChild(row);
   }
+  popover.scrollTop = scrollTop;
 }
 
 function showTaskPopover(project, anchor) {

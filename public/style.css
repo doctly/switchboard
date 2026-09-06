@@ -3332,6 +3332,20 @@ body { display: flex; flex-direction: column; }
   color: #d45a70;
 }
 
+.task-row-action.restart {
+  color: #9aa0b4;
+}
+
+.task-row-action.restart:hover {
+  color: #c9cde0;
+  background: rgba(255,255,255,0.08);
+}
+
+.task-row-action:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .task-row-action.stop:hover {
   background: rgba(212,90,112,0.14);
 }
