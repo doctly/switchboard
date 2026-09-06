@@ -1,7 +1,27 @@
 const fs = require('fs');
 const path = require('path');
+const { pathToFileURL } = require('url');
+const { createPreviewAssetUrl } = require('./preview-assets');
 
 const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
+const MAX_MEDIA_PREVIEW_BYTES = 32 * 1024 * 1024;
+const IMAGE_MIME_TYPES = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp', '.ico': 'image/x-icon', '.avif': 'image/avif',
+};
+
+function previewType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (IMAGE_MIME_TYPES[ext]) return 'image';
+  if (ext === '.pdf') return 'pdf';
+  if (ext === '.html' || ext === '.htm') return 'html';
+  return 'text';
+}
+
+function previewLimit(filePath) {
+  return ['image', 'pdf'].includes(previewType(filePath)) ? MAX_MEDIA_PREVIEW_BYTES : MAX_PREVIEW_BYTES;
+}
 const BINARY_EXTENSIONS = new Set([
   '.7z', '.a', '.avi', '.bin', '.bmp', '.class', '.db', '.dmg', '.dll', '.doc',
   '.docx', '.dylib', '.eot', '.exe', '.gif', '.gz', '.ico', '.jar', '.jpeg',
@@ -40,7 +60,8 @@ function resolveProjectEntry(projectPath, relativePath = '') {
 }
 
 function isViewableFile(filePath, stat) {
-  if (!stat.isFile() || stat.size > MAX_PREVIEW_BYTES) return false;
+  if (!stat.isFile() || stat.size > previewLimit(filePath)) return false;
+  if (['image', 'pdf'].includes(previewType(filePath))) return true;
   if (BINARY_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return false;
   if (!stat.size) return true;
 
@@ -75,6 +96,7 @@ function listProjectDirectory(projectPath, relativePath = '') {
       type,
       size: stat.size,
       viewable,
+      previewType: viewable ? previewType(absolutePath) : null,
     };
   }).sort((a, b) => {
     if (a.type === 'directory' && b.type !== 'directory') return -1;
@@ -84,20 +106,33 @@ function listProjectDirectory(projectPath, relativePath = '') {
 }
 
 function readProjectFile(projectPath, relativePath) {
-  const { resolved } = resolveProjectEntry(projectPath, relativePath);
-  const stat = fs.lstatSync(resolved);
-  if (!isViewableFile(resolved, stat)) {
-    throw new Error(stat.size > MAX_PREVIEW_BYTES
+  const { root, resolved } = resolveProjectEntry(projectPath, relativePath);
+  return readPreviewFile(resolved, root);
+}
+
+function readPreviewFile(filePath, projectRoot) {
+  const stat = fs.statSync(filePath);
+  if (!isViewableFile(filePath, stat)) {
+    throw new Error(stat.size > previewLimit(filePath)
       ? 'File is too large to preview'
       : 'File type cannot be previewed');
   }
-  return { filePath: resolved, content: fs.readFileSync(resolved, 'utf8') };
+  const type = previewType(filePath);
+  const result = { filePath, previewType: type, fileUrl: pathToFileURL(filePath).href };
+  if (type === 'html') result.previewUrl = createPreviewAssetUrl(filePath, projectRoot);
+  if (type === 'image' || type === 'pdf') {
+    const mimeType = type === 'pdf' ? 'application/pdf' : IMAGE_MIME_TYPES[path.extname(filePath).toLowerCase()];
+    return { ...result, mimeType, base64: fs.readFileSync(filePath).toString('base64') };
+  }
+  return { ...result, content: fs.readFileSync(filePath, 'utf8') };
 }
 
 module.exports = {
   MAX_PREVIEW_BYTES,
+  MAX_MEDIA_PREVIEW_BYTES,
   isViewableFile,
   listProjectDirectory,
   readProjectFile,
+  readPreviewFile,
   resolveProjectEntry,
 };

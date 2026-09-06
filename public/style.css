@@ -6012,7 +6012,39 @@ body { display: flex; flex-direction: column; }
   display: flex;
   align-items: center;
   padding: 10px 12px 6px;
+  gap: 4px;
 }
+
+.ws-files-head .ws-card-title { white-space: nowrap; }
+.ws-files-head .ws-files-action {
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  justify-content: center;
+}
+
+.viewer-media-preview {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+}
+.viewer-media-preview--image {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: repeating-conic-gradient(#202028 0% 25%, #262630 0% 50%) 0 / 20px 20px;
+}
+.viewer-media-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.viewer-preview-frame { display: block; width: 100%; height: 100%; border: 0; background: white; }
+.viewer-preview-error { padding: 24px; text-align: center; color: #b0b0c4; }
 
 .ws-files-list {
   flex: 1;

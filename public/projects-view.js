@@ -215,6 +215,7 @@ const mainEl = document.getElementById('main');
 // --- Icons (stroke SVG, 24 grid) ---
 
 const PICONS = {
+  refresh: (s = 14) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5"/><path d="M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-2L20 8M4 16l2.3 3A7 7 0 0 0 17.9 17"/></svg>`,
   plus: (s = 14) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>`,
   chevronDown: (s = 11) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`,
   chevronRight: (s = 11) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>`,
@@ -1888,6 +1889,7 @@ async function saveProjectEditorFile(filePath, content) {
 async function openFileInProjectEditor(project, rel) {
   const state = filesState(project);
   state.selected = rel;
+  const request = state.openRequest = (state.openRequest || 0) + 1;
   const host = projectViewer?.querySelector('#ws-editor');
   if (!host) return;
   projectViewer.querySelectorAll('.ws-file-row').forEach(r => r.classList.toggle('selected', r.dataset.rel === rel));
@@ -1909,6 +1911,7 @@ async function openFileInProjectEditor(project, rel) {
       filesState(project).cache.clear();
     }
   }
+  if (state.openRequest !== request || !host.isConnected || selectedProject()?.id !== project.id) return;
   if (!result?.ok) {
     host.innerHTML = `<div class="ws-editor-empty">${escapeHtml(result?.error || 'Could not open the file.')}</div>`;
     return;
@@ -1916,7 +1919,7 @@ async function openFileInProjectEditor(project, rel) {
   ed.projectId = project.id;
   ed.rel = rel;
   host.replaceChildren(ed.host);
-  ed.panel.open(`${project.name} · ${rel}`, result.filePath || filePath, result.content);
+  ed.panel.open(`${project.name} · ${rel}`, result.filePath || filePath, result.content, result);
 }
 
 async function listProjectDir(project, state, rel) {
@@ -1956,7 +1959,7 @@ async function renderFileTree(project, list, state) {
       (state.selected === entry.relativePath ? ' selected' : '');
     row.dataset.rel = entry.relativePath;
     row.style.paddingLeft = `${10 + depth * 14}px`;
-    row.title = !isDir && entry.viewable === false ? `${entry.relativePath} (not a text file)` : entry.relativePath;
+    row.title = !isDir && entry.viewable === false ? `${entry.relativePath} (preview unavailable: unsupported type or too large)` : entry.relativePath;
     row.innerHTML = `<span class="ws-file-icon">${isDir ? (open ? '&#9662;' : '&#9656;') : ''}</span><span class="ws-file-name">${escapeHtml(entry.name)}</span>`;
     row.onclick = async () => {
       if (isDir) {
@@ -1976,7 +1979,7 @@ async function renderFilesTab(project, body) {
   body.innerHTML = `
     <div class="ws-files">
       <div class="ws-files-side">
-        <div class="ws-files-head"><span class="ws-card-title">Project folder</span><span class="ws-flex"></span><button type="button" class="ws-ghost ws-ghost--sm" id="ws-files-open">${PICONS.open(11)}<span>Open folder</span></button><button type="button" class="ws-ghost ws-ghost--sm" id="ws-files-refresh">Refresh</button></div>
+        <div class="ws-files-head"><span class="ws-card-title">Project folder</span><span class="ws-flex"></span><button type="button" class="ws-ghost ws-files-action" id="ws-files-open" title="Open folder" aria-label="Open folder">${PICONS.open(14)}</button><button type="button" class="ws-ghost ws-files-action" id="ws-files-refresh" title="Refresh files" aria-label="Refresh files">${PICONS.refresh(14)}</button></div>
         <div class="ws-files-list" id="ws-files-list"></div>
         <div class="ws-help ws-files-hint">CLAUDE.md is the brief every session reads. The agent creates plan.md, plan-tracker.md, todos.md and memory.md when it needs them. Attached repositories are not listed here.</div>
       </div>

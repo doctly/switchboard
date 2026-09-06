@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, protocol, screen, shell } = require('electron');
 const { Worker } = require('worker_threads');
 const path = require('path');
 const fs = require('fs');
@@ -35,7 +35,9 @@ const { createTerminalActivity } = require('./terminal-activity');
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
 const { startScheduler } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
-const { listProjectDirectory, readProjectFile } = require('./project-files');
+const { listProjectDirectory, readProjectFile, readPreviewFile } = require('./project-files');
+const { PREVIEW_SCHEME, PREVIEW_SCHEMES, handlePreviewAssetRequest } = require('./preview-assets');
+protocol.registerSchemesAsPrivileged(PREVIEW_SCHEMES);
 const { createTaskManager } = require('./task-manager');
 const { lastAssistantMessage } = require('./session-preview');
 
@@ -128,6 +130,7 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
+      nodeIntegrationInSubFrames: false,
       contextIsolation: true,
     },
   });
@@ -503,8 +506,7 @@ ipcMain.on('mcp-diff-response', (_event, sessionId, diffId, action, editedConten
 
 ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
   try {
-    const content = fs.readFileSync(filePath, 'utf8');
-    return { ok: true, content };
+    return { ok: true, ...readPreviewFile(filePath) };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -2091,6 +2093,7 @@ if (!gotSingleInstanceLock) {
   });
 
   app.whenReady().then(() => {
+    protocol.handle(PREVIEW_SCHEME, handlePreviewAssetRequest);
     buildMenu();
     initializeHiddenProjectTimestamps();
     createWindow();

@@ -332,6 +332,7 @@ function openFileTab(sessionId, data) {
     label: basename(data.filePath),
     filePath: data.filePath,
     content: data.content,
+    preview: data,
   };
 
   state.panelVisible = true;
@@ -362,7 +363,7 @@ function destroyCurrentTab(state) {
 async function openFileInPanel(sessionId, filePath) {
   const result = await window.api.readFileForPanel(filePath);
   if (!result.ok) return;
-  openFileTab(sessionId, { filePath, content: result.content });
+  openFileTab(sessionId, { ...result, filePath });
 }
 
 async function openProjectFile(sessionId, relativePath) {
@@ -380,7 +381,7 @@ async function openProjectFile(sessionId, relativePath) {
   renderProjectBrowser(sessionId);
 
   const result = await window.api.readProjectFile(requestedRoot, relativePath);
-  if (state.projectPath !== requestedRoot) return;
+  if (state.projectPath !== requestedRoot || state.selectedPath !== relativePath) return;
   const effectiveSessionId = sessionIdForState(state, sessionId);
   if (!effectiveSessionId) return;
   if (!result.ok) {
@@ -390,7 +391,7 @@ async function openProjectFile(sessionId, relativePath) {
     return;
   }
 
-  openFileTab(effectiveSessionId, { filePath: result.filePath, content: result.content });
+  openFileTab(effectiveSessionId, result);
 }
 
 function closeAllDiffs(sessionId) {
@@ -509,7 +510,7 @@ function renderTabContent(sessionId, tab) {
     // Use ViewerPanel
     diffContainer.style.display = 'none';
     vpContainer.style.display = 'flex';
-    fpViewerPanel.open(tab.label, tab.filePath, tab.content);
+    fpViewerPanel.open(tab.label, tab.filePath, tab.content, tab.preview);
   } else {
     // Diff mode
     vpContainer.style.display = 'none';
