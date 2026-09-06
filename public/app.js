@@ -574,6 +574,7 @@ function updateMoreButton() {
 }
 
 sidebarMoreBtn.addEventListener('click', (e) => {
+  const slackLink = document.getElementById('status-bar-slack');
   const tabItem = (name) => {
     const tab = tabButton(name);
     return { label: tab.title, icon: menuIcon(tab.innerHTML), muted: activeTab === name, onClick: () => tab.click() };
@@ -582,6 +583,7 @@ sidebarMoreBtn.addEventListener('click', (e) => {
     ...MORE_TABS.map(tabItem),
     { sep: true },
     { label: 'Global settings', icon: ICONS.gear(14), onClick: () => globalSettingsBtn.click() },
+    { label: 'Join Slack', icon: slackLink.querySelector('svg').outerHTML, onClick: () => window.api.openExternal(slackLink.href) },
   ], { anchor: e.currentTarget });
 });
 

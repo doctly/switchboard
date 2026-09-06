@@ -3301,7 +3301,7 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
     branchLine.style.display = any ? '' : 'none';
     if (!any) branchSection.style.display = 'none';
     branchLine.innerHTML = sharedBox.checked
-      ? `Worktrees check out on <b class="mono">${escapeHtml(branchName())}</b> · <button type="button" class="np-link" id="np-branch-change">Change</button>`
+      ? `Worktrees use branch <b class="mono">${escapeHtml(branchName())}</b> · <button type="button" class="np-link" id="np-branch-change">Change</button>`
       : `Each worktree names its own branch · <button type="button" class="np-link" id="np-branch-change">Change</button>`;
     branchLine.querySelector('#np-branch-change').onclick = () => {
       const open = branchSection.style.display === 'none';
@@ -3362,12 +3362,48 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
       if (folder.mode === 'worktree' && folder.envFiles.length) {
         const env = document.createElement('div');
         env.className = 'np-folder-env';
-        const head = document.createElement('div');
-        head.className = 'np-help';
-        head.textContent = 'The worktree starts with tracked files only. Copy these across:';
-        env.appendChild(head);
+        const toolbar = document.createElement('div');
+        toolbar.className = 'np-env-toolbar';
+        const title = document.createElement('span');
+        title.className = 'np-env-title';
+        title.textContent = 'Environment files';
+        const count = document.createElement('span');
+        count.className = 'np-env-count';
+        count.setAttribute('aria-live', 'polite');
+        const actions = document.createElement('div');
+        actions.className = 'np-env-actions';
+        const all = document.createElement('button');
+        all.type = 'button';
+        all.className = 'np-link';
+        all.textContent = 'Select all';
+        const none = document.createElement('button');
+        none.type = 'button';
+        none.className = 'np-link';
+        none.textContent = 'Select none';
+        actions.append(all, none);
+        toolbar.append(title, count, actions);
+        const help = document.createElement('div');
+        help.className = 'np-env-help';
+        help.textContent = 'Copy selected files into the new worktree. Existing files are kept.';
         const boxes = document.createElement('div');
         boxes.className = 'np-env-files';
+        boxes.setAttribute('role', 'group');
+        boxes.setAttribute('aria-label', `Environment files for ${pathBasename(folder.path)}`);
+        const inputs = [];
+        const updateSelection = () => {
+          const selected = folder.envFiles.filter(name => folder.copyEnv.has(name)).length;
+          count.textContent = `${selected} of ${folder.envFiles.length} selected`;
+          all.disabled = selected === folder.envFiles.length;
+          none.disabled = selected === 0;
+        };
+        const selectFiles = selected => {
+          folder.copyEnv = new Set(selected ? folder.envFiles : []);
+          for (const input of inputs) input.checked = selected;
+          updateSelection();
+          renderPreview();
+        };
+        all.onclick = () => selectFiles(true);
+        none.onclick = () => selectFiles(false);
         for (const name of folder.envFiles) {
           const label = document.createElement('label');
           label.className = 'ws-check np-env-file';
@@ -3376,13 +3412,16 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
           box.checked = folder.copyEnv.has(name);
           box.onchange = () => {
             if (box.checked) folder.copyEnv.add(name); else folder.copyEnv.delete(name);
+            updateSelection();
             renderPreview();
           };
+          inputs.push(box);
           label.appendChild(box);
           label.appendChild(Object.assign(document.createElement('span'), { className: 'mono', textContent: name }));
           boxes.appendChild(label);
         }
-        env.appendChild(boxes);
+        updateSelection();
+        env.append(toolbar, help, boxes);
         row.appendChild(env);
       }
       if (folder.mode === 'worktree' && !sharedBox.checked) {
@@ -3511,8 +3550,8 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
   q('#np-add-folder').onclick = async () => addFolder(await window.api.browseFolder());
   q('.add-project-cancel-btn').onclick = close;
   createBtn.onclick = create;
-  nameInput.addEventListener('input', () => { branchInput.placeholder = slug(); renderPreview(); });
-  branchInput.addEventListener('input', () => { renderPreview(); const b = branchLine.querySelector('b'); if (b) b.textContent = branchName(); });
+  nameInput.addEventListener('input', () => { renderBranchLine(); renderPreview(); });
+  branchInput.addEventListener('input', () => { renderBranchLine(); renderPreview(); });
   sharedBox.addEventListener('change', () => { renderFolders(); renderPreview(); });
 
   function onKey(e) {

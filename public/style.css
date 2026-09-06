@@ -97,6 +97,19 @@ body { display: flex; flex-direction: column; }
   text-overflow: ellipsis;
 }
 
+#status-bar-slack {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  color: #9090a8;
+  text-decoration: none;
+  white-space: nowrap;
+}
+#status-bar-slack svg { flex-shrink: 0; }
+#status-bar-slack:hover { color: #d0d0e0; }
+#status-bar-slack:focus-visible { outline: 2px solid #8088ff; outline-offset: 3px; border-radius: 2px; }
+
 #status-bar-activity {
   white-space: nowrap;
   color: #8088ff;
@@ -6379,10 +6392,22 @@ body { display: flex; flex-direction: column; }
 .np-folder-branch svg { color: #8088ff; flex-shrink: 0; }
 .np-folder-branch .np-input { flex: 0 1 240px; padding: 4px 8px; font-size: 11.5px; }
 
-.np-folder-env { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 5px; padding-top: 4px; }
-.np-env-files { display: flex; flex-wrap: wrap; gap: 6px 14px; }
-.np-env-file { font-size: 11.5px; color: #9090a8; gap: 5px; }
-.np-env-file .mono { color: #c8c8dc; }
+.np-folder-env { grid-column: 1 / -1; min-width: 0; display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.06); }
+.np-env-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.np-env-title { font-size: 12px; font-weight: 600; color: #d0d0e0; }
+.np-env-count { font-size: 11px; color: #9090a8; }
+.np-env-actions { display: flex; gap: 12px; margin-left: auto; }
+.np-env-actions .np-link { font-size: 11.5px; padding: 3px 0; }
+.np-env-actions .np-link:disabled { color: #7a7a90; opacity: 0.6; cursor: default; }
+.np-env-actions .np-link:focus-visible { outline: 2px solid #8088ff; outline-offset: 3px; border-radius: 2px; }
+.np-env-help { font-size: 11.5px; color: #9090a8; line-height: 1.4; }
+.np-env-files { display: flex; flex-direction: column; max-height: 224px; overflow-y: auto; overscroll-behavior: contain; border: 1px solid rgba(255,255,255,0.08); border-radius: 5px; background: rgba(0,0,0,0.1); }
+.np-env-file { white-space: normal; flex-shrink: 0; min-width: 0; margin: 0; padding: 7px 9px; font-size: 11.5px; color: #9090a8; gap: 8px; align-items: flex-start; line-height: 1.5; }
+.np-env-file + .np-env-file { border-top: 1px solid rgba(255,255,255,0.04); }
+.np-env-file:hover { background: rgba(128,136,255,0.06); }
+.np-env-file:focus-within { background: rgba(128,136,255,0.1); }
+.np-env-file input { flex-shrink: 0; margin-top: 2px; }
+.np-env-file .mono { min-width: 0; color: #c8c8dc; overflow-wrap: anywhere; }
 
 .np-x { background: none; border: none; color: #7a7a90; font-size: 16px; line-height: 1; cursor: pointer; padding: 0 2px; }
 .np-x:hover { color: #e05070; }
