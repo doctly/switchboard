@@ -36,6 +36,7 @@ const FOLDER_MODES = new Set(['in-place', 'worktree']);
 const PROJECT_STATUSES = new Set(['active', 'done']);
 // A .env is a few lines; anything larger under that name is something else.
 const ENV_FILE_MAX_BYTES = 1024 * 1024;
+const ENV_SKIP_DIRS = new Set(['.git', 'node_modules', 'vendor', '.venv', 'venv']);
 
 let db, log, buildProjectsFromCache, notifyRendererProjectsChanged, isHarnessId, plansDir;
 
@@ -700,25 +701,36 @@ async function attachFolder(id, spec) {
 
 /** A sample file is listed but never picked by default: it is usually tracked already. */
 function isEnvSample(name) {
-  return /^\.env\.(example|sample|template|dist)$/i.test(name);
+  return /^\.env\.(example|sample|template|dist)$/i.test(path.basename(name));
 }
 
 /**
- * The .env files at the top of a folder: `.env` and `.env.*`, sorted, files
- * only. Big files are left out — a .env is a few lines, and anything large
+ * The .env files recursively within a folder: `.env` and `.env.*`, sorted, files
+ * only, as relative paths. Hidden directories, dependency folders and symlinks are skipped.
+ * Big files are left out — a .env is a few lines, and anything large
  * under that name is something else.
  */
 function listEnvFiles(dir) {
   const root = typeof dir === 'string' ? path.resolve(dir.trim()) : '';
   if (!root || !isDirectory(root)) return [];
-  let entries;
-  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return []; }
   const names = [];
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    if (entry.name !== '.env' && !entry.name.startsWith('.env.')) continue;
-    try { if (fs.statSync(path.join(root, entry.name)).size > ENV_FILE_MAX_BYTES) continue; } catch { continue; }
-    names.push(entry.name);
+  const pending = [''];
+  while (pending.length) {
+    const relativeDir = pending.pop();
+    let entries;
+    try { entries = fs.readdirSync(path.join(root, relativeDir), { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      const relativePath = path.join(relativeDir, entry.name);
+      if (entry.isDirectory()) {
+        if (!entry.name.startsWith('.') && !ENV_SKIP_DIRS.has(entry.name)) pending.push(relativePath);
+        continue;
+      }
+      // Do not follow symlinks, including links to directories outside the repo.
+      if (!entry.isFile()) continue;
+      if (entry.name !== '.env' && !entry.name.startsWith('.env.')) continue;
+      try { if (fs.statSync(path.join(root, relativePath)).size > ENV_FILE_MAX_BYTES) continue; } catch { continue; }
+      names.push(relativePath);
+    }
   }
   names.sort();
   return names;
@@ -745,7 +757,15 @@ function copyEnvFiles(source, target, names) {
     const dest = path.join(target, name);
     if (fs.existsSync(dest)) { skipped.push(name); continue; }
     try {
-      fs.copyFileSync(path.join(source, name), dest);
+      // Create missing parents, but never copy through a destination symlink.
+      let parent = target;
+      for (const part of name.split(path.sep).slice(0, -1)) {
+        parent = path.join(parent, part);
+        try { fs.mkdirSync(parent); } catch (err) { if (err.code !== 'EEXIST') throw err; }
+        const stat = fs.lstatSync(parent);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Unsafe destination directory');
+      }
+      fs.copyFileSync(path.join(source, name), dest, fs.constants.COPYFILE_EXCL);
       fs.chmodSync(dest, fs.statSync(path.join(source, name)).mode & 0o777);
       copied.push(name);
     } catch (err) {

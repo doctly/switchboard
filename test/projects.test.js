@@ -870,6 +870,39 @@ test('copyEnvFiles copies only the named files, never overwrites, ignores names 
   } finally { rm(source); rm(target); }
 });
 
+test('recursive env discovery and copying preserve paths and skip hidden directories, dependencies and symlinks', () => {
+  const t = setup();
+  const source = tmpDir('switchboard-env-src-');
+  const target = tmpDir('switchboard-env-dst-');
+  const outside = tmpDir('switchboard-env-outside-');
+  const nested = path.join('apps', 'web', '.env');
+  const sample = path.join('apps', 'web', '.env.example');
+  try {
+    for (const name of [nested, sample, 'node_modules/pkg/.env', 'apps/web/node_modules/pkg/.env', '.git/.env', '.claude/worktrees/feature/backend/.env', 'apps/web/.hidden/.env', 'vendor/pkg/.env', '.venv/.env', 'venv/.env']) {
+      fs.mkdirSync(path.dirname(path.join(source, name)), { recursive: true });
+      fs.writeFileSync(path.join(source, name), 'A=1\n');
+    }
+    fs.writeFileSync(path.join(outside, '.env'), 'KEEP=me\n');
+    fs.symlinkSync(outside, path.join(source, 'linked'), 'dir');
+    fs.symlinkSync(path.join(outside, '.env'), path.join(source, '.env.link'));
+    assert.deepEqual(projects.listEnvFiles(source), [nested, sample]);
+    assert.deepEqual(projects.defaultEnvSelection(source), [nested]);
+    const hiddenEnv = path.join('.claude', 'worktrees', 'feature', 'backend', '.env');
+    assert.deepEqual(projects.copyEnvFiles(source, target, [hiddenEnv]), { copied: [], skipped: [hiddenEnv] });
+    assert.equal(fs.existsSync(path.join(target, '.claude')), false);
+    assert.deepEqual(projects.copyEnvFiles(source, target, [nested]), { copied: [nested], skipped: [] });
+    assert.equal(fs.readFileSync(path.join(target, nested), 'utf8'), 'A=1\n');
+    assert.equal(fs.existsSync(path.join(target, sample)), false);
+    assert.deepEqual(projects.copyEnvFiles(source, target, [nested]), { copied: [], skipped: [nested] });
+
+    fs.rmSync(path.join(target, 'apps'), { recursive: true });
+    fs.symlinkSync(outside, path.join(target, 'apps'), 'dir');
+    assert.deepEqual(projects.copyEnvFiles(source, target, [nested]), { copied: [], skipped: [nested] });
+    assert.equal(fs.existsSync(path.join(outside, 'web')), false);
+    assert.equal(fs.readFileSync(path.join(outside, '.env'), 'utf8'), 'KEEP=me\n');
+  } finally { rm(source); rm(target); rm(outside); t.cleanup(); }
+});
+
 test('a new worktree gets the .env files the caller picked', { skip: !haveGit && 'git not installed' }, async () => {
   const t = setup();
   const repo = makeRepo('switchboard-repo-env-');
@@ -877,16 +910,20 @@ test('a new worktree gets the .env files the caller picked', { skip: !haveGit &&
     fs.writeFileSync(path.join(repo, '.env'), 'TOKEN=abc\n');
     fs.writeFileSync(path.join(repo, '.env.local'), 'PORT=3000\n');
     fs.writeFileSync(path.join(repo, '.env.example'), 'TOKEN=\n');
+    const nestedEnv = path.join('apps', 'web', '.env');
+    fs.mkdirSync(path.dirname(path.join(repo, nestedEnv)), { recursive: true });
+    fs.writeFileSync(path.join(repo, nestedEnv), 'NESTED=1\n');
 
     const created = await projects.createProject({
       name: 'Env Feature',
-      folders: [{ path: repo, mode: 'worktree', copyEnv: ['.env', '.env.local'] }],
+      folders: [{ path: repo, mode: 'worktree', copyEnv: ['.env', '.env.local', nestedEnv] }],
     });
     assert.equal(created.ok, true);
     assert.deepEqual(created.errors, []);
     const wt = created.project.folders[0];
     assert.equal(fs.readFileSync(path.join(wt.path, '.env'), 'utf8'), 'TOKEN=abc\n');
     assert.equal(fs.readFileSync(path.join(wt.path, '.env.local'), 'utf8'), 'PORT=3000\n');
+    assert.equal(fs.readFileSync(path.join(wt.path, nestedEnv), 'utf8'), 'NESTED=1\n');
     assert.equal(fs.existsSync(path.join(wt.path, '.env.example')), false, 'an unticked file stays behind');
 
     // Attaching a second repo without copyEnv leaves its .env behind.
