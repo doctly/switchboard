@@ -29,6 +29,7 @@ try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
 const { buildPtyEnv } = require('./pty-env');
 const cleanPtyEnv = buildPtyEnv(process.env);
 const { shouldStartFresh, shouldBlockArchivedSession } = require('./session-launch');
+const { createTerminalActivity } = require('./terminal-activity');
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
@@ -1451,6 +1452,15 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     projectPath, firstResize: true,
     projectFolder, knownJsonlFiles, sessionSlug,
     isPlainTerminal, runtime: runtimeId, forkFrom: sessionOptions?.forkFrom || null,
+    // A plain terminal has no CLI to report a busy state, so one is derived
+    // from the shell's own OSC 133 prompt marks, or from the PTY's foreground
+    // process when the shell sends none. A harness session already has the
+    // OSC 0 / OSC 9;4 handlers below.
+    activity: isPlainTerminal ? createTerminalActivity({
+      shellName: path.basename(shell),
+      // On Windows `pty.process` is the console title, not a process name.
+      canPollProcess: process.platform !== 'win32',
+    }) : null,
     // Plain terminals have no transcript row to carry their project filing.
     // Keep the launch context on the live PTY so renderer reloads can put a
     // terminal started in an attached folder back into the same project/track.
@@ -1469,6 +1479,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     mcpServer, _openedAt: Date.now(),
   };
   activeSessions.set(sessionId, session);
+  if (session.activity) startTerminalActivitySweep();
 
   // A session launched from a project is filed there. Recorded under whatever
   // id the session has right now; resolvePendingLaunches moves it to the real
@@ -1495,6 +1506,13 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
 
   ptyProcess.onData(data => {
     const currentId = session.realSessionId || sessionId;
+
+    // Prompt marks for a plain terminal. Cheap on every chunk: the parse
+    // returns immediately unless the chunk actually contains an OSC 133.
+    if (session.activity) {
+      const busy = session.activity.feedData(data);
+      if (busy !== null) sendTerminalBusy(session, currentId, busy);
+    }
 
     // Parse OSC sequences (title changes, progress, notifications, etc.)
     if (data.includes('\x1b]')) {
@@ -1704,6 +1722,53 @@ ipcMain.on('close-terminal', (_event, sessionId) => {
     }
   }
 });
+
+// --- Plain-terminal activity: working, or waiting at the prompt? ---
+
+/** One place to tell the renderer a terminal started or stopped working. */
+function sendTerminalBusy(session, sessionId, busy) {
+  session._cliBusy = busy;
+  log.debug(`[terminal-activity] session=${sessionId} → ${busy ? 'BUSY' : 'IDLE'} ${JSON.stringify(session.activity.state())}`);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('cli-busy-state', sessionId, busy);
+  }
+}
+
+// One sweep for every tracked terminal rather than a timer each. Reading
+// `pty.process` costs ~18us, and only a shell that sends no prompt marks is
+// read at all, so 50 terminals stay well under a millisecond per sweep.
+const TERMINAL_ACTIVITY_INTERVAL_MS = 500;
+let terminalActivityTimer = null;
+
+function sweepTerminalActivity() {
+  let tracked = 0;
+  for (const [sessionId, session] of activeSessions) {
+    if (!session.activity || session.exited) continue;
+    tracked++;
+    let busy = null;
+    if (session.activity.needsPoll()) {
+      // A PTY that has just exited throws here rather than returning a name.
+      let name = null;
+      try { name = session.pty.process; } catch {}
+      busy = session.activity.feedProcess(name);
+    }
+    // Ticked either way: a silent command crosses the busy threshold with no
+    // output to settle on.
+    if (busy === null) busy = session.activity.tick();
+    if (busy !== null) sendTerminalBusy(session, sessionId, busy);
+  }
+  if (tracked === 0) {
+    clearInterval(terminalActivityTimer);
+    terminalActivityTimer = null;
+  }
+}
+
+/** Started when the first terminal appears, stopped when the last one goes. */
+function startTerminalActivitySweep() {
+  if (terminalActivityTimer) return;
+  terminalActivityTimer = setInterval(sweepTerminalActivity, TERMINAL_ACTIVITY_INTERVAL_MS);
+  terminalActivityTimer.unref?.();
+}
 
 // Session transitions → session-transitions.js
 const sessionTransitions = require('./session-transitions');
