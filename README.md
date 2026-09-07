@@ -6,7 +6,7 @@ Switchboard is a desktop app that puts every Claude Code and Codex session, acro
 
 ![Switchboard](build/screenshot.png)
 
-**[Download the latest release](https://github.com/doctly/switchboard/releases/latest)** · **[Join the Slack community](https://join.slack.com/t/switchboard-jg96485/shared_invite/zt-490s7hh3p-lktCuVxj2MIjRKUUj2hYWQ)**
+**[Download the latest release](https://github.com/doctly/switchboard/releases/latest)** · **[Join the Slack community](https://join.slack.com/t/doctly-ai/shared_invite/zt-4948uf70i-_WeI229ehttWfvjWvGxl3Q)**
 
 ## Contents
 
