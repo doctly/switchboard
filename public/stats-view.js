@@ -13,8 +13,8 @@ async function loadStats() {
   spinner.innerHTML = `<div class="stats-spinner-icon"></div><span>Updating stats\u2026</span>`;
   statsViewerBody.appendChild(spinner);
 
-  // Refresh stats cache via PTY (/stats + /usage)
-  let stats, usage;
+  // Refresh the stats cache via PTY and fetch rate limits via API.
+  let stats, usage, statsError;
   // Codex usage is a plain API read, so it runs alongside the Claude refresh
   // (which spawns a PTY) rather than after it.
   const codexPromise = (window.api.getCodexUsage?.() ?? Promise.resolve({})).catch(() => ({}));
@@ -22,12 +22,14 @@ async function loadStats() {
   try {
     const result = await window.api.refreshStats();
     stats = result?.stats;
+    statsError = result?.statsError;
     usage = result?.usage || {};
     cachedUsage = usage;
   } catch {
     // Fallback to cached stats
-    stats = await window.api.getStats();
+    stats = await window.api.getStats().catch(() => null);
     usage = cachedUsage || {};
+    statsError = 'Could not refresh stats.';
   }
 
   let codexUsage = {};
@@ -36,10 +38,18 @@ async function loadStats() {
 
   statsViewerBody.innerHTML = '';
 
+  if (statsError) {
+    const notice = document.createElement('div');
+    notice.className = 'stats-refresh-error';
+    notice.setAttribute('role', 'status');
+    notice.textContent = `Stats refresh failed. ${statsError}${stats ? ' Showing cached data.' : ''}`;
+    statsViewerBody.appendChild(notice);
+  }
+
   // Codex counts here too — a Codex-only user has no Claude stats cache, and
   // bailing on that alone would hide their rate limits entirely.
   if (!stats && !Object.keys(usage).length && !Object.keys(codexUsage || {}).length) {
-    statsViewerBody.innerHTML = '<div class="plans-empty">No stats data found. Run some sessions first.</div>';
+    if (!statsError) statsViewerBody.innerHTML = '<div class="plans-empty">No stats data found. Run some sessions first.</div>';
     return;
   }
 
