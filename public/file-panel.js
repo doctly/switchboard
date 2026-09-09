@@ -779,12 +779,67 @@ function loadProjectDirectory(sessionId, state, relativePath) {
   });
 }
 
+function canManageBrowserEntry(root, relativePath) {
+  const change = { projectPath: root, relativePath, filePath: projectEntryPath(root, relativePath) };
+  return ![...filePanelState.values()].some(state => state.currentTab?.type === 'diff' &&
+    !state.currentTab.resolved && remapFileActionPath(state.currentTab.filePath, change) === null);
+}
+
+async function applyBrowserFileAction(change) {
+  for (const [sessionId, state] of filePanelState) {
+    state.directoryCache.clear();
+    state.loadingDirectories.clear();
+    state.browserError = '';
+    state.browserGeneration++;
+    state.selectedPath = remapFileActionRelative(state.projectPath, state.selectedPath, change) || '';
+    state.expandedPaths = new Set([...state.expandedPaths].map(rel => remapFileActionRelative(state.projectPath, rel, change)).filter(Boolean));
+    const tab = state.currentTab;
+    if (!tab) continue;
+    const next = remapFileActionPath(tab.filePath, change);
+    if (next === tab.filePath) continue;
+    if (!next) {
+      if (sessionId === currentPanelSessionId || tab.type === 'diff') destroyCurrentTab(state);
+      state.currentTab = null;
+      state.panelVisible = state.explorerVisible;
+    } else {
+      tab.filePath = next;
+      tab.label = basename(next);
+      if (tab.type === 'file') {
+        tab.preview = { ...tab.preview, filePath: next };
+        if (sessionId === currentPanelSessionId) {
+          const result = await fpViewerPanel.relocate(tab.label, next);
+          if (state.currentTab === tab && fpViewerPanel.filePath === next) {
+            tab.content = fpViewerPanel.getContent();
+            if (result?.ok) tab.preview = { ...result, previewType: fpViewerPanel.previewType };
+          }
+        } else {
+          // Refresh asset URLs for a background HTML/media preview too.
+          let result;
+          try { result = await window.api.readFileForPanel(next); } catch {}
+          if (state.currentTab === tab && tab.filePath === next && result?.ok) tab.preview = result;
+        }
+      } else if (sessionId === currentPanelSessionId) {
+        renderDiffContent(sessionId, tab);
+      }
+    }
+  }
+  if (currentPanelSessionId) {
+    renderProjectBrowser(currentPanelSessionId);
+    const state = filePanelState.get(currentPanelSessionId);
+    if (!state?.currentTab) {
+      renderTabContent(currentPanelSessionId, null);
+      if (!state?.panelVisible) hidePanel();
+    }
+  }
+}
+
 function appendTreeEntries(sessionId, state, container, entries, depth) {
   for (const entry of entries) {
     const row = document.createElement('button');
     row.className = 'project-file-tree-row';
     row.style.paddingLeft = `${8 + depth * 14}px`;
     row.dataset.path = entry.relativePath;
+    bindFileEntryMenu(row, state.projectPath, entry, () => openProjectFile(sessionId, entry.relativePath));
 
     if (entry.type === 'directory') {
       const expanded = state.expandedPaths.has(entry.relativePath);
@@ -819,7 +874,7 @@ function appendTreeEntries(sessionId, state, container, entries, depth) {
 
     row.classList.add('file');
     row.classList.toggle('selected', state.selectedPath === entry.relativePath);
-    row.disabled = !entry.viewable;
+    row.classList.toggle('preview-unavailable', !entry.viewable);
     row.title = entry.viewable ? entry.relativePath : 'This file type cannot be previewed';
     row.innerHTML = '<span class="project-file-tree-spacer"></span><span class="project-file-tree-icon">📄</span><span class="project-file-tree-name"></span>';
     row.querySelector('.project-file-tree-name').textContent = entry.name;

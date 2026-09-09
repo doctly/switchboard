@@ -45,6 +45,139 @@ function inspectDb(dataDir) {
 
 const PROJECT_TABLES = ['projects', 'project_folders', 'tracks'];
 
+test('identical search entries perform no database writes, including after reopening', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-search-noop-'));
+  try {
+    const r = runInElectronNode(`
+      const assert = require('node:assert/strict');
+      const Database = require('better-sqlite3');
+      let db = require('./db');
+      const observer = new Database(require('path').join(process.env.SWITCHBOARD_DATA_DIR, 'switchboard.db'));
+      const version = () => observer.pragma('data_version', { simple: true });
+      const entry = { id: 'session', type: 'session', folder: 'folder', title: 'original title',
+        body: 'conversation '.repeat(1000) + 'move_fna_lines' };
+      db.upsertSearchEntries([entry]);
+      let before = version();
+      db.upsertSearchEntries([entry, { ...entry }]);
+      assert.equal(version(), before, 'identical entries must not commit any writes');
+
+      db.closeDb();
+      delete require.cache[require.resolve('./db')];
+      db = require('./db');
+      before = version();
+      db.upsertSearchEntries([entry]);
+      assert.equal(version(), before, 'the comparison must survive an app restart');
+
+      const renamed = { ...entry, title: 'renamed title' };
+      db.upsertSearchEntries([renamed]);
+      assert.deepEqual(db.searchSessionIds('renamed title', ['session']), ['session']);
+      assert.deepEqual(db.searchSessionIds('original title', ['session']), []);
+      const changed = { ...renamed, body: 'replacement conversation' };
+      db.upsertSearchEntries([changed]);
+      assert.deepEqual(db.searchSessionIds('replacement conversation', ['session']), ['session']);
+      assert.deepEqual(db.searchSessionIds('move_fna_lines', ['session']), []);
+      db.upsertSearchEntries([{ ...changed, folder: 'moved' }]);
+      assert.equal(observer.prepare('SELECT folder FROM search_map WHERE id = ?').get('session').folder, 'moved');
+      assert.equal(observer.prepare('SELECT COUNT(*) AS n FROM search_map').get().n, 1);
+      assert.equal(observer.prepare('SELECT COUNT(*) AS n FROM search_fts').get().n, 1);
+
+      // A missing FTS row must be repaired even if the mapping still exists.
+      observer.exec('DELETE FROM search_fts');
+      db.upsertSearchEntries([{ ...changed, folder: 'moved' }]);
+      assert.deepEqual(db.searchSessionIds('replacement conversation', ['session']), ['session']);
+
+      // Existing short excerpts upgrade when refreshed; they are not mistaken
+      // for identical full conversations just because the title is unchanged.
+      db.upsertSearchEntries([{ ...entry, id: 'legacy', body: 'conversation' }]);
+      db.upsertSearchEntries([{ ...entry, id: 'legacy' }]);
+      assert.deepEqual(db.searchSessionIds('move_fna_lines', ['legacy']), ['legacy']);
+      db.deleteSearchSession('legacy');
+      assert.deepEqual(db.searchSessionIds('move_fna_lines', ['legacy']), []);
+      db.closeDb();
+      observer.close();
+    `, dir);
+    assert.equal(r.status, 0, r.stderr);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('tool-only transcript refreshes update metadata without writing the search index', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-search-refresh-'));
+  try {
+    const r = runInElectronNode(`
+      const assert = require('node:assert/strict');
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const Database = require('better-sqlite3');
+      const statements = [];
+      // Trace the real SQLite connection so cache writes cannot hide an
+      // unnecessary FTS delete/insert behind unchanged final search results.
+      require.cache[require.resolve('better-sqlite3')].exports = function(filename, options) {
+        return new Database(filename, { ...options, verbose: sql => statements.push(sql) });
+      };
+      const db = require('./db');
+      const cache = require('./session-cache');
+      const projectsDir = path.join(process.env.SWITCHBOARD_DATA_DIR, 'transcripts');
+      const folderPath = path.join(projectsDir, 'project');
+      fs.mkdirSync(folderPath, { recursive: true });
+      const file = path.join(folderPath, 'session.jsonl');
+      fs.writeFileSync(file, JSON.stringify({ type: 'user', cwd: '/tmp/project',
+        message: { content: 'original question' } }) + '\\n');
+      const append = entry => {
+        const mtime = fs.statSync(file).mtimeMs;
+        fs.appendFileSync(file, JSON.stringify(entry) + '\\n');
+        fs.utimesSync(file, new Date(), new Date(mtime + 5000));
+      };
+      const searchWrites = () => statements.filter(sql =>
+        /^\\s*(INSERT|UPDATE|DELETE)\\b/i.test(sql) && /\\bsearch_(fts|map)\\b/.test(sql));
+      cache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(),
+        getMainWindow: () => null, log: console, db });
+      cache.refreshFolder('project');
+      assert.deepEqual(db.searchSessionIds('original question', ['session']), ['session']);
+
+      statements.length = 0;
+      append({ type: 'assistant', message: { content: [
+        { type: 'tool_use', name: 'Bash', input: { command: 'tool_input_marker' } },
+      ] } });
+      append({ type: 'user', message: { content: [
+        { type: 'tool_result', content: 'tool_output_marker' },
+      ] } });
+      append({ type: 'last-prompt', lastPrompt: 'original question' });
+      cache.refreshFolder('project');
+      assert.deepEqual(searchWrites(), [], 'tool calls, results and bookkeeping must not rewrite FTS');
+      assert.equal(db.getCachedSession('session').fileMtime, fs.statSync(file).mtime.toISOString());
+      assert.equal(db.getCachedSession('session').messageCount, 3);
+      assert.deepEqual(db.searchSessionIds('tool_output_marker', ['session']), []);
+
+      statements.length = 0;
+      append({ type: 'assistant', message: { content: 'new answer move_fna_lines' } });
+      cache.refreshFolder('project');
+      assert.ok(searchWrites().length > 0, 'new conversation text must update FTS');
+      assert.deepEqual(db.searchSessionIds('move_fna_lines', ['session']), ['session']);
+
+      statements.length = 0;
+      append({ type: 'custom-title', customTitle: 'renamed conversation' });
+      cache.refreshFolder('project');
+      assert.ok(searchWrites().length > 0, 'renaming must remain searchable');
+      assert.deepEqual(db.searchSessionIds('renamed conversation', ['session']), ['session']);
+
+      statements.length = 0;
+      cache.refreshFolder('project');
+      assert.deepEqual(searchWrites(), [], 'an unchanged file must still skip indexing');
+      fs.unlinkSync(file);
+      // Keep the folder's cwd discoverable when its session is deleted.
+      fs.writeFileSync(path.join(folderPath, 'empty.jsonl'), JSON.stringify({ type: 'system', cwd: '/tmp/project' }) + '\\n');
+      cache.refreshFolder('project');
+      assert.deepEqual(db.searchSessionIds('move_fna_lines', ['session']), []);
+      db.closeDb();
+    `, dir);
+    assert.equal(r.status, 0, r.stderr);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('session search scopes before limiting and supports archived and title-only matches', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-scoped-search-'));
   try {

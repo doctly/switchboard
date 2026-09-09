@@ -36,6 +36,7 @@ const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslS
 const { startScheduler } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { listProjectDirectory, readProjectFile, readPreviewFile } = require('./project-files');
+const { manageProjectEntry } = require('./file-management');
 const { PREVIEW_SCHEME, PREVIEW_SCHEMES, handlePreviewAssetRequest } = require('./preview-assets');
 protocol.registerSchemesAsPrivileged(PREVIEW_SCHEMES);
 const { createTaskManager } = require('./task-manager');
@@ -299,6 +300,9 @@ projects.init({
   isHarnessId: (id) => allHarnesses().some(h => h.id === id),
   plansDir: PLANS_DIR,
 });
+// An upgrade can change the working rules in the brief. Bring every project's
+// managed blocks up to date once at startup; unchanged files are not written.
+projects.syncAllProjectBriefs().catch(err => log.error('[projects] brief sync failed:', err?.message || String(err)));
 // Watch every project's plan-tracker.md and todos.md so a tick made by a
 // session is credited to it and the page refreshes.
 projects.initPlanWatch({
@@ -515,6 +519,28 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
 ipcMain.handle('list-project-directory', async (_event, projectPath, relativePath) => {
   try {
     return { ok: true, entries: listProjectDirectory(projectPath, relativePath) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('manage-project-entry', async (_event, projectPath, relativePath, action, newName) => {
+  try {
+    const result = await manageProjectEntry(projectPath, relativePath, action, newName, {
+      shell,
+      confirmTrash: async (filePath, isDirectory) => {
+        const destination = process.platform === 'win32' ? 'Recycle Bin' : 'Trash';
+        const choice = await dialog.showMessageBox(mainWindow, {
+          type: 'question',
+          message: `Move "${path.basename(filePath)}" to the ${destination}?`,
+          detail: `${isDirectory ? 'The folder and its contents' : 'The file'} can be restored from the ${destination}. Open previews of this item will close; unsaved edits will be discarded.`,
+          buttons: ['Cancel', `Move to ${destination}`], defaultId: 0, cancelId: 0,
+          noLink: true,
+        });
+        return choice.response === 1;
+      },
+    });
+    return { ok: true, ...result };
   } catch (err) {
     return { ok: false, error: err.message };
   }

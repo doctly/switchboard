@@ -283,10 +283,9 @@ function refreshFolder(folder) {
   if (sessionsToUpsert.length > 0) {
     upsertCachedSessions(sessionsToUpsert);
   }
-  for (const entry of searchEntriesToUpsert) {
-    deleteSearchSession(entry.id);
-  }
   if (searchEntriesToUpsert.length > 0) {
+    // The DB upsert compares the existing content and replaces changed rows
+    // atomically. Deleting first would force tool-only updates to reindex.
     upsertSearchEntries(searchEntriesToUpsert);
   }
   for (const { id, name } of namesToSet) {

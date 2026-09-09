@@ -65,6 +65,67 @@ function makeFakeDb(metaMap, globalSettings = {}) {
   };
 }
 
+test('refreshFolder upgrades only new or changed transcripts to full conversation search', () => {
+  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-conversation-search-'));
+  try {
+    const folder = 'project';
+    const folderPath = path.join(projectsDir, folder);
+    fs.mkdirSync(folderPath);
+    const oldText = 'original conversation '.repeat(500) + ' move_fna_lines';
+    const write = (id, text) => fs.writeFileSync(path.join(folderPath, `${id}.jsonl`),
+      JSON.stringify({ type: 'user', cwd: '/tmp/project', message: { content: text } }) + '\n');
+    write('changed', oldText);
+    write('unchanged', oldText);
+
+    const fake = makeFakeDb(new Map());
+    const searchEntries = new Map();
+    const writes = [];
+    for (const id of ['changed', 'unchanged']) {
+      fake.cachedRows.push({ sessionId: id, folder,
+        fileMtime: fs.statSync(path.join(folderPath, `${id}.jsonl`)).mtime.toISOString() });
+      searchEntries.set(id, 'legacy excerpt');
+    }
+    fake.db.getCachedByFolder = key => fake.cachedRows.filter(row => row.folder === key);
+    fake.db.upsertCachedSessions = sessions => {
+      for (const session of sessions) {
+        const old = fake.cachedRows.find(row => row.sessionId === session.sessionId);
+        if (old) Object.assign(old, session);
+        else fake.cachedRows.push(session);
+      }
+    };
+    fake.db.deleteSearchSession = id => searchEntries.delete(id);
+    fake.db.upsertSearchEntries = entries => {
+      for (const entry of entries) {
+        writes.push(entry.id);
+        searchEntries.set(entry.id, entry.body);
+      }
+    };
+    sessionCache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(),
+      getMainWindow: () => null, log: console, db: fake.db });
+
+    sessionCache.refreshFolder(folder);
+    assert.deepEqual(writes, [], 'deploying the parser must not reindex unchanged files');
+
+    const changedFile = path.join(folderPath, 'changed.jsonl');
+    const previousMtime = fs.statSync(changedFile).mtimeMs;
+    fs.appendFileSync(changedFile, JSON.stringify({ type: 'assistant', message: { content: 'new reply' } }) + '\n');
+    fs.utimesSync(changedFile, new Date(), new Date(previousMtime + 5000));
+    write('new', oldText);
+    sessionCache.refreshFolder(folder);
+
+    assert.deepEqual(writes.sort(), ['changed', 'new']);
+    assert.equal(searchEntries.get('changed'), oldText + '\nnew reply', 'a changed file contributes its entire history');
+    assert.equal(searchEntries.get('new'), oldText);
+    assert.equal(searchEntries.get('unchanged'), 'legacy excerpt');
+
+    writes.length = 0;
+    sessionCache.refreshFolder(folder);
+    assert.deepEqual(writes, [], 'the updated file mtime must prevent repeated indexing');
+  } finally {
+    fs.rmSync(projectsDir, { recursive: true, force: true });
+  }
+});
+
 test('reconcileCacheFromFilesystem indexes new and stale folders but skips up-to-date ones', () => {
   const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-reconcile-'));
   try {

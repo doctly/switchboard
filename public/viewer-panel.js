@@ -336,6 +336,28 @@ class ViewerPanel {
     }
   }
 
+  // Keep the current buffer when its file (or an ancestor folder) is renamed.
+  async relocate(title, filePath) {
+    this._unwatchFile();
+    const version = ++this._openVersion;
+    this.filePath = filePath;
+    this.toolbar.setTitle(title);
+    this.toolbar.setPath(filePath);
+    let result;
+    try { result = await window.api.readFileForPanel(filePath); } catch {}
+    if (version !== this._openVersion) return null;
+    if (result?.ok) {
+      // A new extension must not discard an editable buffer by switching it
+      // to a binary preview. Reopening later uses the new file type normally.
+      const preview = this.editorView && ['image', 'pdf'].includes(result.previewType)
+        ? { ...result, previewType: 'text' } : result;
+      this.open(title, filePath, this.editorView ? this.getContent() : result.content, preview);
+    } else {
+      this._watchFile(filePath);
+    }
+    return result;
+  }
+
   getContent() {
     return this.editorView ? this.editorView.state.doc.toString() : '';
   }

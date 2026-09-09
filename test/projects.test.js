@@ -146,7 +146,9 @@ test('createProject writes the four files, the rows, and notifies', async () => 
         assert.ok(!fs.existsSync(path.join(p.root, name)), name + ' is left for the agent to create');
       }
       const brief = fs.readFileSync(path.join(p.root, 'CLAUDE.md'), 'utf8');
-      assert.match(brief, /^# Website upkeep\n/);
+      assert.match(brief, /^<!-- switchboard:managed -->\n/, 'the managed block leads');
+      assert.match(brief, /\n# Website upkeep\n/, 'title inside the block');
+      assert.ok(!brief.includes('Edit me.'), 'no placeholder line');
       assert.match(brief, /plan\.md/);
       assert.match(brief, /todos\.md/);
       assert.equal(fs.readFileSync(path.join(p.root, 'AGENTS.md'), 'utf8'), brief);
@@ -358,7 +360,8 @@ test('the brief uses absolute paths and keeps its attached-folder list current',
       assert.ok(brief.includes(path.join(project.root, 'plan-tracker.md')), 'tracker path is absolute');
       assert.ok(brief.includes(path.join(project.root, 'todos.md')), 'todos path is absolute');
       assert.ok(!brief.includes('./plan.md'), 'no relative paths');
-      assert.match(brief, /only when the user refers to the plan/, 'not read every session');
+      assert.match(brief, /only when the user brings up the plan/, 'not read unprompted');
+      assert.match(brief, /not again before each task/, 'not re-read every turn');
       assert.match(brief, /"## Phase N: title"/, 'tracker format spelled out');
       assert.ok(brief.includes(path.join(project.root, 'memory.md')), 'memory file named');
       assert.match(brief, /does not belong in the todos as well/, 'plan items are not duplicated as todos');
@@ -373,19 +376,21 @@ test('the brief uses absolute paths and keeps its attached-folder list current',
       brief = fs.readFileSync(claudeMd, 'utf8');
       assert.ok(brief.startsWith('# My own heading\nMy notes.'), 'user text kept');
       assert.ok(brief.includes(`- ${path.resolve(a)}`) && brief.includes(`- ${path.resolve(b)}`), 'both folders listed');
-      assert.equal((brief.match(/<!-- switchboard:folders -->/g) || []).length, 1, 'one managed block');
+      assert.equal((brief.match(/<!-- switchboard:managed -->/g) || []).length, 1, 'one managed block');
 
       await projects.detachFolder(project.id, path.resolve(a));
       brief = fs.readFileSync(claudeMd, 'utf8');
       assert.ok(!brief.includes(`- ${path.resolve(a)}`));
       assert.ok(brief.includes(`- ${path.resolve(b)}`));
 
-      // A brief whose block was deleted gets it appended again.
+      // A brief whose block was deleted gets it back at the top, the user's
+      // own text kept below it.
       fs.writeFileSync(agentsMd, '# Rewritten by hand\n', 'utf8');
       await projects.detachFolder(project.id, path.resolve(b));
       const agents = fs.readFileSync(agentsMd, 'utf8');
-      assert.ok(agents.startsWith('# Rewritten by hand'));
+      assert.ok(agents.startsWith('<!-- switchboard:managed -->'), 'block restored at the top');
       assert.ok(agents.includes('No folders are attached yet'));
+      assert.ok(agents.includes('# Rewritten by hand'), 'hand-written text kept');
     } finally { rm(a); rm(b); }
   } finally { t.cleanup(); }
 });
@@ -542,11 +547,12 @@ test('saveBrief writes CLAUDE.md and AGENTS.md alike and restores the folder blo
 
       const saved = await projects.saveBrief(project.id, '# Brief\n\nShip the thing.');
       assert.equal(saved.ok, true);
-      assert.ok(saved.content.startsWith('# Brief\n\nShip the thing.\n'), 'user text first, newline added');
+      assert.ok(saved.content.startsWith('<!-- switchboard:managed -->'), 'managed block leads');
+      assert.ok(saved.content.includes('# Brief\n\nShip the thing.\n'), 'user text kept, newline added');
       assert.ok(saved.content.includes(`- ${path.resolve(repo)}`), 'folder block put back');
       assert.equal(fs.readFileSync(path.join(project.root, 'CLAUDE.md'), 'utf8'), saved.content);
       assert.equal(fs.readFileSync(path.join(project.root, 'AGENTS.md'), 'utf8'), saved.content);
-      assert.equal((saved.content.match(/<!-- switchboard:folders -->/g) || []).length, 1);
+      assert.equal((saved.content.match(/<!-- switchboard:managed -->/g) || []).length, 1);
     } finally { rm(repo); }
   } finally { t.cleanup(); }
 });
@@ -699,12 +705,13 @@ test('templates: listed from the bundled folder, applied with tokens, tracks cre
     assert.deepEqual(project.tracks.map(x => x.name), ['Discovery', 'Proposal', 'Build']);
     assert.deepEqual(project.tracks.map(x => x.cwd), [null, null, null], 'template tracks start in the project folder');
     const brief = fs.readFileSync(path.join(project.root, 'CLAUDE.md'), 'utf8');
-    assert.ok(brief.startsWith('# Onboarding flow\n'), 'template heading with the name filled in');
+    assert.ok(brief.startsWith('<!-- switchboard:managed -->'), 'the managed block leads');
+    assert.ok(brief.includes('\n# Onboarding flow\n'), 'title from the project name');
     assert.ok(brief.includes('## How this project works'), 'template text kept');
     assert.ok(brief.includes(`Project folder: ${project.root}`), 'root token filled in');
     assert.ok(!brief.includes('{{'), 'no tokens left');
     assert.ok(brief.includes('## Working rules'), 'rules still appended');
-    assert.ok(brief.includes('<!-- switchboard:folders -->'), 'folder block still appended');
+    assert.ok(brief.includes('## Attached folders'), 'folder list still there');
     assert.equal(fs.readFileSync(path.join(project.root, 'AGENTS.md'), 'utf8'), brief);
     assert.ok(fs.readFileSync(path.join(project.root, 'contacts.md'), 'utf8').startsWith('# Contacts for Onboarding flow'));
     assert.ok(fs.existsSync(path.join(project.root, 'proposals', 'README.md')));

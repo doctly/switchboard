@@ -93,22 +93,27 @@ function uniqueSlug(name) {
 //
 // The brief uses absolute paths throughout, because a session may start in an
 // attached folder rather than the project folder and "./plan.md" would then
-// point at the wrong place. The attached-folder list sits between markers so
-// it can be rewritten on attach/detach without touching the user's own text.
+// point at the wrong place.
+//
+// Everything Switchboard owns — the title, the project folder, the working
+// rules and the attached-folder list — sits in one block between markers. It
+// is rewritten whole on every sync, so a change to any of it reaches projects
+// that already exist. Anything outside the markers is the user's and is never
+// touched.
 
-const FOLDERS_START = '<!-- switchboard:folders -->';
-const FOLDERS_END = '<!-- /switchboard:folders -->';
+const MANAGED_START = '<!-- switchboard:managed -->';
+const MANAGED_END = '<!-- /switchboard:managed -->';
+const MANAGED_NOTE = '<!-- Managed by Switchboard: this block is replaced on update. Put your own notes outside it. -->';
 const BRIEF_FILES = ['CLAUDE.md', 'AGENTS.md'];
 
-function foldersBlock(folderPaths) {
-  const lines = [FOLDERS_START, '## Attached folders'];
+function foldersSection(folderPaths) {
+  const lines = ['## Attached folders'];
   if (!folderPaths.length) {
     lines.push('No folders are attached yet. Attach the repos this project works in from the project settings in Switchboard.');
   } else {
-    lines.push("These attached folders are part of the project's working context. Unless the user specifies otherwise, interpret their requests—including questions, explanations, investigations, reviews, planning, and changes—in the context of these folders. Inspect the relevant attached folders to understand the request and ground your response in their contents. The project folder holds shared plans, notes, drafts, and context; it is not the full scope of the work. Before working with an attached folder, read its own instructions (CLAUDE.md or AGENTS.md at its root) and follow them there.");
+    lines.push("These attached folders are part of the project's working context. Unless the user specifies otherwise, interpret their requests—including questions, explanations, investigations, reviews, planning, and changes—in the context of these folders. Inspect the relevant attached folders to understand the request and ground your response in their contents. The project folder holds shared plans, notes, drafts, and context; it is not the full scope of the work. The first time you work in an attached folder in a session, read its own instructions (CLAUDE.md or AGENTS.md at its root) and follow them there. Once read, they hold for the rest of the session; do not re-read them before each task.");
     for (const p of folderPaths) lines.push(`- ${p}`);
   }
-  lines.push(FOLDERS_END);
   return lines.join('\n') + '\n';
 }
 
@@ -119,19 +124,25 @@ function foldersBlock(folderPaths) {
 // files is created up front: the agent makes them when it first needs them.
 const PROJECT_FILES = ['plan.md', 'plan-tracker.md', 'todos.md', 'memory.md'];
 
-function briefHeader(name, root) {
-  return `# ${name}
-
-<One line about the goal. Edit me.>
-
+/** The one block Switchboard owns: title, folder, rules, attached folders. */
+function managedBlock(name, root, folderPaths = []) {
+  return `${MANAGED_START}
+${MANAGED_NOTE}
+# ${name}
 Project folder: ${root}
+
+${briefRules(root)}
+${foldersSection(folderPaths)}${MANAGED_END}
 `;
 }
 
+/**
+ * A new brief: the managed block, then whatever the template adds below it as
+ * the user's own text. Without a template the managed block is the whole file.
+ */
 function defaultBrief(name, root, folderPaths = [], header = null) {
-  return `${header || briefHeader(name, root)}
-${briefRules(root)}
-${foldersBlock(folderPaths)}`;
+  const block = managedBlock(name, root, folderPaths);
+  return header ? `${block}\n${header}` : block;
 }
 
 function briefRules(root) {
@@ -150,8 +161,9 @@ function briefRules(root) {
   add a todo, append it there. Tick a todo when it is done. Work that is already
   a phase or an item in the tracker does not belong in the todos as well.
 - Anything you want to remember across sessions goes in ${memory}.
-- Read ${plan}, ${tracker} or ${todos} only when the user refers to the plan or
-  the todos, not at the start of every session.
+- Read ${plan}, ${tracker} or ${todos} only when the user brings up the plan or
+  the todos. Not at the start of a session, and not again before each task.
+  What you have already read stays current until you change it.
 - These files may not exist yet. Create them when you first need them.
 `;
 }
@@ -378,32 +390,34 @@ async function addProjectFiles(projectId, sourcePaths) {
   return { ok: true, ...addedFilesAtRoot(project.root), added, errors };
 }
 
-/** Replace the managed block in one brief file, or append it when missing. */
+/**
+ * Replace the managed block in one brief file. When the markers are missing —
+ * the user deleted them — the block goes back at the top, where a new brief
+ * puts it, and the user's own text stays below.
+ */
 function syncBriefFile(filePath, block) {
   if (!fs.existsSync(filePath)) return false;
   const text = fs.readFileSync(filePath, 'utf8');
-  const start = text.indexOf(FOLDERS_START);
-  const end = text.indexOf(FOLDERS_END);
-  let next;
-  if (start !== -1 && end !== -1 && end > start) {
-    next = text.slice(0, start) + block.trimEnd() + text.slice(end + FOLDERS_END.length);
-  } else {
-    next = text.trimEnd() + '\n\n' + block;
-  }
+  const start = text.indexOf(MANAGED_START);
+  const end = text.indexOf(MANAGED_END);
+  const next = start !== -1 && end !== -1 && end > start
+    ? text.slice(0, start) + block.trimEnd() + '\n' + text.slice(end + MANAGED_END.length).replace(/^\n+/, '')
+    : block.trimEnd() + '\n\n' + text.trimStart();
   if (next !== text) fs.writeFileSync(filePath, next, 'utf8');
   return true;
 }
 
 /**
- * Keep the attached-folder list in CLAUDE.md and AGENTS.md current, and
- * refresh the Codex bridge file in every worktree folder, since it carries a
- * copy of AGENTS.md.
+ * Keep the managed block in CLAUDE.md and AGENTS.md current — the title, the
+ * project folder, the working rules and the attached-folder list — and refresh
+ * the Codex bridge file in every worktree folder, since it carries a copy of
+ * AGENTS.md.
  */
 async function syncProjectBrief(projectId) {
   const project = db.getProject(projectId);
   if (!project) return;
   const folders = db.listProjectFolders(projectId);
-  const block = foldersBlock(folders.map(f => f.path));
+  const block = managedBlock(project.name, project.root, folders.map(f => f.path));
   for (const file of BRIEF_FILES) {
     try { syncBriefFile(path.join(project.root, file), block); } catch (err) {
       log.error?.(`[projects] could not update ${file} in ${project.root}`, err);
@@ -413,6 +427,25 @@ async function syncProjectBrief(projectId) {
     if (folder.mode !== 'worktree') continue;
     try { await writeCodexBridge(project, folder.path); } catch (err) {
       log.error?.(`[projects] could not write ${CODEX_BRIDGE_FILE} in ${folder.path}`, err);
+    }
+  }
+}
+
+/**
+ * Bring every project's brief up to date at startup, so a Switchboard upgrade
+ * that changes the working rules reaches projects that already exist. Each
+ * file is only written when its text actually changed, so this is normally a
+ * no-op.
+ */
+async function syncAllProjectBriefs() {
+  let projectList = [];
+  try { projectList = db.listProjects() || []; } catch (err) {
+    log.error?.('[projects] could not list projects to sync briefs', err);
+    return;
+  }
+  for (const project of projectList) {
+    try { await syncProjectBrief(project.id); } catch (err) {
+      log.error?.(`[projects] could not sync the brief for ${project.name}`, err);
     }
   }
 }
@@ -655,6 +688,8 @@ function updateProject(id, patch) {
   if (!Object.keys(clean).length) return { ok: true, project: loadProjectNode(id) };
   clean.modified = new Date().toISOString();
   db.updateProject(id, clean);
+  // The brief's title comes from the project name, so a rename rewrites it.
+  if (clean.name) syncProjectBrief(id).catch(err => log.error?.('[projects] could not retitle the brief', err));
   notifyRendererProjectsChanged();
   const result = { ok: true, project: loadProjectNode(id) };
   // Finishing a project is the moment to offer removing its worktrees; the
@@ -1392,7 +1427,7 @@ module.exports = {
   projectsRoot, slugify, uniqueSlug, defaultBrief,
   createProject, updateProject, deleteProject, attachFolder, detachFolder,
   folderGitStatus, folderGitInfo, projectGitInfo, projectGitDiff,
-  syncProjectBrief, saveBrief, createProjectFile, addProjectFiles, listAddedFiles,
+  syncProjectBrief, syncAllProjectBriefs, saveBrief, createProjectFile, addProjectFiles, listAddedFiles,
   launchContext, mergeAddDirs, worktreeParentFor,
   CODEX_BRIDGE_FILE, PROJECT_FILES, ADDED_FILES_DIR,
   readProjectPlan, setPlanItem, appendPlanItem, recordPlanLink, adoptPlan,

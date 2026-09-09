@@ -317,7 +317,8 @@ const stmts = {
   searchMapDeleteByType: db.prepare('DELETE FROM search_map WHERE type = ?'),
   searchInsertFts: db.prepare('INSERT OR REPLACE INTO search_fts(rowid, title, body) VALUES (?, ?, ?)'),
   searchInsertMap: db.prepare('INSERT OR REPLACE INTO search_map(id, type, folder) VALUES (?, ?, ?)'),
-  searchMapLookup: db.prepare('SELECT rowid FROM search_map WHERE id = ? AND type = ?'),
+  searchMapLookup: db.prepare('SELECT rowid, folder FROM search_map WHERE id = ? AND type = ?'),
+  searchContentMatches: db.prepare('SELECT 1 FROM search_fts WHERE rowid = ? AND title = ? AND body = ?'),
   searchUpdateTitle: db.prepare('UPDATE search_fts SET title = ? WHERE rowid = (SELECT rowid FROM search_map WHERE id = ? AND type = ?)'),
   searchDeleteByRowid: db.prepare('DELETE FROM search_fts WHERE rowid = ?'),
   searchMapDeleteByRowid: db.prepare('DELETE FROM search_map WHERE rowid = ?'),
@@ -479,18 +480,27 @@ function setFolderMeta(folder, projectPath, indexMtimeMs) {
 
 const upsertSearchEntriesBatch = db.transaction((entries) => {
   for (const e of entries) {
+    const folder = e.folder || null;
+    const title = e.title || '';
+    const body = e.body || '';
+    const existing = stmts.searchMapLookup.get(e.id, e.type);
+    // Transcript mtime also changes for tool output and CLI bookkeeping. Keep
+    // the FTS row when its searchable content is identical, including across
+    // app restarts. Comparing the stored text needs no migration or rebuild.
+    if (existing && existing.folder === folder &&
+        stmts.searchContentMatches.get(existing.rowid, title, body)) continue;
+
     // Delete any existing FTS row for this (id, type) pair before inserting.
     // search_map uses INSERT OR REPLACE which deletes the old row and creates
     // a new one with a new rowid, but the orphaned FTS5 row keyed to the old
     // rowid would never be cleaned up — causing duplicate search results and
     // unbounded FTS table growth.
-    const existing = stmts.searchMapLookup.get(e.id, e.type);
     if (existing) {
       stmts.searchDeleteByRowid.run(existing.rowid);
       stmts.searchMapDeleteByRowid.run(existing.rowid);
     }
-    const result = stmts.searchInsertMap.run(e.id, e.type, e.folder || null);
-    stmts.searchInsertFts.run(result.lastInsertRowid, e.title || '', e.body || '');
+    const result = stmts.searchInsertMap.run(e.id, e.type, folder);
+    stmts.searchInsertFts.run(result.lastInsertRowid, title, body);
   }
 });
 

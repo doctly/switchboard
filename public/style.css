@@ -4156,7 +4156,7 @@ body { display: flex; flex-direction: column; }
 }
 
 .project-file-tree-row.directory,
-.project-file-tree-row.file:not(:disabled) {
+.project-file-tree-row.file:not(.preview-unavailable) {
   cursor: pointer;
 }
 
@@ -4170,7 +4170,7 @@ body { display: flex; flex-direction: column; }
   background: rgba(120,130,255,0.13);
 }
 
-.project-file-tree-row:disabled {
+.project-file-tree-row.preview-unavailable {
   opacity: 0.38;
 }
 
@@ -4601,6 +4601,27 @@ body { display: flex; flex-direction: column; }
   align-items: center;
   gap: 5px;
   flex-shrink: 0;
+}
+
+/* Keep an inactive session dot from reserving space after the task count. */
+.proj-status > .proj-dot:not(.running, .ready, .attention, .idle) {
+  display: none;
+}
+
+.proj-task-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: #7a7a90;
+  font-size: 10px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.proj-task-indicator svg {
+  width: 9px;
+  height: 9px;
+  color: #6f9477;
 }
 
 .proj-count {
@@ -5886,6 +5907,9 @@ body { display: flex; flex-direction: column; }
 }
 
 .ws-prompt { width: 420px; }
+/* The running-work list in "mark as done": long titles stay inside the dialog. */
+.done-running-list { max-height: 150px; overflow-y: auto; }
+.done-running-list .np-tree-item { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-prompt .folder-input-row input { width: 100%; }
 
 /* Thin scrollbars on the project pages, matching the sidebar. */

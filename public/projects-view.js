@@ -14,7 +14,7 @@
 // cachedProjectTreeAll, showArchived, searchMatchIds, searchInput,
 // activeSessionId, activePtyIds, attentionSessions, responseReadySessions,
 // sessionBusyState, sessionMap, pendingSessions, openSessions, activeTab,
-// gridViewActive, loadProjects, refreshSidebar, launchNewSession,
+// gridViewActive, visibleSessionCount, loadProjects, refreshSidebar, launchNewSession,
 // openSession, pollActiveSessions, placeholder, terminalArea, memoryViewer,
 // memoryPanel, hideAllViewers, showSession, fitAndScroll,
 // resolveDefaultSessionOptions
@@ -674,6 +674,26 @@ function projectSubline(project) {
   return parts.join(' · ');
 }
 
+/** A separate badge for task processes, alongside the session status. */
+function updateProjectTaskIndicator(row, project) {
+  const badge = row.querySelector('.proj-task-indicator');
+  if (!badge) return;
+  const count = runningTasksFor(project);
+  badge.style.display = count ? '' : 'none';
+  badge.title = `${count} task${count === 1 ? '' : 's'} running`;
+  badge.setAttribute('aria-label', badge.title);
+  badge.querySelector('.proj-task-running-count').textContent = count || '';
+}
+
+/** Task events can affect several projects when they share an attached folder. */
+function updateProjectTaskIndicators(projectPath) {
+  document.querySelectorAll('.proj-row[data-project-id]').forEach(row => {
+    const project = findTreeProject(row.dataset.projectId);
+    if (!project || (project.root !== projectPath && !(project.folders || []).some(f => f.path === projectPath))) return;
+    updateProjectTaskIndicator(row, project);
+  });
+}
+
 function buildProjectRow(project) {
   const row = document.createElement('div');
   row.className = 'proj-row' + (project.id === projectsUi.selectedProjectId ? ' selected' : '') + (project.status === 'done' ? ' done' : '');
@@ -685,7 +705,8 @@ function buildProjectRow(project) {
   const runningCount = sessions.filter(s => isSessionRunning(s.sessionId)).length;
   row.innerHTML = markHtml(project, 28) +
     `<span class="proj-text"><span class="proj-name">${escapeHtml(project.name)}</span><span class="proj-sub">${escapeHtml(projectSubline(project))}</span></span>` +
-    `<span class="proj-status">${stateDot(state)}${runningCount ? `<span class="proj-count">${runningCount}</span>` : ''}</span>`;
+    `<span class="proj-status"><span class="proj-task-indicator" role="img">${PICONS.play(10)}<span class="proj-task-running-count"></span></span>${stateDot(state)}${runningCount ? `<span class="proj-count">${runningCount}</span>` : ''}</span>`;
+  updateProjectTaskIndicator(row, project);
   return row;
 }
 
@@ -1280,7 +1301,7 @@ function buildTrackCard(project, track) {
     (track ? `<button type="button" class="tcard-more" title="Track menu">${PICONS.dots(13)}</button>` : '');
   card.appendChild(head);
 
-  const shown = sessions.slice(0, 3);
+  const shown = sessions.slice(0, visibleSessionCount);
   for (const s of shown) card.appendChild(buildCardSessionRow(project, s));
   if (!sessions.length) {
     const none = document.createElement('div');
@@ -1292,7 +1313,7 @@ function buildTrackCard(project, track) {
   const foot = document.createElement('div');
   foot.className = 'tcard-f';
   foot.innerHTML =
-    (sessions.length > 3 ? `<button type="button" class="ws-ghost ws-ghost--muted tcard-more-sessions">+ ${sessions.length - 3} more</button>` : '') +
+    (sessions.length > shown.length ? `<button type="button" class="ws-ghost ws-ghost--muted tcard-more-sessions">+ ${sessions.length - shown.length} more</button>` : '') +
     `<span class="ws-flex"></span>`;
   card.appendChild(foot);
   // Archived sessions of this track sit under the foot, closed until asked for.
@@ -1357,23 +1378,24 @@ async function loadProjectFiles(project, { force = false } = {}) {
   }));
 }
 
+/**
+ * The brief's own words: whatever the user wrote outside Switchboard's managed
+ * block. The block holds the title, the project folder, the working rules and
+ * the attached folders, none of which is worth showing back to them.
+ */
 function briefSummary(content) {
   if (!content) return { text: '', placeholder: true };
-  const lines = content.split(/\r?\n/);
-  let i = 0;
-  while (i < lines.length && !/^#\s/.test(lines[i])) i++;
-  i++;
+  const outside = content.replace(/<!--\s*switchboard:managed\s*-->[\s\S]*?<!--\s*\/switchboard:managed\s*-->/g, '');
   const para = [];
-  while (i < lines.length) {
-    const line = lines[i].trim();
-    if (!line) { if (para.length) break; i++; continue; }
-    if (/^#/.test(line) || /^Project folder:/.test(line)) break;
+  for (const raw of outside.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith('<!--')) continue;
+    if (!line) { if (para.length) break; continue; }
+    if (/^#/.test(line)) { if (para.length) break; continue; }
     para.push(line);
-    i++;
   }
   const text = para.join(' ');
-  const placeholder = !text || /^<.*edit me.*>$/i.test(text);
-  return { text, placeholder };
+  return { text, placeholder: !text };
 }
 
 // parsePlan and parseTodos come from plan-parser.js, shared with main so the
@@ -1928,24 +1950,65 @@ async function listProjectDir(project, state, rel) {
   const cached = state.cache.get(rel);
   if (cached && Date.now() - cached.at < FILES_LIST_TTL_MS) return cached.entries;
   let result;
+  const generation = state.cacheGeneration || 0;
   try { result = await window.api.listProjectDirectory(project.root, rel); } catch (err) { result = { ok: false, error: err.message }; }
+  if (generation !== (state.cacheGeneration || 0)) return [];
   const entries = result?.ok ? result.entries : [];
   state.cache.set(rel, { at: Date.now(), entries, error: result?.ok ? null : (result?.error || 'Could not read the folder') });
   return entries;
 }
 
+async function applyProjectFileAction(change) {
+  for (const [projectId, state] of Object.entries(projectsUi.filesByProject || {})) {
+    const project = findTreeProject(projectId);
+    if (!project) continue;
+    state.cache.clear();
+    state.cacheGeneration = (state.cacheGeneration || 0) + 1;
+    state.renderRequest = (state.renderRequest || 0) + 1;
+    const selected = remapFileActionRelative(project.root, state.selected, change);
+    if (selected !== state.selected) state.openRequest = (state.openRequest || 0) + 1;
+    state.selected = selected;
+    state.expanded = new Set([...state.expanded].map(rel => remapFileActionRelative(project.root, rel, change)).filter(Boolean));
+    for (const key of projectsUi.files.keys()) {
+      if (!key.startsWith(projectId + ':')) continue;
+      const rel = key.slice(projectId.length + 1);
+      if (remapFileActionRelative(project.root, rel, change) !== rel) projectsUi.files.delete(key);
+    }
+  }
+  const ed = projectEditor;
+  if (ed?.panel.filePath) {
+    const next = remapFileActionPath(ed.panel.filePath, change);
+    if (next !== ed.panel.filePath) {
+      const project = findTreeProject(ed.projectId);
+      if (next && project) {
+        ed.rel = remapFileActionRelative(project.root, ed.rel, change);
+        await ed.panel.relocate(`${project.name} · ${ed.rel}`, next);
+      } else {
+        ed.panel.destroy();
+        ed.projectId = null;
+        ed.rel = null;
+        const host = projectViewer?.querySelector('#ws-editor');
+        if (host?.contains(ed.host)) host.innerHTML = '<div class="ws-editor-empty">Pick a file to read or edit it here.</div>';
+      }
+    }
+  }
+  const project = selectedProject();
+  const list = projectViewer?.querySelector('#ws-files-list');
+  if (project && list?.isConnected) await renderFileTree(project, list, filesState(project));
+}
+
 async function renderFileTree(project, list, state) {
+  const request = state.renderRequest = (state.renderRequest || 0) + 1;
   const rows = [];
   async function walk(rel, depth) {
     const entries = await listProjectDir(project, state, rel);
     for (const entry of entries) {
-      if (entry.type === 'other') continue;
       rows.push({ entry, depth });
       if (entry.type === 'directory' && state.expanded.has(entry.relativePath)) await walk(entry.relativePath, depth + 1);
     }
   }
   await walk('', 0);
-  if (!list.isConnected) return;
+  if (!list.isConnected || state.renderRequest !== request) return;
   list.replaceChildren();
   const rootError = state.cache.get('')?.error;
   if (rootError) { list.innerHTML = `<div class="ws-card-text muted">${escapeHtml(rootError)}</div>`; return; }
@@ -1957,6 +2020,8 @@ async function renderFileTree(project, list, state) {
     row.className = 'ws-file-row' + (isDir ? ' is-dir' : '') + (!isDir && entry.viewable === false ? ' is-binary' : '') +
       (state.selected === entry.relativePath ? ' selected' : '');
     row.dataset.rel = entry.relativePath;
+    row.tabIndex = 0;
+    bindFileEntryMenu(row, project.root, entry, () => openFileInProjectEditor(project, entry.relativePath));
     row.style.paddingLeft = `${10 + depth * 14}px`;
     row.title = !isDir && entry.viewable === false ? `${entry.relativePath} (preview unavailable: unsupported type or too large)` : entry.relativePath;
     row.innerHTML = `<span class="ws-file-icon">${isDir ? (open ? '&#9662;' : '&#9656;') : ''}</span><span class="ws-file-name">${escapeHtml(entry.name)}</span>`;
@@ -2571,7 +2636,8 @@ function buildSessionPaneList(project) {
     scroll.appendChild(head);
 
     const id = `${project.id}:${mode}:${group.key}`;
-    const limit = group.unlimited || expanded[id] ? Infinity : PANE_GROUP_LIMIT;
+    const defaultLimit = mode === 'track' ? visibleSessionCount : PANE_GROUP_LIMIT;
+    const limit = group.unlimited || expanded[id] ? Infinity : defaultLimit;
     for (const s of group.sessions.slice(0, limit)) scroll.appendChild(buildSessionRow(project, s, {
       showTrack: searching || mode !== 'track',
       className: s.archived ? 'pane-session pane-session--archived' : 'pane-session',
@@ -2954,7 +3020,15 @@ function sessionMoveItems(session) {
     if (project) moveItems.push({ sep: true }, { label: 'Move to another project', icon: PICONS.folder(14), submenu: projectRows });
     else moveItems.push({ sep: true }, { head: 'Move to project' }, ...projectRows);
   }
-  if (session.projectId) moveItems.push({ sep: true }, { label: `Remove from ${project ? project.name : 'project'}`, icon: PICONS.x(13), hint: 'stays in the Sessions tab', onClick: () => move(null, null) });
+  if (session.projectId) moveItems.push({ sep: true }, {
+    label: `Remove from ${project ? project.name : 'project'}…`,
+    icon: PICONS.x(13), hint: 'stays in the Sessions tab',
+    onClick: () => {
+      const name = project ? project.name : 'its project';
+      if (!confirm(`Remove ${sessionTitle(session)} from ${name}?\n\nThe session stays in the Sessions tab under its folder.`)) return;
+      move(null, null);
+    },
+  });
   else if (info?.byCwd) moveItems.push({ sep: true }, { label: 'Filed by its folder', disabled: true });
   return moveItems;
 }
@@ -2971,6 +3045,7 @@ function sessionMenuItems(session) {
     ? { ...launchTargetFor(info.project, (info.project.tracks || []).find(t => t.id === session.trackId) || null), projectPath: session.projectPath }
     : folder;
   const sessionActions = [
+    { label: 'Copy session ID', onClick: () => window.api.writeClipboard(session.sessionId) },
     session.type !== 'terminal' ? { label: 'Fork', icon: PICONS.fork(14), onClick: () => forkSession(session, forkTarget) } : null,
     session.type !== 'terminal' ? { label: unread ? 'Mark as read' : 'Mark as unread', icon: unread ? ICONS.markRead(14) : ICONS.markUnread(14), onClick: () => { if (unread) clearUnread(session.sessionId); else markUnread(session.sessionId); refreshSidebar(); } } : null,
     session.type !== 'terminal' ? { label: 'View messages', icon: PICONS.messages(14), onClick: () => showJsonlViewer(session) } : null,
@@ -3133,8 +3208,75 @@ async function offerWorktreeRemoval(project, worktrees) {
   }
 }
 
+/**
+ * What is still alive in a project: its running sessions, and the tasks
+ * running in any folder it works in. Marking a project done leaves both
+ * running, so the user is asked first.
+ */
+function runningWorkInProject(project) {
+  const sessions = projectSessionsAll(project).filter(s => isSessionRunning(s.sessionId));
+  const pseudo = typeof taskPseudoProject === 'function' ? taskPseudoProject(project) : null;
+  const tasks = (pseudo?.tasks || []).filter(t => t.run?.running);
+  return { sessions, tasks };
+}
+
+/**
+ * Warn before marking a project done while work is still running: going ahead
+ * stops all of it. Resolves true to proceed, false to leave the project active.
+ */
+function confirmProjectDone(project, running) {
+  const parts = [];
+  if (running.sessions.length) parts.push(`${running.sessions.length} running session${running.sessions.length === 1 ? '' : 's'}`);
+  if (running.tasks.length) parts.push(`${running.tasks.length} running task${running.tasks.length === 1 ? '' : 's'}`);
+  const all = [
+    ...running.sessions.map(s => sessionTitle(s)),
+    ...running.tasks.map(t => t.label),
+  ];
+  const names = all.slice(0, 8);
+  const more = all.length - names.length;
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'add-project-overlay';
+    const dialog = document.createElement('div');
+    dialog.className = 'add-project-dialog ws-prompt';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', 'done-running-title');
+    dialog.innerHTML = `
+      <h3 id="done-running-title">Stop ${escapeHtml(parts.join(' and '))} in ${escapeHtml(project.name)}?</h3>
+      <div class="add-project-hint">Marking the project done stops all of it.</div>
+      <div class="np-tree mono done-running-list">${names.map(n => `<span class="np-tree-item">${escapeHtml(n)}</span>`).join('')}${more > 0 ? `<span class="np-tree-item"><em>+ ${more} more</em></span>` : ''}</div>
+      <div class="add-project-actions">
+        <button class="add-project-cancel-btn" type="button">Cancel</button>
+        <button class="add-project-add-btn" type="button">Stop and mark as done</button>
+      </div>`;
+    const finish = value => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(value); };
+    const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); finish(false); } };
+    dialog.querySelector('.add-project-cancel-btn').onclick = () => finish(false);
+    dialog.querySelector('.add-project-add-btn').onclick = () => finish(true);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    document.addEventListener('keydown', onKey);
+    dialog.querySelector('.add-project-cancel-btn').focus();
+  });
+}
+
 async function toggleProjectDone(project) {
   const isDone = project.status === 'done';
+  if (!isDone) {
+    const running = runningWorkInProject(project);
+    if (running.sessions.length || running.tasks.length) {
+      if (!await confirmProjectDone(project, running)) return;
+      for (const session of running.sessions) {
+        try { await window.api.stopSession(session.sessionId); } catch {}
+        activePtyIds.delete(session.sessionId);
+      }
+      for (const task of running.tasks) {
+        try { await window.api.stopTask(task.projectPath, task.label); } catch {}
+      }
+      pollActiveSessions();
+    }
+  }
   const result = await window.api.updateProject(project.id, { status: isDone ? 'active' : 'done' });
   if (result?.error) { alert(result.error); return; }
   if (!isDone && result.worktrees?.length) await offerWorktreeRemoval(project, result.worktrees);

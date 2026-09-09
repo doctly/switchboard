@@ -709,6 +709,7 @@ function bindSessionListEvents(container) {
         e.stopPropagation();
         const menuItems = [
           { label: 'Rename session', onClick: () => startRename(item.querySelector('.session-summary'), session) },
+          { label: 'Copy session ID', onClick: () => window.api.writeClipboard(session.sessionId) },
         ];
         if (session.type !== 'terminal') {
           menuItems.push(

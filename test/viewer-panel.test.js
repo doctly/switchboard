@@ -84,3 +84,47 @@ test('a delayed reload cannot replace a newly selected file or revive a destroye
   assert.equal(panel.editorView, null);
   assert.equal(panel.filePath, '');
 });
+
+
+test('renaming an open file preserves edits, updates saves and ignores a stale reload', async () => {
+  const { panel, api, saved } = setup();
+  panel.open('Draft', '/notes.md', 'unsaved edits');
+  const requests = [];
+  api.readFileForPanel = () => new Promise(resolve => requests.push(resolve));
+  const stale = panel._reloadFromDisk();
+  const rename = panel.relocate('Renamed', '/renamed.md');
+  requests[0]({ ok: true, content: 'stale disk content' });
+  await stale;
+  requests[1]({ ok: true, content: 'disk content' });
+  await rename;
+  assert.equal(panel.filePath, '/renamed.md');
+  assert.equal(panel.getContent(), 'unsaved edits');
+  assert.equal(panel._watchedPath, '/renamed.md');
+  panel.toolbar.flashSave = () => {};
+  await panel._save();
+  assert.equal(saved(), 1);
+});
+
+
+test('renaming to a media extension cannot discard an editable buffer', async () => {
+  const { panel, api, media } = setup();
+  panel.open('Text', '/notes.txt', 'unsaved text');
+  api.readFileForPanel = async () => ({ ok: true, ...media });
+  await panel.relocate('Image', '/notes.png');
+  assert.equal(panel.filePath, '/notes.png');
+  assert.equal(panel.getContent(), 'unsaved text');
+  assert.equal(panel.previewType, 'text');
+});
+
+test('a rename reply cannot revive a closed editor', async () => {
+  const { panel, api } = setup();
+  panel.open('Text', '/notes.txt', 'text');
+  let resolve;
+  api.readFileForPanel = () => new Promise(done => { resolve = done; });
+  const rename = panel.relocate('Renamed', '/renamed.txt');
+  panel.destroy();
+  resolve({ ok: true, content: 'late reply' });
+  await rename;
+  assert.equal(panel.filePath, '');
+  assert.equal(panel.editorView, null);
+});

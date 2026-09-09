@@ -90,6 +90,7 @@ function updateProjectTaskButtons(projectPath) {
     }
     if (button.dataset.projectPath === projectPath) updateTaskButton(button, project);
   });
+  if (typeof updateProjectTaskIndicators === 'function') updateProjectTaskIndicators(projectPath);
 }
 
 function closeTaskPopover() {

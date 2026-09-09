@@ -233,7 +233,7 @@ function readSessionFile(filePath, folder, projectPath) {
     const lines = content.split('\n').filter(Boolean);
     let summary = '';
     let messageCount = 0;
-    let textContent = '';
+    const textParts = [];
     let slug = null;
     let customTitle = null;
     let aiTitle = null;
@@ -256,14 +256,17 @@ function readSessionFile(filePath, folder, projectPath) {
       if (entry.type === 'ai-title' && entry.aiTitle) {
         aiTitle = entry.aiTitle;
       }
-      if (entry.type === 'user' || entry.type === 'assistant' ||
-          (entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'))) {
+      const isConversationMessage = entry.type === 'user' || entry.type === 'assistant' ||
+        (entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'));
+      if (isConversationMessage) {
         messageCount++;
       }
       const msg = entry.message;
       const text = typeof msg === 'string' ? msg :
         (typeof msg?.content === 'string' ? msg.content :
-        (msg?.content?.[0]?.text || ''));
+        (Array.isArray(msg?.content) ? msg.content
+          .filter(block => block?.type === 'text' && typeof block.text === 'string')
+          .map(block => block.text).join('\n') : ''));
       if (!summary && (entry.type === 'user' || (entry.type === 'message' && entry.role === 'user'))) {
         // Skip local command messages (! prefix) — use the next real user message
         if (text && !/<bash-input>|<bash-stdout>|<local-command-caveat>/.test(text)) {
@@ -272,9 +275,9 @@ function readSessionFile(filePath, folder, projectPath) {
           summary = taskMatch ? 'Scheduled: ' + taskMatch[1] : text.slice(0, 120);
         }
       }
-      if (text && textContent.length < 8000) {
-        textContent += text.slice(0, 500) + '\n';
-      }
+      // Search the entire conversation, including every text block. Tool
+      // inputs/results, thinking and non-message records are not conversation.
+      if (isConversationMessage && text) textParts.push(text);
     }
     if (!summary || messageCount < 1) return null;
     return {
@@ -288,7 +291,7 @@ function readSessionFile(filePath, folder, projectPath) {
       created: firstTimestamp || stat.birthtime.toISOString(),
       modified: lastTimestamp || stat.mtime.toISOString(),
       fileMtime: stat.mtime.toISOString(),
-      messageCount, textContent, slug, customTitle, aiTitle,
+      messageCount, textContent: textParts.join('\n'), slug, customTitle, aiTitle,
     };
   } catch {
     return null;

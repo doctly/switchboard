@@ -286,7 +286,7 @@
         <div class="settings-field">
           <div class="settings-field-info">
             <span class="settings-label">Max Visible Sessions</span>
-            <div class="settings-description">Show up to this many sessions before collapsing the rest behind "+N older"</div>
+            <div class="settings-description">Show up to this many sessions per folder or project track before collapsing the rest</div>
           </div>
           <div class="settings-field-control">
             <input type="number" class="settings-input settings-input-compact" id="sv-visible-count" min="1" max="100" value="${visCountValue}">

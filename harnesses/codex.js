@@ -213,7 +213,9 @@ function messageText(payload) {
   const content = payload?.content;
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
-  return content.map(c => (c && typeof c.text === 'string' ? c.text : '')).join('');
+  return content
+    .filter(c => c && ['text', 'input_text', 'output_text'].includes(c.type) && typeof c.text === 'string')
+    .map(c => c.text).join('\n');
 }
 
 /**
@@ -235,7 +237,7 @@ function readSessionFile(filePath, folder) {
     let projectPath = null;
     let summary = '';
     let messageCount = 0;
-    let textContent = '';
+    const textParts = [];
     let firstTimestamp = null;
     let lastTimestamp = null;
 
@@ -276,7 +278,9 @@ function readSessionFile(filePath, folder) {
 
       messageCount++;
       if (!summary && role === 'user' && text) summary = text.slice(0, 120);
-      if (text && textContent.length < 8000) textContent += text.slice(0, 500) + '\n';
+      // Keep full conversation text; tool calls/results and reasoning never
+      // reach this branch because they are not user/assistant messages.
+      if (text) textParts.push(text);
     }
 
     // No cwd means no project to file it under; no user turn means the session
@@ -292,7 +296,7 @@ function readSessionFile(filePath, folder) {
       created: firstTimestamp || stat.birthtime.toISOString(),
       modified: lastTimestamp || stat.mtime.toISOString(),
       fileMtime: stat.mtime.toISOString(),
-      messageCount, textContent,
+      messageCount, textContent: textParts.join('\n'),
       slug: null, customTitle: null, aiTitle: null,
     };
   } catch {

@@ -1,9 +1,3 @@
-# {{name}}
-
-<Who the customer is and what they need. Edit me.>
-
-Project folder: {{root}}
-
 ## How this project works
 - Discovery track: what was learned about the customer goes in
   {{root}}/contacts.md and {{root}}/notes.md.
