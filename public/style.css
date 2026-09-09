@@ -4557,6 +4557,15 @@ body { display: flex; flex-direction: column; }
   opacity: 1;
 }
 
+.proj-row.snoozed {
+  opacity: 0.6;
+}
+
+.proj-row.snoozed:hover,
+.proj-row.snoozed.selected {
+  opacity: 1;
+}
+
 .proj-mark {
   display: inline-flex;
   align-items: center;
@@ -4604,7 +4613,7 @@ body { display: flex; flex-direction: column; }
 }
 
 /* Keep an inactive session dot from reserving space after the task count. */
-.proj-status > .proj-dot:not(.running, .ready, .attention, .idle) {
+.proj-status > .proj-dot:not(.running, .ready, .attention, .idle, .woke) {
   display: none;
 }
 
@@ -4665,6 +4674,12 @@ body { display: flex; flex-direction: column; }
 .proj-dot.ready {
   background: #4fc3f7;
   box-shadow: 0 0 6px rgba(79,195,247,0.6);
+}
+
+/* Back from a snooze and not opened yet: yellow, until the project is opened. */
+.proj-dot.woke {
+  background: #f5d442;
+  box-shadow: 0 0 6px rgba(245,212,66,0.55);
 }
 
 /* A live session doing none of those: green, but quiet. */
@@ -4752,6 +4767,7 @@ body { display: flex; flex-direction: column; }
 .ws-chip--status { height: 20px; font-weight: 600; }
 .ws-chip--status.active { color: #5ec46a; border-color: rgba(62,207,90,0.3); background: rgba(62,207,90,0.08); }
 .ws-chip--status.done { color: #9090a8; }
+.ws-chip--status.snoozed { color: #8fa3ff; border-color: rgba(120,130,255,0.3); background: rgba(120,130,255,0.08); }
 .ws-chip--add { color: #6a6a80; border-style: dashed; cursor: pointer; }
 .ws-chip--add:hover { color: #b0b0c4; border-color: rgba(255,255,255,0.2); }
 .ws-chip--cli { height: 18px; padding: 0 6px; font-size: 10px; font-weight: 600; }

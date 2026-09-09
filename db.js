@@ -229,6 +229,12 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_tracks_project ON tracks(projectId)');
   // Tracks inherit it unless they set their own cwd.
   const cols = new Set(db.prepare('PRAGMA table_info(projects)').all().map(c => c.name));
   if (!cols.has('defaultCwd')) db.exec('ALTER TABLE projects ADD COLUMN defaultCwd TEXT');
+  // Snooze is an overlay on an active project: the row keeps status 'active'
+  // and is hidden from the list while snoozedUntil is in the future. Nothing
+  // clears the columns at wake time; a past snoozedUntil simply no longer
+  // counts, so the renderer decides from the timestamp alone.
+  if (!cols.has('snoozedUntil')) db.exec('ALTER TABLE projects ADD COLUMN snoozedUntil TEXT');
+  if (!cols.has('snoozedAt')) db.exec('ALTER TABLE projects ADD COLUMN snoozedAt TEXT');
 }
 // Which session started or finished a plan phase or a todo. Items are matched
 // by their text, not their line, so editing the file above an item does not
@@ -572,7 +578,7 @@ function deleteSetting(key) {
 
 // --- Project functions ---
 
-const PROJECT_PATCH_KEYS = ['name', 'status', 'sharedBranch', 'branchName', 'defaultCwd', 'modified'];
+const PROJECT_PATCH_KEYS = ['name', 'status', 'sharedBranch', 'branchName', 'defaultCwd', 'snoozedUntil', 'snoozedAt', 'modified'];
 const TRACK_PATCH_KEYS = ['name', 'cwd', 'cli', 'status', 'sortOrder'];
 
 function listProjects() {

@@ -23,7 +23,7 @@ function makeFakeDb({ global = {} } = {}) {
     updateProject: (id, patch) => {
       const row = rows.projects.find(r => r.id === id);
       if (!row) return 0;
-      for (const key of ['name', 'status', 'sharedBranch', 'branchName', 'defaultCwd', 'modified']) {
+      for (const key of ['name', 'status', 'sharedBranch', 'branchName', 'defaultCwd', 'snoozedUntil', 'snoozedAt', 'modified']) {
         if (key in patch) row[key] = key === 'sharedBranch' ? (patch[key] ? 1 : 0) : patch[key];
       }
       return 1;
@@ -167,6 +167,37 @@ test('createProject refuses a blank name, a missing folder, an existing root fol
     assert.match((await projects.createProject({ name: 'x', branchName: '-bad' })).error, /Invalid branch name/);
     fs.mkdirSync(path.join(t.root, 'taken'));
     assert.match((await projects.createProject({ name: 'Taken' })).error, /already exists/);
+  } finally { t.cleanup(); }
+});
+
+test('snooze: a wake time in the future, kept as an overlay on an active project', async () => {
+  const t = setup();
+  try {
+    const { project } = await projects.createProject({ name: 'Later' });
+    assert.equal(project.snoozedUntil, null);
+    assert.equal(projects.updateProject(project.id, { snoozedUntil: 'soon' }).error, 'Wake time must be an ISO date');
+    assert.equal(projects.updateProject(project.id, { snoozedUntil: new Date(Date.now() - 1000).toISOString() }).error, 'Wake time must be in the future');
+
+    const wake = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const snoozed = projects.updateProject(project.id, { snoozedUntil: wake }).project;
+    assert.equal(snoozed.snoozedUntil, wake);
+    assert.ok(snoozed.snoozedAt, 'snoozedAt is stamped');
+    assert.equal(snoozed.status, 'active', 'snooze does not change the status');
+
+    const again = projects.updateProject(project.id, { snoozedUntil: wake }).project;
+    assert.equal(again.snoozedAt, snoozed.snoozedAt, 'the same wake time keeps the original snoozedAt');
+    const later = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+    assert.equal(projects.updateProject(project.id, { snoozedUntil: later }).project.snoozedUntil, later);
+
+    const done = projects.updateProject(project.id, { status: 'done' }).project;
+    assert.equal(done.snoozedUntil, null, 'finishing a project ends its snooze');
+    assert.equal(done.snoozedAt, null);
+    assert.equal(projects.updateProject(project.id, { snoozedUntil: wake }).error, 'A finished project cannot be snoozed');
+
+    projects.updateProject(project.id, { status: 'active', snoozedUntil: wake });
+    const woken = projects.updateProject(project.id, { snoozedUntil: null }).project;
+    assert.equal(woken.snoozedUntil, null);
+    assert.equal(woken.snoozedAt, null);
   } finally { t.cleanup(); }
 });
 

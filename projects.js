@@ -573,6 +573,8 @@ function projectNode(row, folderRows = [], trackRows = []) {
     sharedBranch: row.sharedBranch === undefined ? true : !!row.sharedBranch,
     branchName: row.branchName || null,
     defaultCwd: row.defaultCwd || null,
+    snoozedUntil: row.snoozedUntil || null,
+    snoozedAt: row.snoozedAt || null,
     created: row.created, modified: row.modified,
     lastActivity: null, sessionCount: 0,
     addedFilesPath: added.dirPath,
@@ -685,6 +687,15 @@ function updateProject(id, patch) {
     if (cwd.error) return { error: cwd.error };
     clean.defaultCwd = cwd.cwd;
   }
+  if (patch?.snoozedUntil !== undefined) {
+    const snooze = normalizeSnooze(row, patch.snoozedUntil, clean.status || row.status);
+    if (snooze.error) return { error: snooze.error };
+    Object.assign(clean, snooze);
+  } else if (clean.status === 'done' && row.snoozedUntil) {
+    // Finishing a project ends its snooze; Done is not a place to wake up into.
+    clean.snoozedUntil = null;
+    clean.snoozedAt = null;
+  }
   if (!Object.keys(clean).length) return { ok: true, project: loadProjectNode(id) };
   clean.modified = new Date().toISOString();
   db.updateProject(id, clean);
@@ -698,6 +709,23 @@ function updateProject(id, patch) {
     result.worktrees = db.listProjectFolders(id).filter(f => f.mode === 'worktree').map(f => f.path);
   }
   return result;
+}
+
+/**
+ * A snooze is a wake time in the future, or null to wake now. Snoozing again
+ * to the same instant keeps the original snoozedAt, so a repeated click does
+ * not churn the row. Only visibility changes: sessions keep running.
+ */
+function normalizeSnooze(row, value, status) {
+  if (value === null || value === '') return { snoozedUntil: null, snoozedAt: null };
+  if (typeof value !== 'string') return { error: 'Wake time must be an ISO date' };
+  const wake = Date.parse(value);
+  if (!Number.isFinite(wake)) return { error: 'Wake time must be an ISO date' };
+  if (wake <= Date.now()) return { error: 'Wake time must be in the future' };
+  if (status === 'done') return { error: 'A finished project cannot be snoozed' };
+  const iso = new Date(wake).toISOString();
+  const sameWake = row.snoozedUntil && Date.parse(row.snoozedUntil) === wake && row.snoozedAt;
+  return { snoozedUntil: iso, snoozedAt: sameWake ? row.snoozedAt : new Date().toISOString() };
 }
 
 /** Rows only. The folder on disk and every session stay. */

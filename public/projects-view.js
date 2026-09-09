@@ -40,6 +40,10 @@ const projectsUi = {
   lastStateKey: '',
   working: false,
   doneOpen: false,
+  snoozedOpen: false,
+  // Ids of the projects the list last showed as snoozed. The session poll
+  // compares against it to notice a snoozed project raising its hand.
+  snoozedKey: '',
   // 'pane:<projectId>' or 'card:<projectId>:<trackKey>' → true while its archived list is open
   archivedOpen: (() => { try { return JSON.parse(sessionStorage.getItem('projects.archivedOpen') || '{}'); } catch { return {}; } })(),
   files: new Map(), // `${projectId}:${name}` → { content, at }
@@ -592,7 +596,20 @@ function sessionActivity(session) {
 }
 
 const GROUP_STATE_ORDER = ['attention', 'ready', 'running', 'idle'];
-const GROUP_STATE_LABEL = { running: 'Working', ready: 'Finished, not read yet', attention: 'Needs you', idle: 'Open' };
+const GROUP_STATE_LABEL = { running: 'Working', ready: 'Finished, not read yet', attention: 'Needs you', idle: 'Open', woke: 'Back from snooze' };
+// Every class a project dot can carry: the session states plus the woke marker.
+const PROJECT_DOT_STATES = [...GROUP_STATE_ORDER, 'woke'];
+
+/**
+ * The dot on a project row. A project back from snooze shows yellow ahead of
+ * everything else: opening it clears the marker at once, and the session
+ * state shows from then on. The marker comes from the stored wake time, so
+ * it survives a restart.
+ */
+function projectDotState(project) {
+  if (projectWokeAt(project, Date.now())) return 'woke';
+  return groupState(projectSessionsAll(project));
+}
 
 /** The strongest state among these sessions: needs-you beats finished beats working. */
 function groupState(sessions) {
@@ -612,16 +629,16 @@ function stateDot(state, extraClass = '') {
 
 /** Roll running / attention up onto every project row, card and session row. */
 function updateProjectStatusDots() {
-  const apply = (el, sessions) => {
+  const applyState = (el, state) => {
     const dot = el.querySelector(':scope > .proj-dot, :scope > .proj-status > .proj-dot, :scope > .tcard-h > .proj-dot');
     if (!dot) return;
-    const state = groupState(sessions);
-    for (const name of GROUP_STATE_ORDER) dot.classList.toggle(name, state === name);
+    for (const name of PROJECT_DOT_STATES) dot.classList.toggle(name, state === name);
     if (GROUP_STATE_LABEL[state]) dot.title = GROUP_STATE_LABEL[state]; else dot.removeAttribute('title');
   };
+  const apply = (el, sessions) => applyState(el, groupState(sessions));
   document.querySelectorAll('.proj-row[data-project-id]').forEach(row => {
     const project = findTreeProject(row.dataset.projectId);
-    if (project) apply(row, projectSessionsAll(project));
+    if (project) applyState(row, projectDotState(project));
   });
   document.querySelectorAll('.tcard[data-track-key]').forEach(el => {
     const project = findTreeProject(el.dataset.projectId);
@@ -650,6 +667,10 @@ function updateProjectStatusDots() {
       }
     }
   }
+  // A session that starts needing input wakes its snoozed project, and a
+  // snoozed project has no row while the shelf is closed, so the dots cannot
+  // carry that change. Compare the snoozed set instead.
+  if (projectSnoozedKey(currentProjectTree()?.projects || []) !== projectsUi.snoozedKey) renderProjectList();
 }
 
 // --- Sidebar: the project list ---
@@ -670,6 +691,8 @@ function projectSubline(project) {
   const parts = [trackCount ? `${trackCount} track${trackCount === 1 ? '' : 's'}` : 'no tracks'];
   parts.push(`${sessions.length} session${sessions.length === 1 ? '' : 's'}`);
   if (state === 'attention') parts.push('needs input');
+  else if (projectSnoozed(project, Date.now())) parts.push(`wakes ${snoozeWakeDescription(project.snoozedUntil)}`);
+  else if (projectWokeAt(project, Date.now())) parts.push(`woke ${formatDate(new Date(project.snoozedUntil))}`);
   else if (projectSortTime(project)) parts.push(formatDate(new Date(projectSortTime(project))));
   return parts.join(' · ');
 }
@@ -696,12 +719,12 @@ function updateProjectTaskIndicators(projectPath) {
 
 function buildProjectRow(project) {
   const row = document.createElement('div');
-  row.className = 'proj-row' + (project.id === projectsUi.selectedProjectId ? ' selected' : '') + (project.status === 'done' ? ' done' : '');
+  row.className = 'proj-row' + (project.id === projectsUi.selectedProjectId ? ' selected' : '') + (project.status === 'done' ? ' done' : '') + (isProjectSnoozed(project) ? ' snoozed' : '');
   row.id = 'proj-' + project.id;
   row.dataset.projectId = project.id;
   row.title = project.root;
   const sessions = projectSessionsAll(project);
-  const state = groupState(sessions);
+  const state = projectDotState(project);
   const runningCount = sessions.filter(s => isSessionRunning(s.sessionId)).length;
   row.innerHTML = markHtml(project, 28) +
     `<span class="proj-text"><span class="proj-name">${escapeHtml(project.name)}</span><span class="proj-sub">${escapeHtml(projectSubline(project))}</span></span>` +
@@ -731,8 +754,12 @@ function renderProjectList() {
   list.appendChild(toolbar);
 
   const byEvent = (a, b) => projectSortTime(b) - projectSortTime(a);
-  const active = projects.filter(p => p.status !== 'done').sort(byEvent);
-  const done = projects.filter(p => p.status === 'done').sort(byEvent);
+  const active = [], snoozed = [], done = [];
+  for (const p of projects) (p.status === 'done' ? done : isProjectSnoozed(p) ? snoozed : active).push(p);
+  active.sort(byEvent);
+  done.sort(byEvent);
+  // The shelf reads as "what comes back first".
+  snoozed.sort((a, b) => Date.parse(a.snoozedUntil) - Date.parse(b.snoozedUntil));
 
   if (!projects.length) {
     const empty = document.createElement('div');
@@ -751,6 +778,15 @@ function renderProjectList() {
     for (const project of active) list.appendChild(buildProjectRow(project));
   }
 
+  if (snoozed.length) {
+    const label = document.createElement('div');
+    label.className = 'proj-section proj-section--toggle' + (projectsUi.snoozedOpen ? ' open' : '');
+    label.id = 'proj-sec-snoozed';
+    label.innerHTML = `${PICONS.chevronRight(9)}<span>Snoozed · ${snoozed.length}</span>`;
+    list.appendChild(label);
+    if (projectsUi.snoozedOpen) for (const project of snoozed) list.appendChild(buildProjectRow(project));
+  }
+
   if (done.length) {
     const label = document.createElement('div');
     label.className = 'proj-section proj-section--toggle' + (projectsUi.doneOpen ? ' open' : '');
@@ -765,6 +801,10 @@ function renderProjectList() {
     getNodeKey(node) { return node.id || undefined; },
   });
   bindProjectList();
+  // Every project, not the search's subset: a wake outside the filter still changes the shelf count.
+  const all = tree?.projects || [];
+  projectsUi.snoozedKey = projectSnoozedKey(all);
+  armProjectWakeTimer(all);
 }
 
 function bindProjectList() {
@@ -772,6 +812,8 @@ function bindProjectList() {
   if (newBtn) newBtn.onclick = () => showNewProjectDialog();
   const doneToggle = projectsContent.querySelector('#proj-sec-done');
   if (doneToggle) doneToggle.onclick = () => { projectsUi.doneOpen = !projectsUi.doneOpen; renderProjectList(); };
+  const snoozedToggle = projectsContent.querySelector('#proj-sec-snoozed');
+  if (snoozedToggle) snoozedToggle.onclick = () => { projectsUi.snoozedOpen = !projectsUi.snoozedOpen; renderProjectList(); };
   projectsContent.querySelectorAll('.proj-row').forEach(row => {
     const project = findTreeProject(row.dataset.projectId);
     if (!project) return;
@@ -791,6 +833,15 @@ function selectProject(id, { tab } = {}) {
     if (typeof terminalHeader !== 'undefined') terminalHeader.style.display = 'none';
   }
   projectsUi.selectedProjectId = id;
+  // Opening a project that woke ends the snooze for good: the "woke" note
+  // goes and the columns clear. Until then the note marks what came back.
+  const opened = findTreeProject(id);
+  if (opened && projectWokeAt(opened, Date.now())) {
+    opened.snoozedUntil = null;
+    opened.snoozedAt = null;
+    window.api.updateProject(id, { snoozedUntil: null }).catch(() => {});
+    updateProjectStatusDots(); // the yellow dot goes as soon as the project is opened
+  }
   if (tab) {
     setProjectTab(id, tab);
     rememberProjectOverview(id);
@@ -1191,7 +1242,7 @@ function renderOverview() {
         <div class="ws-title-text">
           <div class="ws-title-line">
             <span class="ws-title">${escapeHtml(project.name)}</span>
-            <span class="ws-chip ws-chip--status ${project.status}">${project.status === 'done' ? 'Done' : 'Active'}</span>
+            ${projectStatusChip(project)}
             ${state ? stateDot(state, 'proj-dot--lg') : ''}
           </div>
           <div class="ws-chips">
@@ -2271,6 +2322,7 @@ function renderSettings(project, body) {
       <div class="ws-card" id="ws-set-tracks"></div>
 
       <div class="ws-foot">
+        ${isProjectSnoozed(project) ? `<button type="button" class="ws-btn" id="ws-set-wake" title="Wakes ${escapeHtml(snoozeWakeDescription(project.snoozedUntil))}">Wake now</button>` : ''}
         <button type="button" class="ws-btn" id="ws-set-status">${project.status === 'done' ? 'Reopen project' : 'Mark as done'}</button>
         <button type="button" class="ws-link-danger" id="ws-set-remove">Remove project…</button>
         <span class="ws-foot-note">Changes save as you make them.</span>
@@ -2351,6 +2403,8 @@ function renderSettings(project, body) {
   q('#ws-set-new-track').onclick = () => promptNewTrack(project);
 
   q('#ws-set-status').onclick = () => toggleProjectDone(project);
+  const wakeBtn = q('#ws-set-wake');
+  if (wakeBtn) wakeBtn.onclick = () => wakeProject(project);
   q('#ws-set-remove').onclick = () => removeProjectFlow(project);
 
   const flash = projectsUi.savedFlash;
@@ -2763,7 +2817,10 @@ function closeContextMenu() {
 }
 
 function onCtxPointerDown(e) {
-  if (openCtxMenu && !openCtxMenu.contains(e.target)) closeContextMenu();
+  if (!openCtxMenu) return;
+  // Submenus hang off document.body, not the root menu, so they count as inside too.
+  const inside = openCtxMenu.contains(e.target) || openCtxMenu._subs.some(s => s.contains(e.target));
+  if (!inside) closeContextMenu();
 }
 
 function onCtxKey(e) {
@@ -2946,6 +3003,7 @@ function projectMenuItems(project, { fromPage = false } = {}) {
     { label: 'Settings', icon: ICONS.gear(14), onClick: () => selectProject(project.id, { tab: 'settings' }) },
     { label: 'Open project folder', icon: PICONS.open(14), onClick: () => window.api.openPath(project.root) },
     { sep: true },
+    ...snoozeMenuItems(project),
     { label: isDone ? 'Reopen project' : 'Mark as done', icon: PICONS.check(14), onClick: () => toggleProjectDone(project) },
     { label: 'Remove project…', icon: PICONS.trash(14), danger: true, onClick: () => removeProjectFlow(project) },
   ].filter(Boolean);
@@ -3071,7 +3129,7 @@ function sessionMenuItems(session) {
 // a stray click used to throw it away. Escape and Cancel are the ways out.
 
 /** A small modal with one text field. Resolves the trimmed value, or null on cancel. */
-function showPromptDialog({ title, label, value = '', placeholder = '', confirm = 'Save', help = '' }) {
+function showPromptDialog({ title, label, value = '', placeholder = '', confirm = 'Save', help = '', type = 'text', min = '' }) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     overlay.className = 'add-project-overlay';
@@ -3080,7 +3138,7 @@ function showPromptDialog({ title, label, value = '', placeholder = '', confirm 
     dialog.innerHTML = `
       <h3>${escapeHtml(title)}</h3>
       ${label ? `<label class="new-project-label">${escapeHtml(label)}</label>` : ''}
-      <div class="folder-input-row"><input type="text" id="ws-prompt-input" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value)}"></div>
+      <div class="folder-input-row"><input type="${escapeHtml(type)}" id="ws-prompt-input" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value)}"${min ? ` min="${escapeHtml(min)}"` : ''}></div>
       ${help ? `<div class="add-project-hint" style="margin-top:8px;">${escapeHtml(help)}</div>` : ''}
       <div class="add-project-actions">
         <button class="add-project-cancel-btn" type="button">Cancel</button>
@@ -3282,6 +3340,102 @@ async function toggleProjectDone(project) {
   if (!isDone && result.worktrees?.length) await offerWorktreeRemoval(project, result.worktrees);
   loadProjects();
 }
+
+// --- Snooze ---
+//
+// Hidden until a wake time; the sessions keep running. The decision is made
+// from the clock at render (see snooze.js), so waking costs nothing and the
+// only timer is the one below, armed at the earliest wake.
+
+let projectWakeTimer = null;
+
+/** Snoozed as the list sees it: the wake time is ahead and no session needs input. */
+function isProjectSnoozed(project) {
+  return projectSnoozed(project, Date.now(), groupState(projectSessionsAll(project)) === 'attention');
+}
+
+function projectSnoozedKey(projects) {
+  return projects.filter(isProjectSnoozed).map(p => p.id).sort().join('|');
+}
+
+/**
+ * One timer for the whole list, and none while nothing is snoozed. A late
+ * timer (a throttled background window, a laptop asleep past the hour) only
+ * delays the repaint: focus and the session poll compare against the clock
+ * too, so the list catches up on its own.
+ */
+function armProjectWakeTimer(projects) {
+  if (projectWakeTimer) { clearTimeout(projectWakeTimer); projectWakeTimer = null; }
+  const delay = nextWakeDelayMs(projects, Date.now());
+  if (delay === null) return;
+  projectWakeTimer = setTimeout(() => { projectWakeTimer = null; renderProjectList(); }, delay);
+}
+
+async function snoozeProject(project, snoozedUntil) {
+  const result = await window.api.updateProject(project.id, { snoozedUntil });
+  if (result?.error) { alert(result.error); return; }
+  // Out of sight means the page too: snoozing the open project closes it.
+  // The shelf itself is left as the user set it; it starts collapsed.
+  if (snoozedUntil && projectsUi.selectedProjectId === project.id) {
+    projectsUi.selectedProjectId = null;
+    saveProjectsUi();
+    leaveProjectViews();
+    placeholder.style.display = '';
+  }
+  loadProjects();
+}
+
+function wakeProject(project) {
+  return snoozeProject(project, null);
+}
+
+async function pickSnoozeTime(project) {
+  const now = new Date();
+  const suggested = new Date(now.getTime() + 60 * 60 * 1000);
+  suggested.setMinutes(0, 0, 0);
+  const value = await showPromptDialog({
+    title: `Snooze ${project.name}`, label: 'Wake up at', confirm: 'Snooze',
+    type: 'datetime-local', value: toLocalInputValue(suggested), min: toLocalInputValue(now),
+    help: 'The project moves to the Snoozed shelf until then. Its sessions keep running.',
+  });
+  if (!value) return;
+  const wake = new Date(value);
+  if (!Number.isFinite(wake.getTime()) || wake.getTime() <= Date.now()) { alert('Pick a time in the future.'); return; }
+  snoozeProject(project, wake.toISOString());
+}
+
+function snoozeSubmenu(project) {
+  const items = resolveSnoozePresets(new Date()).map(p => ({ label: p.label, hint: p.whenLabel, onClick: () => snoozeProject(project, p.snoozedUntil) }));
+  items.push({ sep: true }, { label: 'Pick a time…', onClick: () => pickSnoozeTime(project) });
+  return items;
+}
+
+/** The snooze rows of a project menu. A finished project has none; one that needs input cannot hide. */
+function snoozeMenuItems(project) {
+  if (project.status === 'done') return [];
+  if (groupState(projectSessionsAll(project)) === 'attention') {
+    return [{ label: 'Snooze', icon: PICONS.clock(14), disabled: true, hint: 'needs input' }];
+  }
+  if (isProjectSnoozed(project)) {
+    return [
+      { label: 'Wake now', icon: PICONS.clock(14), hint: `wakes ${snoozeWakeDescription(project.snoozedUntil)}`, onClick: () => wakeProject(project) },
+      { label: 'Snooze again', icon: PICONS.clock(14), submenu: snoozeSubmenu(project) },
+    ];
+  }
+  return [{ label: 'Snooze', icon: PICONS.clock(14), submenu: snoozeSubmenu(project) }];
+}
+
+function projectStatusChip(project) {
+  if (project.status === 'done') return '<span class="ws-chip ws-chip--status done">Done</span>';
+  if (isProjectSnoozed(project)) return `<span class="ws-chip ws-chip--status snoozed" title="Wakes ${escapeHtml(snoozeWakeDescription(project.snoozedUntil))}">Snoozed</span>`;
+  return '<span class="ws-chip ws-chip--status active">Active</span>';
+}
+
+// The app can come back from a sleep or a throttled background window after
+// a wake time passed. Focus is the moment the user looks, so repaint then.
+window.addEventListener('focus', () => {
+  if ((currentProjectTree()?.projects || []).some(p => p.snoozedUntil)) renderProjectList();
+});
 
 async function removeProjectFlow(project) {
   if (!confirm(`Remove ${project.name} from Switchboard?\n\nThe folder ${project.root} and all sessions stay on disk.`)) return;
