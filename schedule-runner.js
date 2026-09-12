@@ -1,6 +1,6 @@
 // schedule-runner.js — Scan the old schedule-*.md files.
 // Only the scan survives: main imports what it finds as folder schedules
-// (projects.importLegacySchedules) once, and the schedules table takes over.
+// (projects.importLegacySchedules) once per file, retrying missed files at startup.
 // cronMatches stays for tests and for parity with public/schedule-time.js.
 const fs = require('fs');
 const path = require('path');

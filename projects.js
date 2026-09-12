@@ -26,10 +26,6 @@ const planParser = require('./public/plan-parser');
 const DEFAULT_ROOT_NAME = 'Switchboard';
 const REPOS_DIR = 'repos';
 const ADDED_FILES_DIR = 'added-files';
-// Codex reads AGENTS.override.md instead of AGENTS.md at the same level, and
-// only from the git root down, so a worktree gets a copy of the project brief
-// under that name (excluded from git). Claude needs nothing: it walks up.
-const CODEX_BRIDGE_FILE = 'AGENTS.override.md';
 const BRANCH_NAME_RE = /^(?!-)[A-Za-z0-9._\/-]+$/;
 const SLUG_MAX = 60;
 const FOLDER_MODES = new Set(['in-place', 'worktree']);
@@ -411,9 +407,8 @@ function syncBriefFile(filePath, block) {
 
 /**
  * Keep the managed block in CLAUDE.md and AGENTS.md current — the title, the
- * project folder, the working rules and the attached-folder list — and refresh
- * the Codex bridge file in every worktree folder, since it carries a copy of
- * AGENTS.md.
+ * project folder, the working rules and the attached-folder list. Generated
+ * instructions belong only in the project root, never in attached repos.
  */
 async function syncProjectBrief(projectId) {
   const project = db.getProject(projectId);
@@ -423,12 +418,6 @@ async function syncProjectBrief(projectId) {
   for (const file of BRIEF_FILES) {
     try { syncBriefFile(path.join(project.root, file), block); } catch (err) {
       log.error?.(`[projects] could not update ${file} in ${project.root}`, err);
-    }
-  }
-  for (const folder of folders) {
-    if (folder.mode !== 'worktree') continue;
-    try { await writeCodexBridge(project, folder.path); } catch (err) {
-      log.error?.(`[projects] could not write ${CODEX_BRIDGE_FILE} in ${folder.path}`, err);
     }
   }
 }
@@ -452,51 +441,9 @@ async function syncAllProjectBriefs() {
   }
 }
 
-// --- Codex bridge file ---
-
-/** Add a pattern to the repository's shared info/exclude, once. */
-async function excludeFromGit(worktree, pattern) {
-  const common = await git.gitCommonDir(worktree);
-  const excludePath = path.join(common, 'info', 'exclude');
-  fs.mkdirSync(path.dirname(excludePath), { recursive: true });
-  const existing = fs.existsSync(excludePath) ? fs.readFileSync(excludePath, 'utf8') : '';
-  if (existing.split(/\r?\n/).some(line => line.trim() === pattern)) return false;
-  const prefix = existing.trim() ? existing.trimEnd() + '\n' : '';
-  fs.writeFileSync(excludePath, prefix + pattern + '\n', 'utf8');
-  return true;
-}
-
-/**
- * Write <worktree>/AGENTS.override.md: the project's AGENTS.md followed by the
- * repo's own AGENTS.md when it has one, so the override loses nothing. The
- * file is excluded from git through the repo's info/exclude, never a commit.
- */
-async function writeCodexBridge(project, worktree) {
-  const briefPath = path.join(project.root, 'AGENTS.md');
-  if (!fs.existsSync(briefPath) || !isDirectory(worktree)) return false;
-  let content = fs.readFileSync(briefPath, 'utf8').trimEnd() + '\n';
-  const repoAgents = path.join(worktree, 'AGENTS.md');
-  if (fs.existsSync(repoAgents)) {
-    content += `\n---\n\n<!-- The repository's own AGENTS.md follows. -->\n\n` + fs.readFileSync(repoAgents, 'utf8').trimEnd() + '\n';
-  }
-  const header = `<!-- Written by Switchboard for the project "${project.name}" (${project.root}).\n` +
-    `     Codex reads this file instead of AGENTS.md in this worktree. It is excluded from git and rewritten when the project brief changes. -->\n\n`;
-  const filePath = path.join(worktree, CODEX_BRIDGE_FILE);
-  const next = header + content;
-  const current = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : null;
-  if (current !== next) fs.writeFileSync(filePath, next, 'utf8');
-  await excludeFromGit(worktree, CODEX_BRIDGE_FILE);
-  return true;
-}
-
-function removeCodexBridge(worktree) {
-  try { fs.rmSync(path.join(worktree, CODEX_BRIDGE_FILE), { force: true }); } catch {}
-}
-
 /**
  * Save the brief from the project page. CLAUDE.md and AGENTS.md always carry
- * the same text, and every worktree's bridge file is a copy of AGENTS.md, so
- * one save writes all of them. The managed folder block is re-synced, which
+ * the same text in the project root. The managed folder block is re-synced, which
  * puts it back if the user deleted it. Returns the text as written.
  */
 async function saveBrief(projectId, content) {
@@ -865,8 +812,8 @@ function worktreeBranchFor(project, requested) {
 
 /**
  * Check a repository out under <project>/repos/<name> on the project's branch
- * and attach that checkout. The source repo itself is left alone apart from
- * the new branch and one line in its info/exclude.
+ * and attach that checkout. Git creates the branch and worktree registration;
+ * Switchboard writes no instruction files or ignore rules in the repository.
  */
 async function attachWorktree(project, spec, { notify = true } = {}) {
   const source = typeof spec?.path === 'string' ? path.resolve(spec.path.trim()) : '';
@@ -918,7 +865,6 @@ async function detachFolder(id, folderPath, opts = {}) {
   const folder = db.listProjectFolders(id).find(f => f.path === folderPath) || null;
   let worktreeRemoved = false;
   if (folder?.mode === 'worktree') {
-    removeCodexBridge(folder.path);
     if (opts.removeWorktree && fs.existsSync(folder.path)) {
       try {
         await git.worktreeRemove(folder.sourcePath, folder.path, { force: !!opts.force });
@@ -1321,15 +1267,15 @@ function recordScheduleRun(scheduleId, sessionId) {
 }
 
 /**
- * One-time import of the old file-based schedules. Each schedule-*.md becomes
+ * Import each old file-based schedule once. Each schedule-*.md becomes
  * a folder schedule on the folder it sits in. The file stays the source of
  * truth: the prompt tells the CLI to read it. Returns how many were imported.
  */
-const LEGACY_IMPORT_KEY = 'schedules_imported_from_files';
-
 function importLegacySchedules(scanned) {
-  if (db.getSetting(LEGACY_IMPORT_KEY)) return 0;
-  const existing = new Set(db.listSchedules().map(r => r.sourceFile).filter(Boolean));
+  // The old global completion flag could represent an empty or partial scan.
+  // Only individual files committed to the import ledger count as finished.
+  // Ledger entries outlive deleted schedules so retries cannot resurrect them.
+  const existing = new Set(db.getImportedScheduleFiles());
   let count = 0;
   for (const s of scanned || []) {
     if (!s.filePath || existing.has(s.filePath)) continue;
@@ -1338,7 +1284,7 @@ function importLegacySchedules(scanned) {
     const timing = preset
       ? { every: preset.every, atHour: preset.atHour ?? null, atMinute: preset.atMinute ?? null, weekday: preset.weekday ?? null, cron: null }
       : { every: 'cron', atHour: null, atMinute: null, weekday: null, cron: String(s.cron).trim() };
-    db.insertSchedule({
+    const imported = db.importLegacySchedule({
       id: crypto.randomUUID(),
       name: s.name || path.basename(s.filePath, '.md').replace(/^schedule-/, ''),
       projectId: null, trackId: null, cwd: s.projectPath,
@@ -1348,9 +1294,9 @@ function importLegacySchedules(scanned) {
       sourceFile: s.filePath,
       created: new Date().toISOString(),
     });
-    count++;
+    existing.add(s.filePath);
+    if (imported) count++;
   }
-  db.setSetting(LEGACY_IMPORT_KEY, { at: new Date().toISOString(), count });
   if (count) notifyRendererProjectsChanged();
   return count;
 }
@@ -1748,7 +1694,7 @@ module.exports = {
   folderGitStatus, folderGitInfo, projectGitInfo, projectGitDiff,
   syncProjectBrief, syncAllProjectBriefs, saveBrief, createProjectFile, addProjectFiles, listAddedFiles,
   launchContext, mergeAddDirs, worktreeParentFor,
-  CODEX_BRIDGE_FILE, PROJECT_FILES, ADDED_FILES_DIR,
+  PROJECT_FILES, ADDED_FILES_DIR,
   readProjectPlan, setPlanItem, appendPlanItem, recordPlanLink, adoptPlan,
   initPlanWatch, refreshPlanWatchers, stopPlanWatchers,
   listTemplates, templatesRoot, renderTemplateText, editPlanItem,

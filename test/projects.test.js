@@ -12,7 +12,7 @@ const haveGit = spawnSync('git', ['--version'], { encoding: 'utf8' }).status ===
 // An in-memory stand-in for the project tables in db.js. Same function names,
 // same return shapes, no SQLite (db.js needs Electron's ABI to load).
 function makeFakeDb({ global = {} } = {}) {
-  const rows = { projects: [], folders: [], tracks: [], schedules: [], settings: new Map(), meta: new Map() };
+  const rows = { projects: [], folders: [], tracks: [], schedules: [], scheduleImports: new Set(), settings: new Map(), meta: new Map() };
   const db = {
     rows,
     getSetting: (key) => (key === 'global' ? global : (rows.settings.get(key) ?? null)),
@@ -21,6 +21,13 @@ function makeFakeDb({ global = {} } = {}) {
     listSchedulesByProject: (projectId) => rows.schedules.filter(r => r.projectId === projectId).map(r => ({ ...r })),
     getSchedule: (id) => { const r = rows.schedules.find(x => x.id === id); return r ? { ...r } : null; },
     insertSchedule: (row) => { rows.schedules.push({ ...row, enabled: row.enabled === false ? 0 : 1, catchUp: row.catchUp ? 1 : 0 }); },
+    getImportedScheduleFiles: () => [...rows.scheduleImports],
+    importLegacySchedule: (row) => {
+      if (rows.scheduleImports.has(row.sourceFile)) return false;
+      db.insertSchedule(row);
+      rows.scheduleImports.add(row.sourceFile);
+      return true;
+    },
     updateSchedule: (id, patch) => {
       const r = rows.schedules.find(x => x.id === id);
       if (!r) return 0;
@@ -491,7 +498,7 @@ test('launchContext adds the project folder and every attached folder the cwd is
   } finally { t.cleanup(); }
 });
 
-test('attaching on a branch makes a worktree under repos/ with the Codex bridge file', { skip: !haveGit && 'git not installed' }, async () => {
+test('project instructions stay in the project root and leave worktree instructions and ignore rules untouched', { skip: !haveGit && 'git not installed' }, async () => {
   const t = setup();
   const repo = makeRepo();
   const other = makeRepo('switchboard-repo-other-');
@@ -502,8 +509,11 @@ test('attaching on a branch makes a worktree under repos/ with the Codex bridge 
     } finally { rm(plain); }
 
     fs.writeFileSync(path.join(repo, 'AGENTS.md'), '# Repo rules\nBe tidy.\n');
-    gitIn(repo, 'add', 'AGENTS.md');
+    const userOverride = '# User override\nKeep these instructions.\n';
+    fs.writeFileSync(path.join(repo, 'AGENTS.override.md'), userOverride);
+    gitIn(repo, 'add', 'AGENTS.md', 'AGENTS.override.md');
     gitIn(repo, 'commit', '-q', '-m', 'agents');
+    const excludeBefore = fs.readFileSync(path.join(repo, '.git', 'info', 'exclude'), 'utf8');
 
     const created = await projects.createProject({
       name: 'Feature X',
@@ -523,15 +533,23 @@ test('attaching on a branch makes a worktree under repos/ with the Codex bridge 
     assert.equal(gitIn(wt.path, 'rev-parse', '--abbrev-ref', 'HEAD'), 'feature-x');
     assert.equal(gitIn(repo, 'rev-parse', '--abbrev-ref', 'HEAD'), 'main', 'source repo untouched');
 
-    // The brief lists the worktree path, and the bridge carries brief + repo rules.
+    // Only the project root gets the generated brief.
     const brief = fs.readFileSync(path.join(project.root, 'CLAUDE.md'), 'utf8');
     assert.ok(brief.includes(`- ${wt.path}`));
-    const bridge = fs.readFileSync(path.join(wt.path, projects.CODEX_BRIDGE_FILE), 'utf8');
-    assert.ok(bridge.includes('# Feature X'), 'project brief');
-    assert.ok(bridge.includes('Be tidy.'), 'repo AGENTS.md appended');
-    const exclude = fs.readFileSync(path.join(repo, '.git', 'info', 'exclude'), 'utf8');
-    assert.ok(exclude.split('\n').includes(projects.CODEX_BRIDGE_FILE), 'excluded from git');
-    assert.equal(gitIn(wt.path, 'status', '--porcelain'), '', 'bridge file does not show as untracked');
+    assert.equal(fs.readFileSync(path.join(project.root, 'AGENTS.md'), 'utf8'), brief);
+    assert.equal(fs.readFileSync(path.join(wt.path, 'AGENTS.override.md'), 'utf8'), userOverride);
+    assert.ok(!fs.existsSync(path.join(wt2.path, 'AGENTS.override.md')), 'no generated override in a worktree');
+    for (const file of ['CLAUDE.md', 'AGENTS.md']) {
+      assert.ok(!fs.existsSync(path.join(wt2.path, file)), 'no generated instructions in a worktree');
+    }
+    await projects.saveBrief(project.id, '# Updated project brief\n');
+    await projects.syncAllProjectBriefs();
+    assert.equal(fs.readFileSync(path.join(wt.path, 'AGENTS.override.md'), 'utf8'), userOverride, 'saving and startup preserve overrides');
+    assert.equal(fs.readFileSync(path.join(wt.path, 'AGENTS.md'), 'utf8'), '# Repo rules\nBe tidy.\n');
+    assert.ok(!fs.existsSync(path.join(wt2.path, 'AGENTS.override.md')));
+    assert.equal(fs.readFileSync(path.join(repo, '.git', 'info', 'exclude'), 'utf8'), excludeBefore);
+    assert.equal(gitIn(wt.path, 'status', '--porcelain'), '', 'the worktree remains clean');
+    assert.equal(gitIn(repo, 'status', '--porcelain'), '', 'the source checkout remains clean');
 
     assert.match((await projects.attachFolder(project.id, { path: repo, mode: 'worktree' })).error, /already attached/);
 
@@ -556,10 +574,11 @@ test('attaching on a branch makes a worktree under repos/ with the Codex bridge 
     // Marking done reports the remaining worktree; detaching without removal keeps it on disk.
     const done = projects.updateProject(project.id, { status: 'done' });
     assert.deepEqual(done.worktrees, [wt2.path]);
+    fs.writeFileSync(path.join(wt2.path, 'AGENTS.override.md'), userOverride);
     const kept = await projects.detachFolder(project.id, wt2.path, {});
     assert.equal(kept.worktreeRemoved, false);
     assert.ok(fs.existsSync(wt2.path), 'kept on disk');
-    assert.ok(!fs.existsSync(path.join(wt2.path, projects.CODEX_BRIDGE_FILE)), 'bridge file removed');
+    assert.equal(fs.readFileSync(path.join(wt2.path, 'AGENTS.override.md'), 'utf8'), userOverride, 'detaching preserves user files');
     gitIn(other, 'worktree', 'remove', '--force', wt2.path);
   } finally {
     t.cleanup();
@@ -1153,5 +1172,33 @@ test('importLegacySchedules: one folder schedule per file, pointing at the file,
     assert.equal(hourly.cron, null);
     assert.equal(projects.importLegacySchedules(scanned), 0, 'never twice');
     assert.equal(projects.listSchedules().length, 2);
+    assert.equal(projects.deleteSchedule(hn.id).ok, true);
+    assert.equal(projects.importLegacySchedules(scanned), 0, 'deleted schedules do not return');
+    assert.equal(projects.listSchedules().length, 1);
+  } finally { t.cleanup(); }
+});
+
+test('legacy schedules retry after empty and partial scans without repeating successful imports', () => {
+  const t = setup();
+  try {
+    // A build that used the global flag may have recorded an incomplete scan.
+    t.db.setSetting('schedules_imported_from_files', { at: '2026-09-01T00:00:00Z', count: 0 });
+    assert.equal(projects.importLegacySchedules([]), 0);
+    const offline = path.join(t.root, 'offline');
+    const scanned = [
+      { filePath: path.join(t.root, 'schedule-ready.md'), projectPath: t.root, cron: '0 * * * *' },
+      { filePath: path.join(offline, 'schedule-later.md'), projectPath: offline, cron: '0 9 * * *' },
+    ];
+    assert.equal(projects.importLegacySchedules([...scanned, scanned[0]]), 1, 'duplicates in one scan import once');
+    const ready = projects.listSchedules()[0];
+    projects.updateSchedule(ready.id, { name: 'Edited task', enabled: false });
+    fs.mkdirSync(offline);
+    // The next launch discovers the previously unavailable folder.
+    projects.init({ db: t.db, log: { info() {}, error() {} } });
+    assert.equal(projects.importLegacySchedules(scanned), 1);
+    assert.equal(projects.listSchedules().length, 2);
+    assert.equal(t.db.getSchedule(ready.id).name, 'Edited task');
+    assert.equal(t.db.getSchedule(ready.id).enabled, 0);
+    assert.equal(projects.importLegacySchedules(scanned), 0);
   } finally { t.cleanup(); }
 });

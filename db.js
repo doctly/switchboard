@@ -258,6 +258,20 @@ db.exec(`
   )
 `);
 db.exec('CREATE INDEX IF NOT EXISTS idx_schedules_project ON schedules(projectId)');
+// Record successful imports separately from schedule rows: deleting an
+// imported task must not make its source file eligible for import again.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS legacy_schedule_imports (
+    sourceFile TEXT PRIMARY KEY,
+    importedAt TEXT NOT NULL
+  )
+`);
+// Adopt rows from builds that only stored a global import-completed flag.
+// That flag cannot tell us which files an incomplete scan missed.
+db.exec(`
+  INSERT OR IGNORE INTO legacy_schedule_imports (sourceFile, importedAt)
+  SELECT sourceFile, created FROM schedules WHERE sourceFile IS NOT NULL AND sourceFile != ''
+`);
 {
   const cols = new Set(db.prepare('PRAGMA table_info(session_meta)').all().map(c => c.name));
   if (!cols.has('projectId')) db.exec('ALTER TABLE session_meta ADD COLUMN projectId TEXT');
@@ -442,6 +456,8 @@ const stmts = {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   scheduleDelete: db.prepare('DELETE FROM schedules WHERE id = ?'),
+  scheduleImportList: db.prepare('SELECT sourceFile FROM legacy_schedule_imports'),
+  scheduleImportRecord: db.prepare('INSERT OR IGNORE INTO legacy_schedule_imports (sourceFile, importedAt) VALUES (?, ?)'),
   schedulesDeleteByProject: db.prepare('DELETE FROM schedules WHERE projectId = ?'),
   schedulesClearTrack: db.prepare('UPDATE schedules SET trackId = NULL WHERE trackId = ?'),
   scheduleRekeySession: db.prepare('UPDATE schedules SET lastSessionId = ? WHERE lastSessionId = ?'),
@@ -805,6 +821,20 @@ function insertSchedule(row) {
   );
 }
 
+function getImportedScheduleFiles() {
+  return stmts.scheduleImportList.all().map(row => row.sourceFile);
+}
+
+// Both writes commit together. A failed schedule insert leaves the file
+// eligible for retry; a repeated scan cannot create a second schedule.
+const importLegacySchedule = db.transaction((row) => {
+  if (!row.sourceFile) throw new Error('An imported schedule needs a source file');
+  const recorded = stmts.scheduleImportRecord.run(row.sourceFile, row.created);
+  if (!recorded.changes) return false;
+  insertSchedule(row);
+  return true;
+});
+
 function updateSchedule(id, patch) {
   const clean = { ...patch };
   if ('enabled' in clean) clean.enabled = clean.enabled ? 1 : 0;
@@ -813,6 +843,8 @@ function updateSchedule(id, patch) {
 }
 
 const deleteScheduleTx = db.transaction((id) => {
+  const row = stmts.scheduleGet.get(id);
+  if (row?.sourceFile) stmts.scheduleImportRecord.run(row.sourceFile, row.created);
   stmts.scheduleLinkClear.run(id);
   stmts.scheduleDelete.run(id);
 });
@@ -883,6 +915,7 @@ module.exports = {
   listProjectFolders, listAllProjectFolders, upsertProjectFolder, deleteProjectFolder,
   listTracks, listAllTracks, getTrack, insertTrack, updateTrack, deleteTrack,
   listSchedules, listSchedulesByProject, getSchedule, insertSchedule, updateSchedule, deleteSchedule,
+  getImportedScheduleFiles, importLegacySchedule,
   recordScheduleRun, rekeyScheduleSession,
   setSessionAssignment, copySessionAssignment, moveSessionAssignment,
   insertPlanLink, listPlanLinks, rekeyPlanLinks,

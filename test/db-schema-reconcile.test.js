@@ -45,6 +45,49 @@ function inspectDb(dataDir) {
 
 const PROJECT_TABLES = ['projects', 'project_folders', 'tracks'];
 
+test('legacy schedule imports survive restarts and deletion, and failed inserts remain retryable', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-schedule-imports-'));
+  try {
+    const r = runInElectronNode(`
+      const assert = require('node:assert/strict');
+      let db = require('./db');
+      const row = { id: 'legacy', name: 'Existing task', cwd: '/project',
+        prompt: 'Do the task', every: 'hour', created: '2026-09-01T00:00:00Z',
+        sourceFile: '/project/schedule-example.md' };
+      // Simulate a schedule imported before the per-file ledger existed.
+      db.insertSchedule(row);
+      db.setSetting('schedules_imported_from_files', { at: row.created, count: 1 });
+      const reopen = () => {
+        db.closeDb();
+        delete require.cache[require.resolve('./db')];
+        db = require('./db');
+      };
+      reopen();
+      assert.deepEqual(db.getImportedScheduleFiles(), [row.sourceFile]);
+      db.updateSchedule(row.id, { name: 'User edit', enabled: false });
+      assert.equal(db.importLegacySchedule({ ...row, id: 'duplicate' }), false);
+      assert.equal(db.getSchedule(row.id).name, 'User edit');
+      assert.equal(db.getSchedule(row.id).enabled, 0);
+      db.deleteSchedule(row.id);
+      reopen();
+      assert.equal(db.importLegacySchedule(row), false, 'a deleted task stays deleted');
+      assert.deepEqual(db.listSchedules(), []);
+
+      const later = { ...row, id: 'later', sourceFile: '/project/schedule-later.md' };
+      assert.throws(() => db.importLegacySchedule({ ...later, prompt: null }));
+      assert.ok(!db.getImportedScheduleFiles().includes(later.sourceFile), 'failed insert rolls back the ledger');
+      reopen();
+      assert.equal(db.importLegacySchedule(later), true, 'failed source can be retried');
+      reopen();
+      assert.equal(db.importLegacySchedule(later), false);
+      assert.equal(db.listSchedules().length, 1);
+      assert.equal(db.getSchedule(later.id).sourceFile, later.sourceFile);
+      db.closeDb();
+    `, dir);
+    assert.equal(r.status, 0, r.stderr);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('identical search entries perform no database writes, including after reopening', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-search-noop-'));
   try {

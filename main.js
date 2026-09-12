@@ -2109,9 +2109,9 @@ function startScheduleTicker() {
     createWindow();
     startProjectsWatcher();
     startHarnessWatchers();
-    // Scheduled tasks: once the old file-based ones are imported, tick once a
-    // minute and tell the renderer which schedules are due. The renderer
-    // starts them as ordinary sessions (launchScheduledSession).
+    // Retry legacy imports each launch; successful files are remembered in
+    // the DB, including deleted tasks. Missing folders can be picked up later.
+    // Then tick once a minute and launch due tasks through the renderer.
     try {
       const imported = projects.importLegacySchedules(scanSchedules(log));
       if (imported) log.info(`[schedule] Imported ${imported} schedule file(s) as folder schedules`);
