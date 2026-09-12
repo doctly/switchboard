@@ -360,10 +360,27 @@ function destroyCurrentTab(state) {
   }
 }
 
-async function openFileInPanel(sessionId, filePath) {
-  const result = await window.api.readFileForPanel(filePath);
-  if (!result.ok) return;
-  openFileTab(sessionId, { ...result, filePath });
+async function openFileInPanel(sessionId, filePath, location = {}) {
+  const state = getSessionState(sessionId);
+  if (state.currentTab?.type === 'diff' && !state.currentTab.resolved) {
+    alert('Resolve or close the current diff before opening a file.');
+    return;
+  }
+  const request = state.fileOpenRequest = (state.fileOpenRequest || 0) + 1;
+  // Clicking another reference to the same file keeps its unsaved edits.
+  if (currentPanelSessionId === sessionId && state.currentTab?.type === 'file' && fpViewerPanel.filePath === filePath) {
+    if (location.line) fpViewerPanel.goToLocation(location.line, location.column);
+    showPanel(state);
+    return;
+  }
+  const previousTab = state.currentTab;
+  let result;
+  try { result = await window.api.readFileForPanel(filePath); } catch (err) { result = { ok: false, error: err.message }; }
+  const effectiveSessionId = sessionIdForState(state, sessionId);
+  if (!effectiveSessionId || currentPanelSessionId !== effectiveSessionId || state.fileOpenRequest !== request || state.currentTab !== previousTab) return;
+  if (await openUnsupportedFile(result, filePath)) return;
+  if (!result?.ok) { alert(result?.error || 'Unable to open the file.'); return; }
+  openFileTab(effectiveSessionId, { ...result, filePath, line: location.line, column: location.column });
 }
 
 async function openProjectFile(sessionId, relativePath) {
@@ -384,6 +401,7 @@ async function openProjectFile(sessionId, relativePath) {
   if (state.projectPath !== requestedRoot || state.selectedPath !== relativePath) return;
   const effectiveSessionId = sessionIdForState(state, sessionId);
   if (!effectiveSessionId) return;
+  if (await openUnsupportedFile(result, projectEntryPath(requestedRoot, relativePath), requestedRoot)) return;
   if (!result.ok) {
     state.selectedPath = '';
     state.browserError = result.error || 'Unable to preview file';
@@ -874,11 +892,11 @@ function appendTreeEntries(sessionId, state, container, entries, depth) {
 
     row.classList.add('file');
     row.classList.toggle('selected', state.selectedPath === entry.relativePath);
-    row.classList.toggle('preview-unavailable', !entry.viewable);
-    row.title = entry.viewable ? entry.relativePath : 'This file type cannot be previewed';
+    row.classList.toggle('preview-unavailable', entry.type !== 'file');
+    row.title = entry.viewable ? entry.relativePath : entry.type === 'file' ? entry.relativePath + '\nOpen in default application' : 'This item cannot be opened';
     row.innerHTML = '<span class="project-file-tree-spacer"></span><span class="project-file-tree-icon">📄</span><span class="project-file-tree-name"></span>';
     row.querySelector('.project-file-tree-name').textContent = entry.name;
-    if (entry.viewable) row.addEventListener('click', () => openProjectFile(sessionId, entry.relativePath));
+    if (entry.type === 'file') row.addEventListener('click', () => openProjectFile(sessionId, entry.relativePath));
     container.appendChild(row);
   }
 }

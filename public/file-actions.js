@@ -31,6 +31,19 @@ function remapFileActionRelative(root, relativePath, change) {
   return mapped === original ? relativePath : mapped === null ? null : mapped.slice(projectEntryPath(root).length + 1);
 }
 
+// A preview read stays side-effect free; only user-initiated open flows call
+// this fallback after their stale-request checks. Preserve the current editor.
+async function openUnsupportedFile(result, filePath, projectRoot) {
+  if (result?.code !== 'PREVIEW_UNAVAILABLE') return false;
+  try {
+    const opened = await window.api.openFileExternally(filePath, projectRoot);
+    if (!opened?.ok) throw new Error(opened?.error || 'Could not open the file in its default application.');
+  } catch (error) {
+    alert(error.message || 'Could not open the file in its default application.');
+  }
+  return true;
+}
+
 function fileEntryMenuItems(root, entry, open) {
   const manager = window.api.platform === 'darwin' ? 'Finder' : window.api.platform === 'win32' ? 'Explorer' : 'File Manager';
   const trash = window.api.platform === 'win32' ? 'Recycle Bin' : 'Trash';
@@ -60,7 +73,7 @@ function fileEntryMenuItems(root, entry, open) {
     { head: entry.name },
     entry.type === 'directory'
       ? { label: 'Open folder', icon: PICONS.folder(14), onClick: run('open-folder') }
-      : { label: 'Open in editor / preview', icon: PICONS.file(14), disabled: !entry.viewable, onClick: open },
+      : { label: entry.viewable ? 'Open in editor / preview' : 'Open in default application', icon: PICONS.file(14), disabled: entry.type !== 'file', onClick: open },
     { label: 'Reveal in ' + manager, icon: PICONS.open(14), onClick: run('reveal') },
     { sep: true },
     { label: 'Copy path', onClick: () => window.api.writeClipboard(projectEntryPath(root, entry.relativePath)) },

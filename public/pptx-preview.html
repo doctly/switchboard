@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data: blob:; font-src data: blob:; media-src data: blob:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PowerPoint preview</title>
+  <link rel="stylesheet" href="pptx-preview.css">
+  <script src="pptx-preview-bundle.js" defer></script>
+</head>
+<body>
+  <nav aria-label="Presentation controls" hidden>
+    <button id="previous" type="button" title="Previous slide" aria-label="Previous slide">←</button>
+    <label>Slide <input id="slide" type="number" min="1" value="1" aria-label="Go to slide"></label>
+    <span id="count"></span>
+    <button id="next" type="button" title="Next slide" aria-label="Next slide">→</button>
+    <select id="zoom" aria-label="Zoom">
+      <option value="100">Fit width</option>
+      <option value="125">125%</option>
+      <option value="150">150%</option>
+      <option value="200">200%</option>
+    </select>
+  </nav>
+  <p id="status" role="status">Loading presentation…</p>
+  <main id="scroll" tabindex="0" aria-label="Presentation slides"><div id="slides"></div></main>
+</body>
+</html>

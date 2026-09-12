@@ -10,7 +10,7 @@ test('returns the final assistant text and ignores later tool-only records', () 
     { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Read' }] } },
   ];
 
-  assert.equal(lastAssistantMessage(entries), 'Final answer');
+  assert.deepEqual(lastAssistantMessage(entries), { text: 'Final answer', truncated: false });
 });
 
 test('joins text blocks while excluding thinking and tool calls', () => {
@@ -24,11 +24,11 @@ test('joins text blocks while excluding thinking and tool calls', () => {
     ] },
   }];
 
-  assert.equal(lastAssistantMessage(entries), 'First paragraph\n\nSecond paragraph');
+  assert.deepEqual(lastAssistantMessage(entries), { text: 'First paragraph\n\nSecond paragraph', truncated: false });
 });
 
 test('supports string content, empty input, and bounded previews', () => {
-  assert.equal(lastAssistantMessage(null), '');
-  assert.equal(lastAssistantMessage([{ type: 'assistant', message: { content: '  hello  ' } }]), 'hello');
-  assert.equal(lastAssistantMessage([{ type: 'assistant', message: { content: '123456' } }], 4), '1234\u2026');
+  assert.deepEqual(lastAssistantMessage(null), { text: '', truncated: false });
+  assert.deepEqual(lastAssistantMessage([{ type: 'assistant', message: { content: '  hello  ' } }]), { text: 'hello', truncated: false });
+  assert.deepEqual(lastAssistantMessage([{ type: 'assistant', message: { content: '123456' } }], 4), { text: '1234', truncated: true });
 });

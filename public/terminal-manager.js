@@ -399,6 +399,20 @@ function createTerminalEntry(session) {
   container.className = 'terminal-container';
   terminalsEl.appendChild(container);
 
+  const linkTooltip = TerminalFileLinks.createTooltip(container);
+  const linkActions = {
+    resolve: references => window.api.resolveTerminalFiles(references),
+    showTooltip: linkTooltip.show,
+    hideTooltip: linkTooltip.hide,
+    openFile: (...args) => openFileInPanel(...args),
+    openExternal: uri => window.api.openExternal(uri),
+  };
+  // Read the entry at click time: Codex replaces a provisional session ID
+  // after launch, and a fork can re-key an existing terminal too.
+  const linkHandler = TerminalFileLinks.createLinkHandler({ getSession: () => entry.session, ...linkActions });
+  const activateLink = (event, uri) => linkHandler.activate(event, uri)
+    .catch(err => console.warn('[terminal] Could not open link:', err));
+
   const terminal = new Terminal({
     fontSize: 12,
     fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
@@ -415,13 +429,9 @@ function createTerminalEntry(session) {
     // in place. Windows/Linux get the same escape hatch via Shift, which needs no flag.
     macOptionClickForcesSelection: true,
     linkHandler: {
-      activate: (_event, uri) => {
-        if (uri.startsWith('file://') && typeof openFileInPanel === 'function') {
-          try { openFileInPanel(sessionId, decodeURIComponent(new URL(uri).pathname)); } catch {}
-        } else {
-          window.api.openExternal(uri);
-        }
-      },
+      activate: activateLink,
+      hover: linkHandler.hover,
+      leave: linkHandler.leave,
       allowNonHttpProtocols: true,
     },
   });
@@ -446,13 +456,7 @@ function createTerminalEntry(session) {
 
   const fitAddon = new FitAddon.FitAddon();
   terminal.loadAddon(fitAddon);
-  terminal.loadAddon(new WebLinksAddon.WebLinksAddon((_event, url) => {
-    if (url.startsWith('file://') && typeof openFileInPanel === 'function') {
-      try { openFileInPanel(sessionId, decodeURIComponent(new URL(url).pathname)); } catch {}
-    } else {
-      window.api.openExternal(url);
-    }
-  }));
+  terminal.loadAddon(new WebLinksAddon.WebLinksAddon(activateLink, { hover: linkHandler.hover, leave: linkHandler.leave }));
   const searchAddon = new SearchAddon.SearchAddon();
   terminal.loadAddon(searchAddon);
   terminal.loadAddon(new UnicodeGraphemesAddon.UnicodeGraphemesAddon());
@@ -515,6 +519,27 @@ function createTerminalEntry(session) {
 
   const entry = { terminal, element: container, fitAddon, searchAddon, openSearchBar, closeSearchBar, session, closed: false };
   openSessions.set(sessionId, entry);
+  // OSC 8 and web links retain precedence over detected filesystem paths.
+  const fileLinks = TerminalFileLinks.createFileLinkProvider(terminal, {
+    getSession: () => entry.session, ...linkActions,
+  });
+  const fileLinkRegistration = terminal.registerLinkProvider(fileLinks);
+  const linkScroll = terminal.onScroll(linkHandler.leave);
+  const linkResize = terminal.onResize(linkHandler.leave);
+  container.addEventListener('mouseleave', linkHandler.leave);
+  container.addEventListener('wheel', linkHandler.leave, { passive: true });
+  window.addEventListener('blur', linkHandler.leave);
+  terminal.loadAddon({
+    activate() {},
+    dispose() {
+      fileLinks.dispose(); fileLinkRegistration.dispose();
+      linkScroll.dispose(); linkResize.dispose();
+      container.removeEventListener('mouseleave', linkHandler.leave);
+      container.removeEventListener('wheel', linkHandler.leave);
+      window.removeEventListener('blur', linkHandler.leave);
+      linkHandler.dispose(); linkTooltip.dispose();
+    },
+  });
   restoreTerminalHistory(entry);
 
   // Wire up IPC (use entry.session.sessionId so fork re-keying works)

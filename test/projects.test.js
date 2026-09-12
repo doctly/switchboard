@@ -12,10 +12,29 @@ const haveGit = spawnSync('git', ['--version'], { encoding: 'utf8' }).status ===
 // An in-memory stand-in for the project tables in db.js. Same function names,
 // same return shapes, no SQLite (db.js needs Electron's ABI to load).
 function makeFakeDb({ global = {} } = {}) {
-  const rows = { projects: [], folders: [], tracks: [], meta: new Map() };
+  const rows = { projects: [], folders: [], tracks: [], schedules: [], settings: new Map(), meta: new Map() };
   const db = {
     rows,
-    getSetting: (key) => (key === 'global' ? global : null),
+    getSetting: (key) => (key === 'global' ? global : (rows.settings.get(key) ?? null)),
+    setSetting: (key, value) => { rows.settings.set(key, value); },
+    listSchedules: () => rows.schedules.map(r => ({ ...r })),
+    listSchedulesByProject: (projectId) => rows.schedules.filter(r => r.projectId === projectId).map(r => ({ ...r })),
+    getSchedule: (id) => { const r = rows.schedules.find(x => x.id === id); return r ? { ...r } : null; },
+    insertSchedule: (row) => { rows.schedules.push({ ...row, enabled: row.enabled === false ? 0 : 1, catchUp: row.catchUp ? 1 : 0 }); },
+    updateSchedule: (id, patch) => {
+      const r = rows.schedules.find(x => x.id === id);
+      if (!r) return 0;
+      for (const key of ['name', 'trackId', 'cwd', 'prompt', 'every', 'atHour', 'atMinute', 'weekday', 'cron', 'cli', 'enabled', 'catchUp', 'lastRunAt', 'lastSessionId']) {
+        if (key in patch) r[key] = (key === 'enabled' || key === 'catchUp') ? (patch[key] ? 1 : 0) : patch[key];
+      }
+      return 1;
+    },
+    deleteSchedule: (id) => { rows.schedules = rows.schedules.filter(x => x.id !== id); },
+    recordScheduleRun: (scheduleId, sessionId, at) => {
+      const r = rows.schedules.find(x => x.id === scheduleId);
+      if (r) { r.lastRunAt = at; r.lastSessionId = sessionId; }
+      rows.meta.set(sessionId, { ...(rows.meta.get(sessionId) || {}), scheduleId, scheduledAt: at });
+    },
     listProjects: () => rows.projects.map(r => ({ ...r })),
     getProject: (id) => rows.projects.find(r => r.id === id) || null,
     getProjectBySlug: (slug) => rows.projects.find(r => r.slug === slug) || null,
@@ -55,6 +74,7 @@ function makeFakeDb({ global = {} } = {}) {
     deleteTrack: (id) => {
       rows.tracks = rows.tracks.filter(t => t.id !== id);
       for (const [sid, m] of rows.meta) if (m.trackId === id) rows.meta.set(sid, { ...m, trackId: null });
+      for (const r of rows.schedules) if (r.trackId === id) r.trackId = null;
     },
     setSessionAssignment: (sessionId, projectId, trackId) => { rows.meta.set(sessionId, { projectId, trackId }); },
     insertPlanLink: (row) => { rows.links = rows.links || []; rows.links.push({ ...row }); },
@@ -977,4 +997,161 @@ test('a new worktree gets the .env files the caller picked', { skip: !haveGit &&
 
     gitIn(repo, 'worktree', 'remove', '--force', wt.path);
   } finally { rm(repo); t.cleanup(); }
+});
+
+// --- Scheduled tasks ---
+
+test('createSchedule: a project schedule lives under its track, a folder schedule under its cwd', async () => {
+  const t = setup();
+  try {
+    const { project } = await projects.createProject({ name: 'Sched' });
+    const { track } = projects.createTrack(project.id, { name: 'Digest' });
+    const a = projects.createSchedule({ name: 'Morning', prompt: 'do it', projectId: project.id, trackId: track.id, every: 'day', atHour: 9, atMinute: 0 });
+    assert.equal(a.error, undefined);
+    assert.equal(a.schedule.trackId, track.id);
+    assert.equal(a.schedule.cwd, null, 'project schedules store no cwd');
+    assert.equal(a.schedule.enabled, true);
+    const b = projects.createSchedule({ name: 'Folder', prompt: 'do it', cwd: t.root, every: '15m' });
+    assert.equal(b.error, undefined);
+    assert.equal(b.schedule.projectId, null);
+    assert.equal(b.schedule.cwd, t.root);
+    // Only the project's own schedules ride on its node.
+    const node = projects.buildProjectTree(false).projects.find(p => p.id === project.id);
+    assert.deepEqual(node.schedules.map(s => s.name), ['Morning']);
+    assert.equal(projects.listSchedules().length, 2);
+  } finally { t.cleanup(); }
+});
+
+test('createSchedule rejects what it cannot run', async () => {
+  const t = setup();
+  try {
+    const { project } = await projects.createProject({ name: 'Sched' });
+    assert.match(projects.createSchedule({ prompt: 'x', projectId: project.id, every: 'day' }).error, /name/i);
+    assert.match(projects.createSchedule({ name: 'x', projectId: project.id, every: 'day' }).error, /prompt/i);
+    assert.match(projects.createSchedule({ name: 'x', prompt: 'x', projectId: project.id, every: 'fortnight' }).error, /when/i);
+    assert.match(projects.createSchedule({ name: 'x', prompt: 'x', projectId: project.id, every: 'day', atHour: 25 }).error, /atHour/);
+    assert.match(projects.createSchedule({ name: 'x', prompt: 'x', projectId: project.id, trackId: 'nope', every: 'day' }).error, /Track/);
+    assert.match(projects.createSchedule({ name: 'x', prompt: 'x', projectId: 'nope', every: 'day' }).error, /Project/);
+    assert.match(projects.createSchedule({ name: 'x', prompt: 'x', every: 'day' }).error, /folder/i);
+    assert.match(projects.createSchedule({ name: 'x', prompt: 'x', cwd: '/definitely/not/here', every: 'day' }).error, /Not a directory/);
+  } finally { t.cleanup(); }
+});
+
+test('updateSchedule: timing fields are replaced as a set, a folder schedule has no track, cron is one-way', async () => {
+  const t = setup();
+  try {
+    const { project } = await projects.createProject({ name: 'Sched' });
+    const { schedule } = projects.createSchedule({ name: 'Weekly', prompt: 'x', projectId: project.id, every: 'week', atHour: 10, atMinute: 30, weekday: 5 });
+    const moved = projects.updateSchedule(schedule.id, { every: '15m' });
+    assert.equal(moved.schedule.every, '15m');
+    assert.equal(moved.schedule.atHour, null, 'old timing does not linger');
+    assert.equal(moved.schedule.weekday, null);
+    const folder = projects.createSchedule({ name: 'F', prompt: 'x', cwd: t.root, every: 'hour' });
+    assert.match(projects.updateSchedule(folder.schedule.id, { trackId: 'any' }).error, /folder schedule/);
+    // An imported cron keeps its string until a preset replaces it.
+    t.db.rows.schedules.push({ id: 'legacy', name: 'L', projectId: null, trackId: null, cwd: t.root, prompt: 'x', every: 'cron', cron: '*/5 * * * *', enabled: 1, catchUp: 0, created: '2026-09-01T00:00:00.000Z' });
+    assert.equal(projects.updateSchedule('legacy', { name: 'Legacy' }).schedule.cron, '*/5 * * * *');
+    const replaced = projects.updateSchedule('legacy', { every: 'hour', atMinute: 5 });
+    assert.equal(replaced.schedule.cron, null);
+    assert.equal(replaced.schedule.every, 'hour');
+    assert.equal(projects.updateSchedule('missing', { name: 'x' }).error, 'Schedule not found');
+    const before = t.notifications();
+    projects.updateSchedule(schedule.id, {});
+    assert.equal(t.notifications(), before, 'an empty patch is a no-op');
+  } finally { t.cleanup(); }
+});
+
+test('dueSchedules: fires at the minute, skips off, done project, done track, and a run still going', async () => {
+  const t = setup();
+  try {
+    const { project } = await projects.createProject({ name: 'Sched' });
+    const { track } = projects.createTrack(project.id, { name: 'T' });
+    const mk = (name, extra) => projects.createSchedule({ name, prompt: 'x', projectId: project.id, every: 'day', atHour: 9, atMinute: 0, ...extra }).schedule;
+    const general = mk('general');
+    const inTrack = mk('in track', { trackId: track.id });
+    const off = mk('off', { enabled: false });
+    const nine = new Date(2026, 8, 9, 9, 0, 0);
+    const names = (ids) => ids.map(id => t.db.getSchedule(id).name).sort();
+    assert.deepEqual(names(projects.dueSchedules(nine)), ['general', 'in track']);
+    assert.deepEqual(projects.dueSchedules(new Date(2026, 8, 9, 9, 1, 0)), [], 'not at 9:01');
+    assert.equal(projects.schedulePausedReason(t.db.getSchedule(off.id)), 'off');
+    projects.updateTrack(track.id, { status: 'done' });
+    assert.deepEqual(names(projects.dueSchedules(nine)), ['general'], 'a done track pauses its schedule');
+    assert.equal(projects.schedulePausedReason(t.db.getSchedule(inTrack.id)), 'track done');
+    projects.updateTrack(track.id, { status: 'active' });
+    projects.updateProject(project.id, { status: 'done' });
+    assert.deepEqual(projects.dueSchedules(nine), [], 'a done project pauses all of them');
+    projects.updateProject(project.id, { status: 'active' });
+    // Reopening resumed them with nothing stored.
+    assert.deepEqual(names(projects.dueSchedules(nine)), ['general', 'in track']);
+    projects.recordScheduleRun(general.id, 'sess-1');
+    assert.deepEqual(names(projects.dueSchedules(nine, (id) => id === 'sess-1')), ['in track'], 'still working: skipped');
+    assert.deepEqual(names(projects.dueSchedules(nine, () => false)), ['general', 'in track'], 'finished: fires again');
+    assert.deepEqual(t.db.rows.meta.get('sess-1').scheduleId, general.id, 'the session remembers its schedule');
+  } finally { t.cleanup(); }
+});
+
+test('resolveScheduleLaunch runs where the track starts, and a folder schedule in its folder', async () => {
+  const t = setup();
+  try {
+    const sub = path.join(t.root, 'sub');
+    fs.mkdirSync(sub);
+    const { project } = await projects.createProject({ name: 'Sched' });
+    const { track } = projects.createTrack(project.id, { name: 'T', cwd: path.join(project.root), cli: 'codex' });
+    const s = projects.createSchedule({ name: 'x', prompt: 'go', projectId: project.id, trackId: track.id, every: 'hour' }).schedule;
+    const launch = projects.resolveScheduleLaunch(s.id);
+    assert.equal(launch.target.projectPath, project.root);
+    assert.equal(launch.target.projectId, project.id);
+    assert.equal(launch.target.trackId, track.id);
+    assert.equal(launch.runtime, 'codex', 'the track CLI unless the schedule names one');
+    const own = projects.createSchedule({ name: 'y', prompt: 'go', projectId: project.id, trackId: track.id, every: 'hour', cli: 'claude' }).schedule;
+    assert.equal(projects.resolveScheduleLaunch(own.id).runtime, 'claude');
+    const f = projects.createSchedule({ name: 'f', prompt: 'go', cwd: sub, every: 'hour' }).schedule;
+    const fl = projects.resolveScheduleLaunch(f.id);
+    assert.equal(fl.target.projectPath, sub);
+    assert.equal(fl.target.projectId, null);
+    assert.equal(projects.resolveScheduleLaunch('missing').error, 'Schedule not found');
+  } finally { t.cleanup(); }
+});
+
+test('deleting a track moves its schedules to General; deleting the project removes them', async () => {
+  const t = setup();
+  try {
+    const { project } = await projects.createProject({ name: 'Sched' });
+    const { track } = projects.createTrack(project.id, { name: 'T' });
+    const s = projects.createSchedule({ name: 'x', prompt: 'go', projectId: project.id, trackId: track.id, every: 'hour' }).schedule;
+    projects.deleteTrack(track.id);
+    assert.equal(t.db.getSchedule(s.id).trackId, null);
+    assert.equal(projects.deleteSchedule('missing').error, 'Schedule not found');
+    assert.equal(projects.deleteSchedule(s.id).ok, true);
+    assert.equal(t.db.getSchedule(s.id), null);
+  } finally { t.cleanup(); }
+});
+
+test('importLegacySchedules: one folder schedule per file, pointing at the file, once', async () => {
+  const t = setup();
+  try {
+    const scanned = [
+      { filePath: path.join(t.root, '.claude/commands/schedule-hn.md'), projectPath: t.root, name: 'HN', cron: '*/5 * * * *', enabled: false },
+      { filePath: path.join(t.root, '.claude/commands/schedule-hourly.md'), projectPath: t.root, name: 'Hourly', cron: '0 * * * *', enabled: true },
+      { filePath: '/gone/.claude/commands/schedule-x.md', projectPath: '/gone', name: 'Gone', cron: '0 * * * *', enabled: true },
+    ];
+    assert.equal(projects.importLegacySchedules(scanned), 2, 'a folder that no longer exists is skipped');
+    const rows = projects.listSchedules();
+    const hn = rows.find(r => r.name === 'HN');
+    assert.equal(hn.every, 'cron');
+    assert.equal(hn.cron, '*/5 * * * *', 'no preset fits: the cron is kept');
+    assert.equal(hn.enabled, false, 'a disabled file imports as off');
+    assert.equal(hn.projectId, null);
+    assert.equal(hn.cwd, t.root);
+    assert.equal(hn.sourceFile, scanned[0].filePath);
+    assert.match(hn.prompt, /Read that file/);
+    assert.ok(hn.prompt.includes(scanned[0].filePath));
+    const hourly = rows.find(r => r.name === 'Hourly');
+    assert.equal(hourly.every, 'hour', 'a cron a preset fits becomes that preset');
+    assert.equal(hourly.atMinute, 0);
+    assert.equal(hourly.cron, null);
+    assert.equal(projects.importLegacySchedules(scanned), 0, 'never twice');
+    assert.equal(projects.listSchedules().length, 2);
+  } finally { t.cleanup(); }
 });

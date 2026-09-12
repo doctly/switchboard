@@ -932,6 +932,8 @@ async function loadProjects({ resort = false, reason = 'project' } = {}) {
     window.api.getProjects(true),
     window.api.getProjectTree(false).catch(() => ({ projects: [] })),
     window.api.getProjectTree(true).catch(() => ({ projects: [] })),
+    // Scheduled tasks ride along: the folder clocks and session chips read them.
+    typeof loadSchedules === 'function' ? loadSchedules() : null,
   ]);
   cachedProjects = defaultProjects;
   cachedAllProjects = allProjects;
@@ -1010,7 +1012,7 @@ async function loadProjects({ resort = false, reason = 'project' } = {}) {
 // rebindSidebarEvents, buildSessionItem, startRename) → sidebar.js
 
 
-async function launchNewSession(project, sessionOptions) {
+async function launchNewSession(project, sessionOptions, { focus = true } = {}) {
   // A temporary id. Claude is told to use it (--session-id); codex cannot be,
   // so main watches for its transcript and sends session-detected with the real
   // one, which re-keys everything below.
@@ -1039,6 +1041,12 @@ async function launchNewSession(project, sessionOptions) {
     if (project.trackId) options.trackId = project.trackId;
     session.projectId = project.projectId;
     session.trackId = project.trackId || null;
+  }
+  // Started by a scheduled task: the row shows the chip from the first
+  // moment, not only once the DB has the link (main records it on spawn).
+  if (options.scheduleId) {
+    session.scheduleId = options.scheduleId;
+    session.scheduledAt = new Date().toISOString();
   }
 
   // Track as pending (no .jsonl yet)
@@ -1069,7 +1077,9 @@ async function launchNewSession(project, sessionOptions) {
   }
   if (typeof setSessionMcpActive === 'function') setSessionMcpActive(sessionId, !!result.mcpActive);
 
-  showSession(sessionId);
+  // A scheduled launch runs in the background: it shows up in the lists like
+  // any session, but does not take over whatever the user is looking at.
+  if (focus) showSession(sessionId);
   pollActiveSessions();
 }
 

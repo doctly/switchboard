@@ -378,6 +378,10 @@ function buildProjectsFromCache(showArchived) {
       projectId: meta?.projectId || null,
       trackId: meta?.trackId || null,
       formerTrackName: meta?.formerTrackName || null,
+      // Started by a schedule (projects.js recordScheduleRun): the row shows a
+      // clock chip with the schedule's name and the time it fired.
+      scheduleId: meta?.scheduleId || null,
+      scheduledAt: meta?.scheduledAt || null,
     };
     if (!showArchived && s.archived) continue;
     if (!projectMap.has(row.projectPath)) {

@@ -27,7 +27,7 @@ test('menus use platform names and offer management for files without previews',
     const items = context.fileEntryMenuItems('/project', { name: 'large.zip', relativePath: 'large.zip', type: 'file', viewable: false });
     assert.ok(items.some(item => item.label === 'Reveal in ' + manager));
     assert.ok(items.some(item => item.label === 'Move to ' + trash + '…' && !item.disabled));
-    assert.equal(items.find(item => item.label === 'Open in editor / preview').disabled, true);
+    assert.equal(items.find(item => item.label === 'Open in default application').disabled, false);
   }
 });
 
@@ -85,4 +85,18 @@ test('a directory reply from before a file mutation cannot repopulate the cache'
   resolve({ ok: true, entries: [{ name: 'deleted.txt' }] });
   await request;
   assert.equal(state.cache.size, 0);
+});
+
+test('only unavailable previews open externally, and launch failures reach the user', async () => {
+  const { context, calls } = setup();
+  context.window.api.openFileExternally = async (...args) => { calls.push(['external', ...args]); return { ok: true }; };
+  for (const result of [{ ok: true }, { ok: false, code: 'ENOENT' }, { ok: false, code: 'EACCES' }]) {
+    assert.equal(await context.openUnsupportedFile(result, '/project/report.docx'), false);
+  }
+  assert.deepEqual(calls, []);
+  assert.equal(await context.openUnsupportedFile({ ok: false, code: 'PREVIEW_UNAVAILABLE' }, '/project/report.docx', '/project'), true);
+  assert.deepEqual(calls, [['external', '/project/report.docx', '/project']]);
+  context.window.api.openFileExternally = async () => ({ ok: false, error: 'No application is associated with this file' });
+  await context.openUnsupportedFile({ code: 'PREVIEW_UNAVAILABLE' }, '/project/report.docx');
+  assert.deepEqual(calls.at(-1), ['error', 'No application is associated with this file']);
 });

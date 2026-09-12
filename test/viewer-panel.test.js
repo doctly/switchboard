@@ -8,7 +8,8 @@ function setup() {
   const element = () => ({
     style: {}, children: [], textContent: '',
     classList: { add() {}, remove() {}, toggle() {} },
-    addEventListener() {}, setAttribute() {},
+    addEventListener(type, callback) { this[type] = callback; },
+    setAttribute(name, value) { this[name] = value; },
     appendChild(child) { this.children.push(child); },
     insertBefore(child) { this.children.unshift(child); },
     replaceChildren(...children) { this.children = children; },
@@ -127,4 +128,58 @@ test('a rename reply cannot revive a closed editor', async () => {
   await rename;
   assert.equal(panel.filePath, '');
   assert.equal(panel.editorView, null);
+});
+
+test('PowerPoint is read-only and transfers bytes only to an isolated preview frame', async () => {
+  const { panel, toolbar, saved, revoked } = setup();
+  panel.open('Deck', '/slides.pptx', undefined, { previewType: 'pptx', previewUrl: 'switchboard-preview://test/pptx-preview.html', base64: 'AAEC' });
+  const frame = panel.previewEl.children[0];
+  assert.equal(frame.src, 'switchboard-preview://test/pptx-preview.html');
+  assert.equal(frame.sandbox, 'allow-scripts');
+  assert.equal(frame.title, 'PowerPoint preview: slides.pptx');
+  assert.equal(panel.editorView, null);
+  assert.equal(toolbar.saveBtn.style.display, 'none');
+  await panel._save();
+  assert.equal(saved(), 0);
+  const messages = [];
+  frame.contentWindow = { postMessage: (...args) => messages.push(args) };
+  frame.load();
+  assert.equal(messages[0][0].type, 'switchboard-pptx');
+  assert.deepEqual([...new Uint8Array(messages[0][0].buffer)], [0, 1, 2]);
+  assert.equal(messages[0][2][0], messages[0][0].buffer);
+  panel.open('Text', '/notes.txt', 'Editable');
+  assert.equal(panel.getContent(), 'Editable');
+  assert.equal(toolbar.saveBtn.style.display, '');
+  assert.equal(panel.previewEl.children.length, 0);
+  assert.deepEqual(revoked, [], 'PPTX frames own their media URLs');
+});
+
+test('PowerPoint reload and rename replace the frame, and stale reloads cannot revive it', async () => {
+  const { panel, api } = setup();
+  const deck = { ok: true, previewType: 'pptx', previewUrl: 'switchboard-preview://test/pptx-preview.html', base64: 'AAEC' };
+  panel.open('Deck', '/slides.pptx', undefined, deck);
+  const original = panel.previewEl.children[0];
+  api.readFileForPanel = async () => deck;
+  await panel._reloadFromDisk();
+  assert.notEqual(panel.previewEl.children[0], original);
+  await panel.relocate('Renamed', '/renamed.pptx');
+  assert.equal(panel.previewEl.children[0].title, 'PowerPoint preview: renamed.pptx');
+  let resolve;
+  api.readFileForPanel = () => new Promise(done => { resolve = done; });
+  const pending = panel._reloadFromDisk();
+  panel.destroy();
+  resolve(deck);
+  await pending;
+  assert.equal(panel.previewEl.children.length, 0);
+  assert.equal(panel._presentationBytes, null);
+});
+
+test('a delayed PowerPoint frame load is ignored after switching files', () => {
+  const { panel } = setup();
+  panel.open('Deck', '/slides.pptx', undefined, { previewType: 'pptx', previewUrl: 'switchboard-preview://test/pptx-preview.html', base64: 'AAEC' });
+  const frame = panel.previewEl.children[0];
+  frame.contentWindow = { postMessage() { assert.fail('Stale preview must not receive data'); } };
+  panel.open('Text', '/notes.txt', 'Keep this');
+  frame.load();
+  assert.equal(panel.getContent(), 'Keep this');
 });

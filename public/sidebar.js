@@ -366,10 +366,12 @@ function renderProjects(projects, resort) {
     const taskBtn = createProjectTaskButton(project);
     if (taskBtn) header.appendChild(taskBtn);
 
+    // The folder's scheduled tasks: a plain clock opens the dialog for a new
+    // one; with schedules it is tinted, counts them, and lists them.
     const scheduleBtn = document.createElement('button');
     scheduleBtn.className = 'project-schedule-btn';
-    scheduleBtn.title = 'Create scheduled task';
     scheduleBtn.innerHTML = ICONS.schedule(16);
+    decorateScheduleButton(scheduleBtn, schedulesForFolder(project.projectPath));
     header.appendChild(scheduleBtn);
 
     const settingsBtn = document.createElement('button');
@@ -501,7 +503,7 @@ function rebindSidebarEvents(projects) {
     }
     const scheduleBtn = header.querySelector('.project-schedule-btn');
     if (scheduleBtn) {
-      scheduleBtn.onclick = (e) => { e.stopPropagation(); launchScheduleCreator(project); };
+      scheduleBtn.onclick = (e) => { e.stopPropagation(); showFolderScheduleMenu(project.projectPath, scheduleBtn); };
     }
     const settingsBtn = header.querySelector('.project-settings-btn');
     if (settingsBtn) {
@@ -822,6 +824,13 @@ function buildSessionItem(session) {
   timeEl.title = session.sessionId;
   timeEl.textContent = timeStr + (session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '');
   metaEl.append(mark, timeEl);
+  // Started by a scheduled task: a clock, with which one and when in its tooltip.
+  if (session.scheduleId && typeof scheduleChipHtml === 'function') {
+    const chip = document.createElement('span');
+    chip.className = 'session-schedule-chip';
+    chip.innerHTML = scheduleChipHtml(session, { compact: true });
+    metaEl.appendChild(chip);
+  }
 
   // Action buttons container
   const actions = document.createElement('div');

@@ -31,9 +31,6 @@ contextBridge.exposeInMainWorld('api', {
   setSetting: (key, value) => ipcRenderer.invoke('set-setting', key, value),
   deleteSetting: (key) => ipcRenderer.invoke('delete-setting', key),
   getEffectiveSettings: (projectPath) => ipcRenderer.invoke('get-effective-settings', projectPath),
-  getScheduleCreatorCommand: () => ipcRenderer.invoke('get-schedule-creator-command'),
-  createScheduleSession: (projectPath) => ipcRenderer.invoke('create-schedule-session', projectPath),
-  runScheduleNow: (filePath) => ipcRenderer.invoke('run-schedule-now', filePath),
   getShellProfiles: () => ipcRenderer.invoke('get-shell-profiles'),
 
   // Project/worktree tasks
@@ -74,6 +71,14 @@ contextBridge.exposeInMainWorld('api', {
   listTemplates: () => ipcRenderer.invoke('list-templates'),
   onProjectPlanChanged: (callback) => {
     ipcRenderer.on('project-plan-changed', (_event, projectId) => callback(projectId));
+  },
+  listSchedules: () => ipcRenderer.invoke('list-schedules'),
+  createSchedule: (spec) => ipcRenderer.invoke('create-schedule', spec),
+  updateSchedule: (id, patch) => ipcRenderer.invoke('update-schedule', id, patch),
+  deleteSchedule: (id) => ipcRenderer.invoke('delete-schedule', id),
+  resolveScheduleLaunch: (id) => ipcRenderer.invoke('resolve-schedule-launch', id),
+  onScheduleDue: (callback) => {
+    ipcRenderer.on('schedule-due', (_event, launch) => callback(launch));
   },
   createTrack: (projectId, spec) => ipcRenderer.invoke('create-track', projectId, spec),
   updateTrack: (id, patch) => ipcRenderer.invoke('update-track', id, patch),
@@ -164,6 +169,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.send('mcp-diff-response', sessionId, diffId, action, editedContent);
   },
   readFileForPanel: (filePath) => ipcRenderer.invoke('read-file-for-panel', filePath),
+  openFileExternally: (filePath, projectRoot) => ipcRenderer.invoke('open-file-externally', filePath, projectRoot),
+  resolveTerminalFiles: (references) => ipcRenderer.invoke('resolve-terminal-files', references),
   listProjectDirectory: (projectPath, relativePath) => ipcRenderer.invoke('list-project-directory', projectPath, relativePath),
   readProjectFile: (projectPath, relativePath) => ipcRenderer.invoke('read-project-file', projectPath, relativePath),
   manageProjectEntry: (projectPath, relativePath, action, newName) => ipcRenderer.invoke('manage-project-entry', projectPath, relativePath, action, newName),

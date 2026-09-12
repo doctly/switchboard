@@ -218,11 +218,44 @@ db.exec(`
   )
 `);
 db.exec('CREATE INDEX IF NOT EXISTS idx_tracks_project ON tracks(projectId)');
+// A scheduled task: a saved prompt plus a time. It lives in exactly one place,
+// decided by projectId — set, it is listed in the project view under trackId
+// (null = General) and runs in the track's cwd; null, it is a folder schedule
+// listed on the Sessions tab under `cwd`. Timing is stored as fields
+// (`every`, atHour, atMinute, weekday); `every = 'cron'` keeps a raw cron
+// string only for schedules imported from the old schedule-*.md files.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS schedules (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    projectId TEXT,
+    trackId TEXT,
+    cwd TEXT,
+    prompt TEXT NOT NULL,
+    every TEXT NOT NULL,
+    atHour INTEGER,
+    atMinute INTEGER,
+    weekday INTEGER,
+    cron TEXT,
+    cli TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    catchUp INTEGER NOT NULL DEFAULT 0,
+    sourceFile TEXT,
+    lastRunAt TEXT,
+    lastSessionId TEXT,
+    created TEXT NOT NULL
+  )
+`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_schedules_project ON schedules(projectId)');
 {
   const cols = new Set(db.prepare('PRAGMA table_info(session_meta)').all().map(c => c.name));
   if (!cols.has('projectId')) db.exec('ALTER TABLE session_meta ADD COLUMN projectId TEXT');
   if (!cols.has('trackId')) db.exec('ALTER TABLE session_meta ADD COLUMN trackId TEXT');
   if (!cols.has('formerTrackName')) db.exec('ALTER TABLE session_meta ADD COLUMN formerTrackName TEXT');
+  // Which schedule started the session, and when it fired. Read by the
+  // session row's clock chip; nothing else depends on it.
+  if (!cols.has('scheduleId')) db.exec('ALTER TABLE session_meta ADD COLUMN scheduleId TEXT');
+  if (!cols.has('scheduledAt')) db.exec('ALTER TABLE session_meta ADD COLUMN scheduledAt TEXT');
 }
 {
   // Where a project's sessions start by default (null = the project folder).
@@ -381,6 +414,23 @@ const stmts = {
   `),
   trackDelete: db.prepare('DELETE FROM tracks WHERE id = ?'),
   tracksDeleteByProject: db.prepare('DELETE FROM tracks WHERE projectId = ?'),
+  schedulesListAll: db.prepare('SELECT * FROM schedules ORDER BY created'),
+  schedulesListByProject: db.prepare('SELECT * FROM schedules WHERE projectId = ? ORDER BY created'),
+  scheduleGet: db.prepare('SELECT * FROM schedules WHERE id = ?'),
+  scheduleInsert: db.prepare(`
+    INSERT INTO schedules (id, name, projectId, trackId, cwd, prompt, every, atHour, atMinute, weekday, cron, cli, enabled, catchUp, sourceFile, lastRunAt, lastSessionId, created)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  scheduleDelete: db.prepare('DELETE FROM schedules WHERE id = ?'),
+  schedulesDeleteByProject: db.prepare('DELETE FROM schedules WHERE projectId = ?'),
+  schedulesClearTrack: db.prepare('UPDATE schedules SET trackId = NULL WHERE trackId = ?'),
+  scheduleRekeySession: db.prepare('UPDATE schedules SET lastSessionId = ? WHERE lastSessionId = ?'),
+  scheduleLinkSet: db.prepare(`
+    INSERT INTO session_meta (sessionId, scheduleId, scheduledAt) VALUES (?, ?, ?)
+    ON CONFLICT(sessionId) DO UPDATE SET scheduleId = excluded.scheduleId, scheduledAt = excluded.scheduledAt
+  `),
+  scheduleLinkRekey: db.prepare('UPDATE session_meta SET scheduleId = ?, scheduledAt = ? WHERE sessionId = ?'),
+  scheduleLinkClear: db.prepare('UPDATE session_meta SET scheduleId = NULL, scheduledAt = NULL WHERE scheduleId = ?'),
   // Session ↔ project assignment lives on session_meta so it survives cache
   // rebuilds. name/starred/archived are left untouched by these statements.
   assignmentSet: db.prepare(`
@@ -580,6 +630,7 @@ function deleteSetting(key) {
 
 const PROJECT_PATCH_KEYS = ['name', 'status', 'sharedBranch', 'branchName', 'defaultCwd', 'snoozedUntil', 'snoozedAt', 'modified'];
 const TRACK_PATCH_KEYS = ['name', 'cwd', 'cli', 'status', 'sortOrder'];
+const SCHEDULE_PATCH_KEYS = ['name', 'trackId', 'cwd', 'prompt', 'every', 'atHour', 'atMinute', 'weekday', 'cron', 'cli', 'enabled', 'catchUp', 'lastRunAt', 'lastSessionId'];
 
 function listProjects() {
   return stmts.projectList.all();
@@ -625,6 +676,7 @@ function updateProject(id, patch) {
 const deleteProjectTx = db.transaction((id) => {
   stmts.assignmentClearProject.run(id);
   stmts.tracksDeleteByProject.run(id);
+  stmts.schedulesDeleteByProject.run(id);
   stmts.projectFoldersDeleteByProject.run(id);
   stmts.planLinksDeleteByProject.run(id);
   stmts.projectDelete.run(id);
@@ -698,11 +750,78 @@ const deleteTrackTx = db.transaction((id, archiveSessions) => {
   db.prepare(`UPDATE session_meta SET formerTrackName = ?, trackId = NULL,
     archived = CASE WHEN ? THEN 1 ELSE archived END WHERE trackId = ?`).run(track.name, archiveSessions ? 1 : 0, id);
   stmts.trackDelete.run(id);
+  // Its schedules stay in the project, under General, like its sessions.
+  stmts.schedulesClearTrack.run(id);
   return sessionIds;
 });
 
 function deleteTrack(id, { archiveSessions = false } = {}) {
   return deleteTrackTx(id, archiveSessions);
+}
+
+// --- Schedules ---
+
+function listSchedules() {
+  return stmts.schedulesListAll.all();
+}
+
+function listSchedulesByProject(projectId) {
+  return stmts.schedulesListByProject.all(projectId);
+}
+
+function getSchedule(id) {
+  return stmts.scheduleGet.get(id) || null;
+}
+
+function insertSchedule(row) {
+  stmts.scheduleInsert.run(
+    row.id, row.name, row.projectId || null, row.trackId || null, row.cwd || null,
+    row.prompt, row.every,
+    row.atHour ?? null, row.atMinute ?? null, row.weekday ?? null, row.cron || null,
+    row.cli || null, row.enabled === false ? 0 : 1, row.catchUp ? 1 : 0,
+    row.sourceFile || null, row.lastRunAt || null, row.lastSessionId || null, row.created
+  );
+}
+
+function updateSchedule(id, patch) {
+  const clean = { ...patch };
+  if ('enabled' in clean) clean.enabled = clean.enabled ? 1 : 0;
+  if ('catchUp' in clean) clean.catchUp = clean.catchUp ? 1 : 0;
+  return updatePatch('schedules', SCHEDULE_PATCH_KEYS, id, clean);
+}
+
+const deleteScheduleTx = db.transaction((id) => {
+  stmts.scheduleLinkClear.run(id);
+  stmts.scheduleDelete.run(id);
+});
+
+function deleteSchedule(id) {
+  deleteScheduleTx(id);
+}
+
+/** A session started by a schedule: the row remembers it, and the schedule remembers the run. */
+const recordScheduleRunTx = db.transaction((scheduleId, sessionId, at) => {
+  stmts.scheduleLinkSet.run(sessionId, scheduleId, at);
+  db.prepare('UPDATE schedules SET lastRunAt = ?, lastSessionId = ? WHERE id = ?').run(at, sessionId, scheduleId);
+});
+
+function recordScheduleRun(scheduleId, sessionId, at) {
+  recordScheduleRunTx(scheduleId, sessionId, at);
+}
+
+// A session that started under a temporary id keeps its schedule link once
+// the real id is known (codex).
+const rekeyScheduleSessionTx = db.transaction((fromId, toId) => {
+  const row = stmts.get.get(fromId);
+  if (row?.scheduleId) {
+    stmts.scheduleLinkSet.run(toId, row.scheduleId, row.scheduledAt);
+    stmts.scheduleLinkRekey.run(null, null, fromId);
+  }
+  stmts.scheduleRekeySession.run(toId, fromId);
+});
+
+function rekeyScheduleSession(fromId, toId) {
+  rekeyScheduleSessionTx(fromId, toId);
 }
 
 function setSessionAssignment(sessionId, projectId, trackId) {
@@ -741,6 +860,8 @@ module.exports = {
   listProjects, getProject, getProjectBySlug, insertProject, updateProject, deleteProject,
   listProjectFolders, listAllProjectFolders, upsertProjectFolder, deleteProjectFolder,
   listTracks, listAllTracks, getTrack, insertTrack, updateTrack, deleteTrack,
+  listSchedules, listSchedulesByProject, getSchedule, insertSchedule, updateSchedule, deleteSchedule,
+  recordScheduleRun, rekeyScheduleSession,
   setSessionAssignment, copySessionAssignment, moveSessionAssignment,
   insertPlanLink, listPlanLinks, rekeyPlanLinks,
   closeDb,

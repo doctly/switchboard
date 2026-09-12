@@ -15,12 +15,13 @@ function previewType(filePath) {
   const ext = path.extname(filePath).toLowerCase();
   if (IMAGE_MIME_TYPES[ext]) return 'image';
   if (ext === '.pdf') return 'pdf';
+  if (ext === '.pptx') return 'pptx';
   if (ext === '.html' || ext === '.htm') return 'html';
   return 'text';
 }
 
 function previewLimit(filePath) {
-  return ['image', 'pdf'].includes(previewType(filePath)) ? MAX_MEDIA_PREVIEW_BYTES : MAX_PREVIEW_BYTES;
+  return ['image', 'pdf', 'pptx'].includes(previewType(filePath)) ? MAX_MEDIA_PREVIEW_BYTES : MAX_PREVIEW_BYTES;
 }
 const BINARY_EXTENSIONS = new Set([
   '.7z', '.a', '.avi', '.bin', '.bmp', '.class', '.db', '.dmg', '.dll', '.doc',
@@ -61,7 +62,7 @@ function resolveProjectEntry(projectPath, relativePath = '') {
 
 function isViewableFile(filePath, stat) {
   if (!stat.isFile() || stat.size > previewLimit(filePath)) return false;
-  if (['image', 'pdf'].includes(previewType(filePath))) return true;
+  if (['image', 'pdf', 'pptx'].includes(previewType(filePath))) return true;
   if (BINARY_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return false;
   if (!stat.size) return true;
 
@@ -113,18 +114,37 @@ function readProjectFile(projectPath, relativePath) {
 function readPreviewFile(filePath, projectRoot) {
   const stat = fs.statSync(filePath);
   if (!isViewableFile(filePath, stat)) {
-    throw new Error(stat.size > previewLimit(filePath)
+    const error = new Error(stat.size > previewLimit(filePath)
       ? 'File is too large to preview'
       : 'File type cannot be previewed');
+    if (stat.isFile()) error.code = 'PREVIEW_UNAVAILABLE';
+    throw error;
   }
   const type = previewType(filePath);
   const result = { filePath, previewType: type, fileUrl: pathToFileURL(filePath).href };
   if (type === 'html') result.previewUrl = createPreviewAssetUrl(filePath, projectRoot);
-  if (type === 'image' || type === 'pdf') {
-    const mimeType = type === 'pdf' ? 'application/pdf' : IMAGE_MIME_TYPES[path.extname(filePath).toLowerCase()];
+  if (type === 'pptx') result.previewUrl = createPreviewAssetUrl(path.join(__dirname, 'public', 'pptx-preview.html'));
+  if (type === 'image' || type === 'pdf' || type === 'pptx') {
+    const mimeType = type === 'pdf' ? 'application/pdf'
+      : type === 'pptx' ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+      : IMAGE_MIME_TYPES[path.extname(filePath).toLowerCase()];
     return { ...result, mimeType, base64: fs.readFileSync(filePath).toString('base64') };
   }
   return { ...result, content: fs.readFileSync(filePath, 'utf8') };
+}
+
+// Only called for a user opening a file, never for background preview reads.
+async function openFileExternally(filePath, projectRoot, shell) {
+  if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error('File path must be absolute');
+  let resolved = fs.realpathSync(filePath);
+  if (projectRoot != null) {
+    const { root } = resolveProjectEntry(projectRoot);
+    resolved = resolveProjectEntry(root, path.relative(root, resolved)).resolved;
+  }
+  if (!fs.statSync(resolved).isFile()) throw new Error('Not a file');
+  const error = await shell.openPath(resolved);
+  if (error) throw new Error(error);
+  return { filePath: resolved };
 }
 
 module.exports = {
@@ -134,5 +154,6 @@ module.exports = {
   listProjectDirectory,
   readProjectFile,
   readPreviewFile,
+  openFileExternally,
   resolveProjectEntry,
 };

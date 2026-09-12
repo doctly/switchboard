@@ -38,6 +38,8 @@ const PROJECT_STATUSES = new Set(['active', 'done']);
 const ENV_FILE_MAX_BYTES = 1024 * 1024;
 const ENV_SKIP_DIRS = new Set(['.git', 'node_modules', 'vendor', '.venv', 'venv']);
 
+const scheduleTime = require('./public/schedule-time');
+
 let db, log, buildProjectsFromCache, notifyRendererProjectsChanged, isHarnessId, plansDir;
 
 function init(ctx) {
@@ -565,7 +567,22 @@ function trackNode(row) {
   };
 }
 
-function projectNode(row, folderRows = [], trackRows = []) {
+/** A schedule row as the renderer sees it: booleans, nulls, and nothing it cannot use. */
+function scheduleNode(row) {
+  return {
+    id: row.id, name: row.name,
+    projectId: row.projectId || null, trackId: row.trackId || null, cwd: row.cwd || null,
+    prompt: row.prompt,
+    every: row.every, atHour: row.atHour ?? null, atMinute: row.atMinute ?? null,
+    weekday: row.weekday ?? null, cron: row.cron || null,
+    cli: row.cli || null, enabled: !!row.enabled, catchUp: !!row.catchUp,
+    sourceFile: row.sourceFile || null,
+    lastRunAt: row.lastRunAt || null, lastSessionId: row.lastSessionId || null,
+    created: row.created,
+  };
+}
+
+function projectNode(row, folderRows = [], trackRows = [], scheduleRows = []) {
   const added = addedFilesAtRoot(row.root);
   return {
     id: row.id, name: row.name, slug: row.slug, root: row.root,
@@ -584,6 +601,7 @@ function projectNode(row, folderRows = [], trackRows = []) {
       branch: f.branch || null, sortOrder: f.sortOrder || 0,
     })),
     tracks: trackRows.map(trackNode),
+    schedules: scheduleRows.map(scheduleNode),
     sessions: [],
   };
 }
@@ -591,7 +609,7 @@ function projectNode(row, folderRows = [], trackRows = []) {
 function loadProjectNode(id) {
   const row = db.getProject(id);
   if (!row) return null;
-  return projectNode(row, db.listProjectFolders(id), db.listTracks(id));
+  return projectNode(row, db.listProjectFolders(id), db.listTracks(id), db.listSchedulesByProject(id));
 }
 
 // --- Create / update / delete ---
@@ -1066,6 +1084,277 @@ function deleteTrack(id, { archiveSessions = false } = {}) {
   return { ok: true, projectId: track.projectId, formerTrackName: track.name, sessionIds };
 }
 
+// --- Schedules ---
+// A saved prompt plus a time. When it fires, the renderer starts an ordinary
+// session with the prompt as its first message (initialPrompt) and the
+// schedule's id on the launch options, so the session row can show where it
+// came from. A row lives in exactly one place: with a projectId it belongs to
+// the project view (under trackId, null = General) and runs in the track's
+// cwd; without one it is a folder schedule listed on the Sessions tab under
+// `cwd`. Timing is fields, not cron, except for rows imported from the old
+// schedule-*.md files (every = 'cron').
+
+const SCHEDULE_TIMING_KEYS = ['every', 'atHour', 'atMinute', 'weekday', 'cron'];
+
+/** Validate the timing fields of a spec. Returns { timing } or { error }. */
+function normalizeScheduleTiming(spec, existing = null) {
+  const every = spec.every === undefined ? existing?.every : spec.every;
+  if (!scheduleTime.EVERY_VALUES.has(every)) return { error: 'Pick when the task runs' };
+  const pick = (key, lo, hi, fallback) => {
+    const raw = spec[key] === undefined ? existing?.[key] : spec[key];
+    if (raw === null || raw === undefined || raw === '') return fallback;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < lo || n > hi) return { error: `${key} must be between ${lo} and ${hi}` };
+    return n;
+  };
+  const timing = { every, atHour: null, atMinute: null, weekday: null, cron: null };
+  if (every === 'cron') {
+    // Only an imported file gets here, and the dialog never edits the cron:
+    // picking a preset replaces it. Keep whatever the row already has.
+    const cron = spec.cron === undefined ? existing?.cron : spec.cron;
+    if (typeof cron !== 'string' || cron.trim().split(/\s+/).length !== 5) return { error: 'A cron schedule needs five fields' };
+    timing.cron = cron.trim();
+    return { timing };
+  }
+  if (every === 'hour' || every === 'day' || every === 'weekdays' || every === 'week') {
+    const m = pick('atMinute', 0, 59, 0);
+    if (m?.error) return m;
+    timing.atMinute = m;
+  }
+  if (every === 'day' || every === 'weekdays' || every === 'week') {
+    const h = pick('atHour', 0, 23, 9);
+    if (h?.error) return h;
+    timing.atHour = h;
+  }
+  if (every === 'week') {
+    const d = pick('weekday', 0, 6, 1);
+    if (d?.error) return d;
+    timing.weekday = d;
+  }
+  return { timing };
+}
+
+/** Where a schedule belongs: { projectId, trackId, cwd } or { error }. */
+function normalizeSchedulePlace(spec) {
+  const projectId = spec.projectId || null;
+  if (projectId) {
+    const project = db.getProject(projectId);
+    if (!project) return { error: 'Project not found' };
+    let trackId = spec.trackId || null;
+    if (trackId) {
+      const track = db.getTrack(trackId);
+      if (!track || track.projectId !== projectId) return { error: 'Track not found in that project' };
+    }
+    return { projectId, trackId, cwd: null };
+  }
+  const cwd = typeof spec.cwd === 'string' ? spec.cwd.trim() : '';
+  if (!cwd || !path.isAbsolute(cwd)) return { error: 'A folder schedule needs a folder' };
+  if (!isDirectory(cwd)) return { error: `Not a directory: ${cwd}` };
+  return { projectId: null, trackId: null, cwd: path.resolve(cwd) };
+}
+
+function listSchedules() {
+  return db.listSchedules().map(scheduleNode);
+}
+
+function createSchedule(spec) {
+  const name = typeof spec?.name === 'string' ? spec.name.trim() : '';
+  if (!name) return { error: 'Give the task a name' };
+  const prompt = typeof spec?.prompt === 'string' ? spec.prompt.trim() : '';
+  if (!prompt) return { error: 'The task needs a prompt' };
+  const place = normalizeSchedulePlace(spec || {});
+  if (place.error) return { error: place.error };
+  const timing = normalizeScheduleTiming(spec || {});
+  if (timing.error) return { error: timing.error };
+  const cli = normalizeTrackCli(spec.cli);
+  if (cli.error) return { error: cli.error };
+  const row = {
+    id: crypto.randomUUID(), name, ...place, prompt, ...timing.timing, cli: cli.cli,
+    enabled: spec.enabled !== false, catchUp: !!spec.catchUp,
+    sourceFile: typeof spec.sourceFile === 'string' ? spec.sourceFile : null,
+    created: new Date().toISOString(),
+  };
+  db.insertSchedule(row);
+  if (row.projectId) db.updateProject(row.projectId, { modified: row.created });
+  notifyRendererProjectsChanged();
+  return { ok: true, schedule: scheduleNode(db.getSchedule(row.id)) };
+}
+
+function updateSchedule(id, patch) {
+  const row = db.getSchedule(id);
+  if (!row) return { error: 'Schedule not found' };
+  const clean = {};
+  if (typeof patch?.name === 'string') {
+    const name = patch.name.trim();
+    if (!name) return { error: 'Give the task a name' };
+    clean.name = name;
+  }
+  if (typeof patch?.prompt === 'string') {
+    const prompt = patch.prompt.trim();
+    if (!prompt) return { error: 'The task needs a prompt' };
+    clean.prompt = prompt;
+  }
+  // A schedule can move between tracks of its project, but never between a
+  // project and a folder: that is a different row in a different place.
+  if (patch?.trackId !== undefined) {
+    if (!row.projectId) return { error: 'A folder schedule has no track' };
+    const trackId = patch.trackId || null;
+    if (trackId) {
+      const track = db.getTrack(trackId);
+      if (!track || track.projectId !== row.projectId) return { error: 'Track not found in that project' };
+    }
+    clean.trackId = trackId;
+  }
+  if (SCHEDULE_TIMING_KEYS.some(k => patch?.[k] !== undefined)) {
+    const timing = normalizeScheduleTiming(patch, row);
+    if (timing.error) return { error: timing.error };
+    Object.assign(clean, timing.timing);
+  }
+  if (patch?.cli !== undefined) {
+    const cli = normalizeTrackCli(patch.cli);
+    if (cli.error) return { error: cli.error };
+    clean.cli = cli.cli;
+  }
+  if (patch?.enabled !== undefined) clean.enabled = !!patch.enabled;
+  if (patch?.catchUp !== undefined) clean.catchUp = !!patch.catchUp;
+  if (!Object.keys(clean).length) return { ok: true, schedule: scheduleNode(row) };
+  db.updateSchedule(id, clean);
+  if (row.projectId) db.updateProject(row.projectId, { modified: new Date().toISOString() });
+  notifyRendererProjectsChanged();
+  return { ok: true, schedule: scheduleNode(db.getSchedule(id)) };
+}
+
+function deleteSchedule(id) {
+  const row = db.getSchedule(id);
+  if (!row) return { error: 'Schedule not found' };
+  db.deleteSchedule(id);
+  if (row.projectId) db.updateProject(row.projectId, { modified: new Date().toISOString() });
+  notifyRendererProjectsChanged();
+  return { ok: true };
+}
+
+/**
+ * Why a schedule is not firing right now, in words, or null when it would.
+ * Pausing is derived: a done project or track pauses its schedules and
+ * reopening resumes them, with nothing stored.
+ */
+function schedulePausedReason(row) {
+  if (!row.enabled) return 'off';
+  if (!row.projectId) return null;
+  const project = db.getProject(row.projectId);
+  if (!project) return 'project missing';
+  if (project.status === 'done') return 'project done';
+  if (row.trackId) {
+    const track = db.getTrack(row.trackId);
+    if (track && track.status === 'done') return 'track done';
+  }
+  return null;
+}
+
+/**
+ * Everything the renderer needs to start the session for a schedule, resolved
+ * now rather than stored: a project schedule runs where its track's sessions
+ * start, so moving the track moves it. { schedule, target, runtime } or
+ * { error }.
+ */
+function resolveScheduleLaunch(id) {
+  const row = db.getSchedule(id);
+  if (!row) return { error: 'Schedule not found' };
+  let target;
+  let runtime = row.cli || null;
+  if (row.projectId) {
+    const project = db.getProject(row.projectId);
+    if (!project) return { error: 'Project not found' };
+    const track = row.trackId ? db.getTrack(row.trackId) : null;
+    target = {
+      projectPath: track?.cwd || project.defaultCwd || project.root,
+      projectId: project.id,
+      trackId: track ? track.id : null,
+      projectName: project.name,
+    };
+    if (!runtime && track?.cli) runtime = track.cli;
+  } else {
+    target = { projectPath: row.cwd, projectId: null, trackId: null, projectName: null };
+  }
+  if (!isDirectory(target.projectPath)) return { error: `Not a directory: ${target.projectPath}` };
+  return { schedule: scheduleNode(row), target, runtime };
+}
+
+/**
+ * The schedules that should fire in the minute containing `now`. `isBusy`
+ * says whether a session id is still working (the CLI busy, not merely the
+ * terminal open): a schedule whose last run has not finished is skipped
+ * rather than doubled up.
+ */
+function dueSchedules(now, isBusy = () => false) {
+  const out = [];
+  for (const row of db.listSchedules()) {
+    if (schedulePausedReason(row)) continue;
+    if (!scheduleTime.dueThisMinute(row, now)) continue;
+    if (row.lastSessionId && isBusy(row.lastSessionId)) {
+      log.info?.(`[schedule] Skipping ${row.name} — previous run still working`);
+      continue;
+    }
+    out.push(row.id);
+  }
+  return out;
+}
+
+/** Schedules that asked to catch up and were due while the app was closed. */
+function missedSchedules(now, isBusy = () => false) {
+  const out = [];
+  for (const row of db.listSchedules()) {
+    if (schedulePausedReason(row)) continue;
+    if (!scheduleTime.missedRun(row, now.getTime())) continue;
+    if (row.lastSessionId && isBusy(row.lastSessionId)) continue;
+    out.push(row.id);
+  }
+  return out;
+}
+
+/** Called from open-terminal when the launch options name a schedule. */
+function recordScheduleRun(scheduleId, sessionId) {
+  if (!scheduleId || !db.getSchedule(scheduleId)) return false;
+  db.recordScheduleRun(scheduleId, sessionId, new Date().toISOString());
+  notifyRendererProjectsChanged();
+  return true;
+}
+
+/**
+ * One-time import of the old file-based schedules. Each schedule-*.md becomes
+ * a folder schedule on the folder it sits in. The file stays the source of
+ * truth: the prompt tells the CLI to read it. Returns how many were imported.
+ */
+const LEGACY_IMPORT_KEY = 'schedules_imported_from_files';
+
+function importLegacySchedules(scanned) {
+  if (db.getSetting(LEGACY_IMPORT_KEY)) return 0;
+  const existing = new Set(db.listSchedules().map(r => r.sourceFile).filter(Boolean));
+  let count = 0;
+  for (const s of scanned || []) {
+    if (!s.filePath || existing.has(s.filePath)) continue;
+    if (!isDirectory(s.projectPath)) continue;
+    const preset = scheduleTime.presetFromCron(s.cron);
+    const timing = preset
+      ? { every: preset.every, atHour: preset.atHour ?? null, atMinute: preset.atMinute ?? null, weekday: preset.weekday ?? null, cron: null }
+      : { every: 'cron', atHour: null, atMinute: null, weekday: null, cron: String(s.cron).trim() };
+    db.insertSchedule({
+      id: crypto.randomUUID(),
+      name: s.name || path.basename(s.filePath, '.md').replace(/^schedule-/, ''),
+      projectId: null, trackId: null, cwd: s.projectPath,
+      prompt: `Run the scheduled task defined in ${s.filePath}. Read that file and follow its instructions.`,
+      ...timing,
+      cli: null, enabled: s.enabled !== false, catchUp: false,
+      sourceFile: s.filePath,
+      created: new Date().toISOString(),
+    });
+    count++;
+  }
+  db.setSetting(LEGACY_IMPORT_KEY, { at: new Date().toISOString(), count });
+  if (count) notifyRendererProjectsChanged();
+  return count;
+}
+
 // --- Session assignment ---
 
 /** Explicitly file a session. projectId null clears both ids. */
@@ -1128,12 +1417,14 @@ function buildProjectTree(showArchived) {
 
   const folderRows = db.listAllProjectFolders();
   const trackRows = db.listAllTracks();
+  const scheduleRows = db.listSchedules();
   const byId = new Map();
   for (const row of projectRows) {
     byId.set(row.id, projectNode(
       row,
       folderRows.filter(f => f.projectId === row.id),
-      trackRows.filter(t => t.projectId === row.id)
+      trackRows.filter(t => t.projectId === row.id),
+      scheduleRows.filter(t => t.projectId === row.id)
     ));
   }
   const rootsById = new Map(projectRows.map(r => [r.id, realOrResolved(r.root)]));
@@ -1463,6 +1754,8 @@ module.exports = {
   listTemplates, templatesRoot, renderTemplateText, editPlanItem,
   listEnvFiles, defaultEnvSelection, copyEnvFiles,
   createTrack, updateTrack, deleteTrack,
+  listSchedules, createSchedule, updateSchedule, deleteSchedule, resolveScheduleLaunch,
+  dueSchedules, missedSchedules, recordScheduleRun, importLegacySchedules, schedulePausedReason,
   assignSession, recordLaunchAssignment,
   projectForCwd, buildProjectTree,
 };

@@ -33,10 +33,11 @@ const { createTerminalActivity } = require('./terminal-activity');
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
-const { startScheduler } = require('./schedule-runner');
+const { scanSchedules } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
-const { listProjectDirectory, readProjectFile, readPreviewFile } = require('./project-files');
+const { listProjectDirectory, readProjectFile, readPreviewFile, openFileExternally } = require('./project-files');
 const { manageProjectEntry } = require('./file-management');
+const { resolveTerminalFiles } = require('./terminal-file-links');
 const { PREVIEW_SCHEME, PREVIEW_SCHEMES, handlePreviewAssetRequest } = require('./preview-assets');
 protocol.registerSchemesAsPrivileged(PREVIEW_SCHEMES);
 const { createTaskManager } = require('./task-manager');
@@ -430,6 +431,12 @@ ipcMain.handle('set-session-assignment', guarded((sessionId, projectId, trackId)
   }
   return result;
 }));
+// Scheduled tasks. The tick that fires them is startScheduleTicker below.
+ipcMain.handle('list-schedules', guarded(() => projects.listSchedules()));
+ipcMain.handle('create-schedule', guarded((spec) => projects.createSchedule(spec || {})));
+ipcMain.handle('update-schedule', guarded((id, patch) => projects.updateSchedule(id, patch || {})));
+ipcMain.handle('delete-schedule', guarded((id) => projects.deleteSchedule(id)));
+ipcMain.handle('resolve-schedule-launch', guarded((id) => projects.resolveScheduleLaunch(id)));
 ipcMain.handle('create-track', guarded((projectId, spec) => projects.createTrack(projectId, spec || {})));
 ipcMain.handle('update-track', guarded((id, patch) => projects.updateTrack(id, patch || {})));
 ipcMain.handle('delete-track', guarded((id, options = {}) => {
@@ -508,11 +515,21 @@ ipcMain.on('mcp-diff-response', (_event, sessionId, diffId, action, editedConten
   resolvePendingDiff(sessionId, diffId, action, editedContent);
 });
 
+ipcMain.handle('resolve-terminal-files', (_event, references) => resolveTerminalFiles(references));
+
+ipcMain.handle('open-file-externally', async (_event, filePath, projectRoot) => {
+  try {
+    return { ok: true, ...await openFileExternally(filePath, projectRoot, shell) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
   try {
     return { ok: true, ...readPreviewFile(filePath) };
   } catch (err) {
-    return { ok: false, error: err.message };
+    return { ok: false, error: err.message, code: err.code };
   }
 });
 
@@ -550,7 +567,7 @@ ipcMain.handle('read-project-file', async (_event, projectPath, relativePath) =>
   try {
     return { ok: true, ...readProjectFile(projectPath, relativePath) };
   } catch (err) {
-    return { ok: false, error: err.message };
+    return { ok: false, error: err.message, code: err.code };
   }
 });
 
@@ -1074,7 +1091,6 @@ ipcMain.handle('delete-setting', (_event, key) => {
 });
 
 // --- Scheduled tasks ---
-const scheduleIpc = require('./schedule-ipc');
 
 const SETTING_DEFAULTS = {
   permissionMode: null,
@@ -1245,7 +1261,8 @@ ipcMain.handle('get-session-last-message', (_event, sessionId) => {
   const row = getCachedSession(sessionId);
   if (!row) return { error: 'Session not found in cache' };
   try {
-    return { text: lastAssistantMessage(readSessionViewerEntries(row)) };
+    const { text, truncated } = lastAssistantMessage(readSessionViewerEntries(row));
+    return { text, truncated };
   } catch (err) {
     return { error: err.message };
   }
@@ -1550,6 +1567,14 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       }
     } catch (err) {
       log.error('[projects] could not record launch assignment', err);
+    }
+  }
+  // Started by a schedule: the session remembers which, the schedule
+  // remembers the run. Folder schedules have no project, so this is separate
+  // from the assignment above.
+  if (startFresh && !isPlainTerminal && sessionOptions?.scheduleId) {
+    try { projects.recordScheduleRun(sessionOptions.scheduleId, sessionId); } catch (err) {
+      log.error('[schedule] could not record the run', err);
     }
   }
   // A resumed project session is a project session too, for the plan watcher.
@@ -1937,6 +1962,7 @@ function resolvePendingLaunches(candidatePaths) {
           rekeyPlanLinks(tempId, realId);
         } catch (err) { log.error('[projects] assignment move failed', err); }
       }
+      try { dbModule.rekeyScheduleSession(tempId, realId); } catch (err) { log.error('[schedule] rekey failed', err); }
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('session-detected', tempId, realId);
       }
@@ -2118,6 +2144,51 @@ if (!gotSingleInstanceLock) {
     }
   });
 
+
+// --- Scheduled task ticker ---
+// Main owns the clock: a renderer timer is throttled while the window is
+// hidden, and a schedule has to fire at the minute it names. Each fire is one
+// 'schedule-due' event; the renderer launches the session, because the
+// terminal lives there. A schedule whose last session is still working is
+// skipped by projects.dueSchedules.
+let scheduleTickerStop = null;
+// "Still working" is the CLI being busy, not the PTY being open: an
+// interactive session sits at its prompt until someone closes it, and that
+// must not stop the next run.
+function isSessionBusy(sessionId) {
+  const session = activeSessions.get(sessionId);
+  return !!session && !session.exited && !!session._cliBusy;
+}
+function fireSchedules(ids, reason) {
+  if (!ids.length || !mainWindow || mainWindow.isDestroyed()) return;
+  for (const id of ids) {
+    const launch = projects.resolveScheduleLaunch(id);
+    if (launch.error) { log.warn(`[schedule] ${id}: ${launch.error}`); continue; }
+    log.info(`[schedule] ${reason}: ${launch.schedule.name}`);
+    mainWindow.webContents.send('schedule-due', launch);
+  }
+}
+function startScheduleTicker() {
+  if (scheduleTickerStop) return;
+  let interval = null;
+  const tick = () => {
+    try { fireSchedules(projects.dueSchedules(new Date(), isSessionBusy), 'due'); } catch (err) {
+      log.error('[schedule] tick failed', err);
+    }
+  };
+  // Align to the minute so a 9:00 schedule fires at 9:00:00, not 9:00:37.
+  const first = setTimeout(() => { tick(); interval = setInterval(tick, 60 * 1000); }, (60 - new Date().getSeconds()) * 1000);
+  // Catch-up runs, for schedules that asked for it, once the renderer has had
+  // time to load. Missed while the app was closed means missed since the last
+  // run (projects.missedSchedules).
+  const catchUp = setTimeout(() => {
+    try { fireSchedules(projects.missedSchedules(new Date(), isSessionBusy), 'catch-up'); } catch (err) {
+      log.error('[schedule] catch-up failed', err);
+    }
+  }, 20 * 1000);
+  scheduleTickerStop = () => { clearTimeout(first); clearTimeout(catchUp); if (interval) clearInterval(interval); scheduleTickerStop = null; };
+}
+
   app.whenReady().then(() => {
     protocol.handle(PREVIEW_SCHEME, handlePreviewAssetRequest);
     buildMenu();
@@ -2125,42 +2196,14 @@ if (!gotSingleInstanceLock) {
     createWindow();
     startProjectsWatcher();
     startHarnessWatchers();
-    scheduleIpc.ensureScheduleCreatorCommand();
-
-    // Shared runCommand for cron scheduler and "run now" — takes argv, not a shell string
-    const { spawn: cpSpawn } = require('child_process');
-    function runScheduleCommand(claudeArgv, cwd, name, onDone) {
-      const globalSettings = getSetting('global') || {};
-      const profileId = globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile;
-      const profile = resolveShell(profileId);
-      const shell = profile.path;
-      const cmd = 'claude ' + quoteArgvForShell(shell, claudeArgv);
-      const args = shellArgs(shell, cmd, profile.args || []);
-
-      log.info(`[schedule] Running: ${shell} ${args.join(' ')}`);
-      const child = cpSpawn(shell, args, {
-        cwd,
-        stdio: ['ignore', 'ignore', 'pipe'],
-        env: { ...cleanPtyEnv, FORCE_COLOR: '0' },
-      });
-
-      let stderr = '';
-      child.stderr.on('data', (data) => { stderr += data.toString(); });
-
-      child.on('exit', (code) => {
-        if (stderr.trim()) log.error(`[schedule] ${name} stderr:\n${stderr.trim()}`);
-        log.info(`[schedule] ${name} finished (exit ${code})`);
-        if (onDone) onDone();
-      });
-
-      child.on('error', (err) => {
-        log.error(`[schedule] ${name} error:`, err.message);
-        if (onDone) onDone();
-      });
-    }
-
-    scheduleIpc.init(log, runScheduleCommand);
-    startScheduler(log, runScheduleCommand);
+    // Scheduled tasks: once the old file-based ones are imported, tick once a
+    // minute and tell the renderer which schedules are due. The renderer
+    // starts them as ordinary sessions (launchScheduledSession).
+    try {
+      const imported = projects.importLegacySchedules(scanSchedules(log));
+      if (imported) log.info(`[schedule] Imported ${imported} schedule file(s) as folder schedules`);
+    } catch (err) { log.error('[schedule] legacy import failed', err); }
+    startScheduleTicker();
 
     // Re-index search if FTS table was recreated (e.g. tokenizer config change)
     if (searchFtsRecreated) populateCacheViaWorker();

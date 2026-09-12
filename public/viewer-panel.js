@@ -7,7 +7,7 @@
  *
  * Toolbar buttons are shown/hidden automatically based on file type:
  *   - Preview: shown for markdown and HTML files
- *   - Images and PDFs: read-only previews with text editing controls hidden
+ *   - Images, PDFs and PowerPoint: read-only previews with text editing controls hidden
  *   - Wrap: shown for text (defaults on for markdown, off for others)
  *   - Save: shown if onSave is provided
  *   - Close: shown if onClose is provided
@@ -176,7 +176,8 @@ class ViewerPanel {
     this.wrapMode = isMd;
     if (isMedia) {
       const bytes = Uint8Array.from(atob(preview.base64 || ''), char => char.charCodeAt(0));
-      this._objectUrl = URL.createObjectURL(new Blob([bytes], { type: preview.mimeType }));
+      if (this.previewType === 'pptx') this._presentationBytes = bytes;
+      else this._objectUrl = URL.createObjectURL(new Blob([bytes], { type: preview.mimeType }));
       this.previewMode = true;
       this._renderPreview();
       this._watchFile(filePath);
@@ -210,6 +211,16 @@ class ViewerPanel {
 
     // Watch for external changes
     this._watchFile(filePath);
+    if (preview.line) this.goToLocation(preview.line, preview.column);
+  }
+
+  goToLocation(line, column = 1) {
+    if (!this.editorView || !Number.isSafeInteger(line) || line < 1) return;
+    const doc = this.editorView.state.doc;
+    const target = doc.line(Math.min(line, doc.lines));
+    const offset = Number.isSafeInteger(column) ? Math.max(0, Math.min(column - 1, target.length)) : 0;
+    if (this.previewMode) this._setPreview(false);
+    this.editorView.dispatch({ selection: { anchor: target.from + offset }, scrollIntoView: true });
   }
 
   _createEditor(content, filePath) {
@@ -244,12 +255,31 @@ class ViewerPanel {
   }
 
   _isMedia() {
-    return this.previewType === 'image' || this.previewType === 'pdf';
+    return ['image', 'pdf', 'pptx'].includes(this.previewType);
   }
 
   _renderPreview() {
     this.previewEl.replaceChildren();
-    if (this.previewType === 'image') {
+    if (this.previewType === 'pptx') {
+      this.previewEl.className = 'viewer-media-preview';
+      this.previewEl.style.display = 'block';
+      const frame = document.createElement('iframe');
+      frame.className = 'viewer-preview-frame';
+      frame.title = `PowerPoint preview: ${this.filePath.split(/[\\/]/).pop()}`;
+      frame.setAttribute('sandbox', 'allow-scripts');
+      frame.referrerPolicy = 'no-referrer';
+      const bytes = this._presentationBytes;
+      const version = this._openVersion;
+      this._presentationBytes = null;
+      frame.addEventListener('load', () => {
+        if (version !== this._openVersion || !frame.contentWindow) return;
+        // The sandbox has an opaque origin, so postMessage needs '*'. The
+        // destination is this exact frame, and only deck bytes are shared.
+        frame.contentWindow.postMessage({ type: 'switchboard-pptx', buffer: bytes.buffer }, '*', [bytes.buffer]);
+      }, { once: true });
+      frame.src = this.previewUrl;
+      this.previewEl.appendChild(frame);
+    } else if (this.previewType === 'image') {
       this.previewEl.className = 'viewer-media-preview viewer-media-preview--image';
       this.previewEl.style.display = 'flex';
       const img = document.createElement('img');
@@ -304,6 +334,7 @@ class ViewerPanel {
     this.previewEl.style.display = 'none';
     if (this._objectUrl) URL.revokeObjectURL(this._objectUrl);
     this._objectUrl = null;
+    this._presentationBytes = null;
   }
 
   _setPreview(show) {
@@ -349,7 +380,7 @@ class ViewerPanel {
     if (result?.ok) {
       // A new extension must not discard an editable buffer by switching it
       // to a binary preview. Reopening later uses the new file type normally.
-      const preview = this.editorView && ['image', 'pdf'].includes(result.previewType)
+      const preview = this.editorView && ['image', 'pdf', 'pptx'].includes(result.previewType)
         ? { ...result, previewType: 'text' } : result;
       this.open(title, filePath, this.editorView ? this.getContent() : result.content, preview);
     } else {

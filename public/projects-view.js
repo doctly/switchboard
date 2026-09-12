@@ -21,8 +21,9 @@
 // Depends on sidebar.js: isSessionRunning
 // Depends on task-runner.js: showTaskPopover, tasksByPath, updateTaskButton,
 // activeTaskView
-// Depends on dialogs.js: showNewSessionDialog, launchTerminalSession,
-// launchScheduleCreator, forkSession
+// Depends on dialogs.js: showNewSessionDialog, launchTerminalSession, forkSession
+// Depends on schedules.js: schedulesForProject, showProjectScheduleMenu,
+// showScheduleDialog, scheduleChipHtml
 // Depends on utils.js / icons.js: escapeHtml, formatDate, cleanDisplayName, ICONS
 
 let openProjectPopover = null;
@@ -70,7 +71,9 @@ function ensureSessionHoverPreview() {
   el.className = 'session-turn-preview';
   el.setAttribute('role', 'tooltip');
   el.setAttribute('aria-hidden', 'true');
-  el.innerHTML = '<div class="session-turn-preview-label">Last AI message</div><div class="session-turn-preview-text"></div>';
+  el.innerHTML = '<div class="session-turn-preview-label">Last AI message</div>'
+    + '<div class="session-turn-preview-body"><div class="session-turn-preview-text"></div></div>'
+    + '<div class="session-turn-preview-more" hidden>\u2026 message continues</div>';
   document.body.appendChild(el);
   sessionHoverPreviewEl = el;
   return el;
@@ -120,7 +123,7 @@ async function showSessionHoverPreview(row, session) {
     try { result = await window.api.getSessionLastMessage(id); } catch { return; }
     if (request !== sessionHoverPreviewRequest) return;
     if (result?.error) return;
-    cached = { eventTime, text: result?.text || '' };
+    cached = { eventTime, text: result?.text || '', truncated: !!result?.truncated };
     sessionHoverPreviewCache.set(id, cached);
   }
 
@@ -133,6 +136,13 @@ async function showSessionHoverPreview(row, session) {
   sessionHoverPreviewRow = row;
   el.classList.add('visible');
   el.setAttribute('aria-hidden', 'false');
+  // Two ways the preview can be short of the real message: the reader capped
+  // the text, or it is taller than the box and CSS clipped it. Both used to
+  // end mid-sentence with nothing to show for it. Measuring needs the box
+  // laid out, so it happens after .visible.
+  const clipped = textEl.scrollHeight > textEl.clientHeight + 1;
+  el.querySelector('.session-turn-preview-body').classList.toggle('clipped', clipped);
+  el.querySelector('.session-turn-preview-more').hidden = !(clipped || cached.truncated);
   positionSessionHoverPreview(row);
 }
 
@@ -449,6 +459,14 @@ function runningTasksFor(project) {
   return taskPseudoProject(project).tasks.filter(t => t.run?.running).length;
 }
 
+/** The header's Schedules button: a count of the project's scheduled tasks, tinted while any is on. */
+function scheduleButtonHtml(project, id, small = false) {
+  const schedules = typeof schedulesForProject === 'function' ? schedulesForProject(project) : [];
+  const on = schedules.filter(s => s.enabled).length;
+  const cls = schedules.length ? (on ? ' has-schedules' : ' has-schedules all-off') : '';
+  return `<button type="button" class="ws-btn${small ? ' ws-btn--sm' : ''} ws-schedule-btn${cls}" id="${id}" title="${schedules.length ? `${schedules.length} scheduled task${schedules.length === 1 ? '' : 's'}` : 'New scheduled task'}">${PICONS.clock(small ? 11 : 12)}<span>Schedules</span><span class="ws-badge" ${schedules.length ? '' : 'style="display:none"'}>${schedules.length || ''}</span></button>`;
+}
+
 /** A track's +: straight to its CLI when it has one, else the shared Project View menu. */
 async function launchFromTrack(project, track, anchor) {
   const target = launchTargetFor(project, track);
@@ -540,6 +558,8 @@ function buildSessionRow(project, session, { showTrack = true, className = 'pane
   if (!track && session.formerTrackName) {
     parts.push(`<span class="pane-tag" title="Previously in a deleted track">Formerly: ${escapeHtml(session.formerTrackName)}</span>`);
   } else if (showTrack) parts.push(trackTagHtml(project, track));
+  // Started by a scheduled task: which one, and when it fired.
+  if (session.scheduleId && typeof scheduleChipHtml === 'function') parts.push(scheduleChipHtml(session));
   // The CLI mark, same as the status bar: the logo says which CLI, no word needed.
   parts.push(`<span class="pane-cli-icon${session.runtime === 'codex' ? ' is-codex' : ''}${session.type === 'terminal' ? ' is-terminal' : ''}" title="${escapeHtml(cliLabel(session))}">${cliIcon(session, 12)}</span>`);
   // The last message's time, the same as the Sessions tab. A session with no
@@ -679,6 +699,13 @@ function updateProjectStatusDots() {
 function projectSortTime(project) {
   let best = 0;
   for (const s of projectSessionsAll(project)) best = Math.max(best, sessionEventTime(s));
+  // Coming back from a snooze is an event. Without this a woken project
+  // returns to a spot buried under everything that moved while it was away,
+  // leaving the yellow dot to carry the whole signal. The wake time is a real
+  // timestamp, so it decays like any other event, and opening the project
+  // clears it back to its natural position along with the dot.
+  const woke = projectWokeAt(project, Date.now());
+  if (woke) best = Math.max(best, Date.parse(woke));
   if (best) return best;
   const t = new Date(project.lastActivity || project.modified || 0).getTime();
   return Number.isFinite(t) ? t : 0;
@@ -1252,6 +1279,7 @@ function renderOverview() {
         </div>
         <div class="ws-actions">
           <button type="button" class="ws-btn project-task-btn" id="ws-tasks" data-project-id="${project.id}" data-project-path="${escapeHtml(project.root)}" data-project-paths="${escapeHtml(taskPseudoProject(project).projectPaths.join('\n'))}">${PICONS.play(12)}<span>Tasks</span><span class="project-task-count ws-badge" ${running ? '' : 'style="display:none"'}>${running || ''}</span></button>
+          ${scheduleButtonHtml(project, 'ws-schedules')}
           <button type="button" class="ws-btn ws-btn--primary" id="ws-new">${PICONS.plus(12)}<span>New session</span>${PICONS.chevronDown(11)}</button>
           <button type="button" class="ws-btn ws-btn--icon" id="ws-more" title="More">${PICONS.dots(14)}</button>
         </div>
@@ -1279,6 +1307,7 @@ function renderOverview() {
   projectViewer.querySelector('#ws-new').onclick = (e) => showNewSessionMenu(project, null, e.currentTarget);
   projectViewer.querySelector('#ws-more').onclick = (e) => showContextMenu(projectMenuItems(project, { fromPage: true }), { anchor: e.currentTarget });
   projectViewer.querySelector('#ws-tasks').onclick = (e) => showTaskPopover(taskPseudoProject(project), e.currentTarget);
+  projectViewer.querySelector('#ws-schedules').onclick = (e) => showProjectScheduleMenu(project, e.currentTarget);
   projectViewer.querySelector('#ws-add-folder').onclick = () => attachFolderAsk(project);
   loadProjectFiles(project).then(() => { if (selectedProject()?.id === project.id) renderPlanMeta(project); });
   loadProjectGit(project).then(changed => { if (changed && selectedProject()?.id === project.id) applyGitStatus(project); });
@@ -1961,7 +1990,7 @@ async function saveProjectEditorFile(filePath, content) {
   return { ok: true };
 }
 
-async function openFileInProjectEditor(project, rel) {
+async function openFileInProjectEditor(project, rel, { allowExternal = false } = {}) {
   const state = filesState(project);
   state.selected = rel;
   const request = state.openRequest = (state.openRequest || 0) + 1;
@@ -1987,6 +2016,13 @@ async function openFileInProjectEditor(project, rel) {
     }
   }
   if (state.openRequest !== request || !host.isConnected || selectedProject()?.id !== project.id) return;
+  if (result?.code === 'PREVIEW_UNAVAILABLE') {
+    // Restoring the Files tab must never launch another application.
+    state.selected = ed.projectId === project.id ? ed.rel : null;
+    projectViewer.querySelectorAll('.ws-file-row').forEach(row => row.classList.toggle('selected', row.dataset.rel === state.selected));
+    if (allowExternal) await openUnsupportedFile(result, filePath, project.root);
+    return;
+  }
   if (!result?.ok) {
     host.innerHTML = `<div class="ws-editor-empty">${escapeHtml(result?.error || 'Could not open the file.')}</div>`;
     return;
@@ -2068,13 +2104,13 @@ async function renderFileTree(project, list, state) {
     const isDir = entry.type === 'directory';
     const open = isDir && state.expanded.has(entry.relativePath);
     const row = document.createElement('div');
-    row.className = 'ws-file-row' + (isDir ? ' is-dir' : '') + (!isDir && entry.viewable === false ? ' is-binary' : '') +
+    row.className = 'ws-file-row' + (isDir ? ' is-dir' : '') + (!isDir && entry.type !== 'file' ? ' is-binary' : '') +
       (state.selected === entry.relativePath ? ' selected' : '');
     row.dataset.rel = entry.relativePath;
     row.tabIndex = 0;
-    bindFileEntryMenu(row, project.root, entry, () => openFileInProjectEditor(project, entry.relativePath));
+    bindFileEntryMenu(row, project.root, entry, () => openFileInProjectEditor(project, entry.relativePath, { allowExternal: true }));
     row.style.paddingLeft = `${10 + depth * 14}px`;
-    row.title = !isDir && entry.viewable === false ? `${entry.relativePath} (preview unavailable: unsupported type or too large)` : entry.relativePath;
+    row.title = entry.type === 'file' && entry.viewable === false ? entry.relativePath + '\nOpen in default application' : entry.relativePath;
     row.innerHTML = `<span class="ws-file-icon">${isDir ? (open ? '&#9662;' : '&#9656;') : ''}</span><span class="ws-file-name">${escapeHtml(entry.name)}</span>`;
     row.onclick = async () => {
       if (isDir) {
@@ -2082,8 +2118,8 @@ async function renderFileTree(project, list, state) {
         await renderFileTree(project, list, state);
         return;
       }
-      if (entry.viewable === false) return;
-      openFileInProjectEditor(project, entry.relativePath);
+      if (entry.type !== 'file') return;
+      openFileInProjectEditor(project, entry.relativePath, { allowExternal: true });
     };
     list.appendChild(row);
   }
@@ -2475,7 +2511,7 @@ function buildTrackSettingsRow(project, track) {
   window.api.getHarnesses().then(list => { if (row.isConnected) renderCli((list || []).filter(h => h.enabled)); }).catch(() => {});
   cli.onchange = () => patch({ cli: cli.value || null });
 
-  row.querySelector('.ws-trow-status').onclick = () => patch({ status: track.status === 'done' ? 'active' : 'done' });
+  row.querySelector('.ws-trow-status').onclick = () => toggleTrackDone(project, track, patch);
   row.querySelector('.ws-trow-delete').onclick = () => deleteTrackFlow(project, track);
   return row;
 }
@@ -2492,10 +2528,12 @@ function renderStrip(project) {
     ${branch ? `<span class="strip-branch mono">${PICONS.branch(11)}<span>${escapeHtml(branch)}</span></span>` : ''}
     <span class="ws-flex"></span>
     <button type="button" class="ws-btn ws-btn--sm project-task-btn" id="strip-tasks" data-project-id="${project.id}" data-project-path="${escapeHtml(project.root)}" data-project-paths="${escapeHtml(taskPseudoProject(project).projectPaths.join('\n'))}">${PICONS.play(11)}<span>Tasks</span><span class="project-task-count ws-badge" ${running ? '' : 'style="display:none"'}>${running || ''}</span></button>
+    ${scheduleButtonHtml(project, 'strip-schedules', true)}
     <button type="button" class="ws-btn ws-btn--sm ws-btn--primary" id="strip-new">${PICONS.plus(11)}<span>New session</span>${PICONS.chevronDown(10)}</button>
     <button type="button" class="ws-btn ws-btn--sm ws-btn--icon" id="strip-more" title="More">${PICONS.dots(13)}</button>`;
   projectStrip.querySelector('#strip-back').onclick = () => { setProjectTab(project, 'overview'); showProjectOverview(); };
   projectStrip.querySelector('#strip-tasks').onclick = (e) => showTaskPopover(taskPseudoProject(project), e.currentTarget);
+  projectStrip.querySelector('#strip-schedules').onclick = (e) => showProjectScheduleMenu(project, e.currentTarget);
   projectStrip.querySelector('#strip-new').onclick = (e) => showNewSessionMenu(project, null, e.currentTarget);
   projectStrip.querySelector('#strip-more').onclick = (e) => showContextMenu(projectMenuItems(project, { fromPage: true }), { anchor: e.currentTarget });
 }
@@ -2999,7 +3037,7 @@ function projectMenuItems(project, { fromPage = false } = {}) {
     { sep: true },
     { label: 'Rename…', icon: PICONS.pencil(14), onClick: () => renameProjectFlow(project) },
     { label: 'Attach folder…', icon: PICONS.folder(14), onClick: () => attachFolderAsk(project) },
-    { label: 'Create scheduled task', icon: PICONS.clock(14), onClick: () => launchScheduleCreator({ projectPath: project.root }) },
+    { label: 'New scheduled task…', icon: PICONS.clock(14), onClick: () => showScheduleDialog({ projectId: project.id, trackId: null, project }) },
     { label: 'Settings', icon: ICONS.gear(14), onClick: () => selectProject(project.id, { tab: 'settings' }) },
     { label: 'Open project folder', icon: PICONS.open(14), onClick: () => window.api.openPath(project.root) },
     { sep: true },
@@ -3019,6 +3057,7 @@ function trackMenuItems(project, track) {
   return [
     sessions.length ? { label: 'Resume latest', icon: PICONS.play(13), onClick: () => openSession(sessions[0]) } : null,
     { label: 'New session', icon: PICONS.plus(14), submenu: newSessionItems(project, track) },
+    { label: 'New scheduled task…', icon: PICONS.clock(14), onClick: () => showScheduleDialog({ projectId: project.id, trackId: track.id, project }) },
     { label: 'Show all sessions', icon: PICONS.list(14), onClick: () => openTrackInPanes(project, track.id) },
     { sep: true },
     { label: 'Rename…', icon: PICONS.pencil(14), onClick: () => renameTrackFlow(project, track) },
@@ -3031,7 +3070,7 @@ function trackMenuItems(project, track) {
         { label: 'Codex', icon: ICONS.codex(14, 'codex-icon'), muted: track.cli === 'codex', onClick: () => patch({ cli: 'codex' }) },
       ] },
     { sep: true },
-    { label: track.status === 'done' ? 'Reopen track' : 'Mark as done', icon: PICONS.check(14), onClick: () => patch({ status: track.status === 'done' ? 'active' : 'done' }) },
+    { label: track.status === 'done' ? 'Reopen track' : 'Mark as done', icon: PICONS.check(14), onClick: () => toggleTrackDone(project, track, patch) },
     { label: 'Delete track…', icon: PICONS.trash(14), danger: true, onClick: () => deleteTrackFlow(project, track) },
   ].filter(Boolean);
 }
@@ -3103,13 +3142,13 @@ function sessionMenuItems(session) {
     ? { ...launchTargetFor(info.project, (info.project.tracks || []).find(t => t.id === session.trackId) || null), projectPath: session.projectPath }
     : folder;
   const sessionActions = [
-    { label: 'Copy session ID', onClick: () => window.api.writeClipboard(session.sessionId) },
     session.type !== 'terminal' ? { label: 'Fork', icon: PICONS.fork(14), onClick: () => forkSession(session, forkTarget) } : null,
     session.type !== 'terminal' ? { label: unread ? 'Mark as read' : 'Mark as unread', icon: unread ? ICONS.markRead(14) : ICONS.markUnread(14), onClick: () => { if (unread) clearUnread(session.sessionId); else markUnread(session.sessionId); refreshSidebar(); } } : null,
     session.type !== 'terminal' ? { label: 'View messages', icon: PICONS.messages(14), onClick: () => showJsonlViewer(session) } : null,
     session.type !== 'terminal' && !running ? { label: 'Resume with config…', icon: ICONS.launchConfig(14), onClick: () => showResumeSessionDialog(session) } : null,
   ].filter(Boolean);
   const stateActions = [
+    { label: 'Copy session ID', onClick: () => window.api.writeClipboard(session.sessionId) },
     running ? { label: 'Stop', icon: '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>', onClick: () => confirmAndStopSession(session.sessionId) } : null,
     isDismissibleSession(session.sessionId) ? { label: 'Dismiss', icon: PICONS.x(14), hint: 'never started', onClick: () => dismissSession(session.sessionId) } : null,
     session.type !== 'terminal' ? { label: session.archived ? 'Unarchive' : 'Archive', icon: PICONS.archive(14), onClick: () => toggleArchiveSession(session) } : null,
@@ -3282,14 +3321,19 @@ function runningWorkInProject(project) {
  * Warn before marking a project done while work is still running: going ahead
  * stops all of it. Resolves true to proceed, false to leave the project active.
  */
-function confirmProjectDone(project, running) {
+function confirmProjectDone(project, running, schedules = []) {
   const parts = [];
   if (running.sessions.length) parts.push(`${running.sessions.length} running session${running.sessions.length === 1 ? '' : 's'}`);
   if (running.tasks.length) parts.push(`${running.tasks.length} running task${running.tasks.length === 1 ? '' : 's'}`);
+  const stopping = parts.length > 0;
   const all = [
     ...running.sessions.map(s => sessionTitle(s)),
     ...running.tasks.map(t => t.label),
+    ...schedules.map(s => `${s.name} (scheduled, will pause)`),
   ];
+  const scheduleNote = schedules.length
+    ? ` ${schedules.length} scheduled task${schedules.length === 1 ? '' : 's'} will pause until the project is reopened.`
+    : '';
   const names = all.slice(0, 8);
   const more = all.length - names.length;
   return new Promise(resolve => {
@@ -3301,12 +3345,12 @@ function confirmProjectDone(project, running) {
     dialog.setAttribute('aria-modal', 'true');
     dialog.setAttribute('aria-labelledby', 'done-running-title');
     dialog.innerHTML = `
-      <h3 id="done-running-title">Stop ${escapeHtml(parts.join(' and '))} in ${escapeHtml(project.name)}?</h3>
-      <div class="add-project-hint">Marking the project done stops all of it.</div>
+      <h3 id="done-running-title">${stopping ? `Stop ${escapeHtml(parts.join(' and '))} in ${escapeHtml(project.name)}?` : `Mark ${escapeHtml(project.name)} as done?`}</h3>
+      <div class="add-project-hint">${stopping ? 'Marking the project done stops all of it.' : ''}${escapeHtml(scheduleNote)}</div>
       <div class="np-tree mono done-running-list">${names.map(n => `<span class="np-tree-item">${escapeHtml(n)}</span>`).join('')}${more > 0 ? `<span class="np-tree-item"><em>+ ${more} more</em></span>` : ''}</div>
       <div class="add-project-actions">
         <button class="add-project-cancel-btn" type="button">Cancel</button>
-        <button class="add-project-add-btn" type="button">Stop and mark as done</button>
+        <button class="add-project-add-btn" type="button">${stopping ? 'Stop and mark as done' : 'Mark as done'}</button>
       </div>`;
     const finish = value => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(value); };
     const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); finish(false); } };
@@ -3319,12 +3363,28 @@ function confirmProjectDone(project, running) {
   });
 }
 
+/**
+ * Marking a track done pauses its scheduled tasks until it is reopened; say
+ * so before doing it. `patch` is the caller's updateTrack wrapper.
+ */
+async function toggleTrackDone(project, track, patch) {
+  const toDone = track.status !== 'done';
+  if (toDone) {
+    const paused = schedulesForProject(project).filter(s => s.trackId === track.id && s.enabled);
+    if (paused.length && !confirm(`Mark “${track.name}” as done?\n\n${paused.length} scheduled task${paused.length === 1 ? '' : 's'} in it will pause until the track is reopened.`)) return;
+  }
+  await patch({ status: toDone ? 'done' : 'active' });
+}
+
 async function toggleProjectDone(project) {
   const isDone = project.status === 'done';
   if (!isDone) {
     const running = runningWorkInProject(project);
-    if (running.sessions.length || running.tasks.length) {
-      if (!await confirmProjectDone(project, running)) return;
+    // Schedules do not need stopping — a done project simply stops firing
+    // them — but the user should hear that before it happens.
+    const schedules = schedulesForProject(project).filter(s => s.enabled);
+    if (running.sessions.length || running.tasks.length || schedules.length) {
+      if (!await confirmProjectDone(project, running, schedules)) return;
       for (const session of running.sessions) {
         try { await window.api.stopSession(session.sessionId); } catch {}
         activePtyIds.delete(session.sessionId);

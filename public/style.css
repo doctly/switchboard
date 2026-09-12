@@ -5989,6 +5989,25 @@ body { display: flex; flex-direction: column; }
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
+.session-turn-preview-body { position: relative; }
+/* The message runs past the box: fade the last line so the cut reads as a cut. */
+.session-turn-preview-body.clipped::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 44px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(25,25,35,0), #191923);
+}
+.session-turn-preview-more {
+  margin-top: 8px;
+  color: #77778e;
+  font-size: 10.5px;
+  font-style: italic;
+}
+.session-turn-preview-more[hidden] { display: none; }
 .session-turn-preview-text {
   max-height: 342px;
   overflow: hidden;
@@ -6778,3 +6797,101 @@ body { display: flex; flex-direction: column; }
    "the next phase" and "all phases done", and neither of them spins. */
 .proj-dot--next { background: #f0a050; box-shadow: 0 0 6px rgba(240,160,80,0.5); }
 .proj-dot--done { background: #3ecf5a; box-shadow: 0 0 6px rgba(62,207,90,0.5); }
+
+/* --- Scheduled tasks --- */
+/* The Sessions-tab clock: plain until the folder has schedules, then tinted
+   with a count. All-off keeps the count but drops the tint. */
+.project-schedule-btn { position: relative; }
+.project-schedule-btn.has-schedules {
+  opacity: 1;
+  color: #e0a030;
+  width: auto;
+  padding: 0 4px 0 3px;
+  gap: 3px;
+  background: rgba(255,180,50,0.1);
+}
+.project-schedule-btn.has-schedules.all-off { color: #8a8a9a; background: rgba(255,255,255,0.05); }
+.project-schedule-btn .schedule-count {
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  min-width: 8px;
+}
+/* The project header's button: a plain ws-btn, tinted while any schedule is on. */
+.ws-btn.ws-schedule-btn.has-schedules { color: #e8b04a; border-color: rgba(224,160,48,0.4); background: rgba(224,160,48,0.1); }
+.ws-btn.ws-schedule-btn.has-schedules.all-off { color: #8a8a9a; border-color: rgba(255,255,255,0.12); background: rgba(255,255,255,0.04); }
+.ws-btn.ws-schedule-btn:hover { background: rgba(224,160,48,0.18); color: #f0bc5c; }
+
+/* The chip on a session row: clock, schedule name, time it fired. */
+.pane-tag--schedule {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+  color: #e8b04a;
+  background: rgba(224,160,48,0.12);
+  max-width: 180px;
+}
+.pane-tag--schedule svg { flex-shrink: 0; }
+/* Icon only: the session list has no room for the task's name. */
+.pane-tag--icon { padding: 1px 3px; gap: 0; }
+.session-schedule-chip { display: inline-flex; margin-left: 6px; min-width: 0; }
+.session-schedule-chip .pane-tag { font-size: 9px; }
+
+/* The dialog. */
+.schedule-dialog { width: 600px; }
+.schedule-dialog .sd-when { flex-direction: column; align-items: stretch; gap: 8px; width: 100%; }
+.schedule-dialog .sd-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.schedule-dialog .sd-preset { padding: 7px 10px; }
+.schedule-dialog .sd-preset .perm-name { font-size: 12px; }
+.schedule-dialog .sd-cron-note {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: #a0a0b8;
+  padding: 6px 8px;
+  border: 1px dashed rgba(224,160,48,0.35);
+  border-radius: 6px;
+}
+.schedule-dialog .sd-cron-note strong { color: #e8b04a; font-weight: 600; }
+.schedule-dialog .sd-time-row { display: flex; gap: 14px; align-items: center; font-size: 12px; color: #a0a0b8; }
+.schedule-dialog .sd-time-row label { display: inline-flex; align-items: center; gap: 6px; }
+.schedule-dialog .sd-time-row [hidden] { display: none !important; }
+.schedule-dialog .sd-time { width: auto; min-width: 128px; padding-right: 8px; }
+.schedule-dialog .sd-time::-webkit-datetime-edit { padding: 0; }
+.schedule-dialog .sd-time::-webkit-calendar-picker-indicator { margin-left: 4px; opacity: 0.6; }
+.schedule-dialog .sd-prompt { resize: vertical; min-height: 90px; font-family: inherit; line-height: 1.4; }
+.schedule-dialog .sd-runs { font-size: 11.5px; color: #8a8aa0; padding: 10px 18px 0; }
+.schedule-dialog .sd-error { color: #e36a78; font-size: 12.5px; padding: 10px 18px 0; }
+.schedule-dialog .new-session-actions { display: flex; align-items: center; gap: 8px; }
+.schedule-dialog .sd-delete-btn {
+  background: transparent;
+  border: 1px solid rgba(227,106,120,0.35);
+  color: #e36a78;
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.schedule-dialog .sd-delete-btn:hover { background: rgba(227,106,120,0.1); }
+
+
+/* Full destinations for terminal file links and OSC 8 hyperlinks. */
+.terminal-link-tooltip {
+  position: fixed;
+  z-index: 10000;
+  max-width: min(640px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow: hidden;
+  padding: 7px 10px;
+  border: 1px solid #494957;
+  border-radius: 5px;
+  background: #252530;
+  color: #e4e4ed;
+  box-shadow: 0 4px 16px #0006;
+  font: 12px/1.45 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
