@@ -13,6 +13,8 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
+const { scanLines } = require('../jsonl-scan');
 const { encodeProjectPath } = require('../encode-project-path');
 
 const id = 'claude';
@@ -98,17 +100,18 @@ function transcriptPath({ sessionId, folder, sessionFile }) {
 // --- Project path derivation ---
 
 function extractCwdFromJsonl(filePath) {
+  let cwd = null;
+  const readCwd = (line) => {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.cwd) { cwd = entry.cwd; return false; }
+    } catch {}
+  };
   try {
-    const lines = fs.readFileSync(filePath, 'utf8').split('\n');
-    for (const line of lines) {
-      if (!line) continue;
-      try {
-        const parsed = JSON.parse(line);
-        if (parsed.cwd) return parsed.cwd;
-      } catch {}
-    }
-  } catch {}
-  return null;
+    const { tail } = scanLines(filePath, 0, readCwd);
+    if (!cwd && tail) readCwd(tail);
+  } catch { return null; }
+  return cwd;
 }
 
 /** The project a folder belongs to, read out of any transcript it contains. */
@@ -224,77 +227,128 @@ function matchesLaunch(signals, { forkFrom, spawnedAt }) {
 
 // --- Transcript parsing ---
 
-/** Parse a single .jsonl file into a session object (or null if invalid) */
-function readSessionFile(filePath, folder, projectPath) {
-  const sessionId = path.basename(filePath, '.jsonl');
-  try {
-    const stat = fs.statSync(filePath);
-    const content = fs.readFileSync(filePath, 'utf8');
-    const lines = content.split('\n').filter(Boolean);
-    let summary = '';
-    let messageCount = 0;
-    const textParts = [];
-    let slug = null;
-    let customTitle = null;
-    let aiTitle = null;
-    // Real conversation time bounds. Resuming a session appends untimestamped
-    // bookkeeping records (last-prompt, mode, ai-title, …) which bump the file's
-    // mtime without any actual activity, so mtime can't be the displayed time.
-    let firstTimestamp = null;
-    let lastTimestamp = null;
-    for (const line of lines) {
-      const entry = JSON.parse(line);
-      if (entry.timestamp) {
-        // ISO-8601 UTC strings — lexicographic comparison is chronological
-        if (!firstTimestamp || entry.timestamp < firstTimestamp) firstTimestamp = entry.timestamp;
-        if (!lastTimestamp || entry.timestamp > lastTimestamp) lastTimestamp = entry.timestamp;
-      }
-      if (entry.slug && !slug) slug = entry.slug;
-      if (entry.type === 'custom-title' && entry.customTitle) {
-        customTitle = entry.customTitle;
-      }
-      if (entry.type === 'ai-title' && entry.aiTitle) {
-        aiTitle = entry.aiTitle;
-      }
-      const isConversationMessage = entry.type === 'user' || entry.type === 'assistant' ||
-        (entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'));
-      if (isConversationMessage) {
-        messageCount++;
-      }
-      const msg = entry.message;
-      const text = typeof msg === 'string' ? msg :
-        (typeof msg?.content === 'string' ? msg.content :
-        (Array.isArray(msg?.content) ? msg.content
-          .filter(block => block?.type === 'text' && typeof block.text === 'string')
-          .map(block => block.text).join('\n') : ''));
-      if (!summary && (entry.type === 'user' || (entry.type === 'message' && entry.role === 'user'))) {
-        // Skip local command messages (! prefix) — use the next real user message
-        if (text && !/<bash-input>|<bash-stdout>|<local-command-caveat>/.test(text)) {
-          // Use scheduled task name if present
-          const taskMatch = text.match(/<scheduled-task\s+name="([^"]+)"/);
-          summary = taskMatch ? 'Scheduled: ' + taskMatch[1] : text.slice(0, 120);
-        }
-      }
-      // Search the entire conversation, including every text block. Tool
-      // inputs/results, thinking and non-message records are not conversation.
-      if (isConversationMessage && text) textParts.push(text);
+const HEAD_BYTES = 4096;          // guard window for append-only transcripts
+
+function hashHead(fd, stat) {
+  const n = Math.min(HEAD_BYTES, stat.size);
+  if (n === 0) return '';
+  const buf = Buffer.allocUnsafe(n);
+  if (fs.readSync(fd, buf, 0, n, 0) !== n) throw new Error('JSONL head changed during read');
+  // Version the state: v2 cached capped text and included non-conversation records.
+  // Rebuild those rows only when their transcript next changes.
+  // Include file identity so an atomic replacement with the same prefix resets.
+  return 'v3:' + crypto.createHash('sha1')
+    .update(`${stat.dev}:${stat.ino}:`).update(buf).digest('hex');
+}
+
+/** Accumulator. Every field is either a first-occurrence or a running total,
+ *  which is what makes resuming mid-file valid. */
+function emptyState() {
+  return { summary: '', messageCount: 0, textParts: [], slug: null, customTitle: null, aiTitle: null, firstTimestamp: null, lastTimestamp: null };
+}
+
+function stateFrom(prev) {
+  return {
+    summary: prev.summary || '',
+    messageCount: prev.messageCount || 0,
+    textParts: prev.textContent ? [prev.textContent] : [],
+    slug: prev.slug || null,
+    customTitle: prev.customTitle || null,
+    aiTitle: prev.aiTitle || null,
+    firstTimestamp: prev.firstTimestamp || null,
+    lastTimestamp: prev.lastTimestamp || null,
+  };
+}
+
+function applyLine(line, st) {
+  let entry;
+  try { entry = JSON.parse(line); } catch { return; }
+
+  if (entry.timestamp) {
+    if (!st.firstTimestamp || entry.timestamp < st.firstTimestamp) st.firstTimestamp = entry.timestamp;
+    if (!st.lastTimestamp || entry.timestamp > st.lastTimestamp) st.lastTimestamp = entry.timestamp;
+  }
+
+  if (entry.slug && !st.slug) st.slug = entry.slug;
+  if (entry.type === 'custom-title' && entry.customTitle) st.customTitle = entry.customTitle;
+  if (entry.type === 'ai-title' && entry.aiTitle) st.aiTitle = entry.aiTitle;
+
+  const isConversationMessage = entry.type === 'user' || entry.type === 'assistant' ||
+    (entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'));
+  if (isConversationMessage) {
+    st.messageCount++;
+  }
+
+  const msg = entry.message;
+  const text = typeof msg === 'string' ? msg :
+    (typeof msg?.content === 'string' ? msg.content :
+    (Array.isArray(msg?.content) ? msg.content
+      .filter(block => block?.type === 'text' && typeof block.text === 'string')
+      .map(block => block.text).join('\n') : ''));
+
+  if (!st.summary && (entry.type === 'user' || (entry.type === 'message' && entry.role === 'user'))) {
+    // Skip local command messages (! prefix) — use the next real user message
+    if (text && !/<bash-input>|<bash-stdout>|<local-command-caveat>/.test(text)) {
+      // Use scheduled task name if present
+      const taskMatch = text.match(/<scheduled-task\s+name="([^"]+)"/);
+      st.summary = taskMatch ? 'Scheduled: ' + taskMatch[1] : text.slice(0, 120);
     }
-    if (!summary || messageCount < 1) return null;
+  }
+
+  // Search every conversation text block without tools, thinking, or bookkeeping.
+  if (isConversationMessage && text) st.textParts.push(text);
+}
+
+/**
+ * Parse metadata in bounded chunks. A cached row lets append-only transcripts
+ * resume at the previous newline instead of re-reading their entire history.
+ * Head changes, replacement, truncation, or a changed file with no growth reset
+ * the accumulator. In-place edits beyond the head while also growing the file
+ * are outside this append-only contract; a full re-index is needed for those.
+ */
+function readSessionFile(filePath, folder, projectPath, prev = null) {
+  const sessionId = path.basename(filePath, '.jsonl');
+  let fd = null;
+  try {
+    fd = fs.openSync(filePath, 'r');
+    const stat = fs.fstatSync(fd);
+    const fileMtime = stat.mtime.toISOString();
+    const headHash = hashHead(fd, stat);
+    const canResume = !!prev && !!headHash
+      && prev.runtime === id && prev.sessionId === sessionId
+      && prev.sessionFile === filePath && prev.headHash === headHash
+      && Number.isSafeInteger(prev.indexedBytes) && prev.indexedBytes > 0
+      && prev.indexedBytes <= stat.size
+      && (prev.indexedBytes < stat.size || prev.fileMtime === fileMtime);
+    const st = canResume ? stateFrom(prev) : emptyState();
+    const start = canResume ? prev.indexedBytes : 0;
+    // Hash and scan the same descriptor and only the size captured above.
+    // Concurrent appends are left for the next pass; read errors return null
+    // rather than saving partial metadata under a supposedly up-to-date mtime.
+    const { consumed, read, tail } = scanLines(fd, start, line => applyLine(line, st), stat.size);
+    if (tail) applyLine(tail, st);
+    const after = fs.fstatSync(fd);
+    if (after.size < stat.size || (after.size === stat.size && after.mtimeMs !== stat.mtimeMs)) return null;
+    if (!st.summary || st.messageCount < 1) return null;
     return {
-      sessionId, folder, projectPath,
-      runtime: id,
-      sessionFile: filePath,
-      summary, firstPrompt: summary,
-      // created/modified are display+sort values from message timestamps;
-      // fileMtime is the cache-invalidation key (compared against stat.mtime
-      // in refreshFolder). Old transcripts without timestamps fall back to stat.
-      created: firstTimestamp || stat.birthtime.toISOString(),
-      modified: lastTimestamp || stat.mtime.toISOString(),
-      fileMtime: stat.mtime.toISOString(),
-      messageCount, textContent: textParts.join('\n'), slug, customTitle, aiTitle,
+      sessionId, folder, projectPath, runtime: id, sessionFile: filePath,
+      summary: st.summary, firstPrompt: st.summary,
+      created: st.firstTimestamp || stat.birthtime.toISOString(),
+      modified: st.lastTimestamp || fileMtime,
+      fileMtime,
+      messageCount: st.messageCount, textContent: st.textParts.join('\n'),
+      slug: st.slug, customTitle: st.customTitle, aiTitle: st.aiTitle,
+      firstTimestamp: st.firstTimestamp, lastTimestamp: st.lastTimestamp,
+      headHash,
+      // A complete JSON value without a newline is displayed but cannot be
+      // accumulated safely: re-read it next time instead of double-counting it.
+      indexedBytes: tail ? 0 : consumed,
+      bytesRead: read + Math.min(HEAD_BYTES, stat.size),
     };
   } catch {
     return null;
+  } finally {
+    if (fd !== null) { try { fs.closeSync(fd); } catch {} }
   }
 }
 

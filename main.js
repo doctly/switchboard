@@ -8,6 +8,8 @@ const log = require('electron-log');
 // getFolderIndexMtimeMs moved to session-cache.js
 const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer, cleanStaleLockFiles } = require('./mcp-bridge');
 const { fetchAndTransformUsage } = require('./claude-auth');
+const { runStatsCommand, refreshStatsCache } = require('./stats-refresh');
+const { readHead } = require('./jsonl-scan');
 const codexAuth = require('./codex-auth');
 
 // SWITCHBOARD_DATA_DIR isolates a dev/test instance from the installed app:
@@ -35,6 +37,7 @@ const { createTerminalActivity } = require('./terminal-activity');
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
 const { scanSchedules } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
+const { resolveEffectiveSettings } = require('./resolve-effective-settings');
 const { listProjectDirectory, readProjectFile, readPreviewFile, openFileExternally } = require('./project-files');
 const { manageProjectEntry } = require('./file-management');
 const { resolveTerminalFiles } = require('./terminal-file-links');
@@ -281,7 +284,7 @@ sessionCache.init({
   getMainWindow: () => mainWindow,
   log,
   db: {
-    deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession,
+    deleteCachedFolder, getCachedByFolder, getCachedSession, upsertCachedSessions, deleteCachedSession,
     deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
     setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, setSetting, getMeta, setName,
     updateCachedAiTitle, updateSearchTitle,
@@ -717,118 +720,37 @@ ipcMain.handle('get-stats', () => {
   }
 });
 
-// --- IPC: refresh-stats (run /stats + /usage via PTY) ---
+// --- IPC: refresh-stats ---
+let statsRefreshInFlight = null;
 ipcMain.handle('refresh-stats', async () => {
-  // For stats, use the configured shell profile
-  const globalSettings = getSetting('global') || {};
-  const statsProfileId = globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile;
-  const statsShellProfile = resolveShell(statsProfileId);
-  const statsShell = statsShellProfile.path;
-  const statsShellExtraArgs = statsShellProfile.args || [];
-  const ptyEnv = {
-    ...cleanPtyEnv,
-    TERM: 'xterm-256color',
-    COLORTERM: 'truecolor',
-    TERM_PROGRAM: 'iTerm.app',
-    TERM_PROGRAM_VERSION: '3.6.6',
-    FORCE_COLOR: '3',
-    ITERM_SESSION_ID: '1',
-  };
-
-  // Helper: spawn claude with args, collect output, auto-accept trust, kill when idle
-  // waitFor: optional regex tested against stripped output — finish only when matched
-  function runClaude(args, { timeoutMs = 15000, waitFor = null } = {}) {
-    return new Promise((resolve) => {
-      let output = '';
-      let settled = false;
-      let trustAccepted = false;
-      // Track idle: ✳ in OSC title means Claude is idle and waiting for input
-      let sawActivity = false;
-
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        try { p.kill(); } catch {}
-        resolve(output);
-      };
-
-      const claudeCmd = `claude ${args}`;
-      const p = pty.spawn(statsShell, shellArgs(statsShell, claudeCmd, statsShellExtraArgs), {
-        name: 'xterm-256color',
-        cols: 120,
-        rows: 40,
-        cwd: os.homedir(),
-        env: ptyEnv,
-      });
-
-      const strip = (s) => s
-        .replace(/\x1b\[[^@-~]*[@-~]/g, '')
-        .replace(/\x1b\][^\x07]*\x07/g, '')
-        .replace(/\x1b[^[\]].?/g, '');
-
-      p.onData((data) => {
-        output += data;
-
-        // Auto-accept trust directory prompt (Enter selects "1. Yes")
-        if (!trustAccepted) {
-          if (/trust\s*this\s*folder/i.test(strip(output))) {
-            trustAccepted = true;
-            try { p.write('\r'); } catch {}
-            return;
-          }
-        }
-
-        // If waitFor is set, finish when that pattern appears in stripped output
-        if (waitFor) {
-          if (waitFor.test(strip(output))) {
-            finish();
-          }
-          return;
-        }
-
-        // Default: detect busy→idle transition via OSC title containing ✳
-        if (!sawActivity) {
-          const oscTitle = data.match(/\x1b\]0;([^\x07\x1b]*)/);
-          if (oscTitle) {
-            const first = oscTitle[1].charAt(0);
-            if (first.charCodeAt(0) >= 0x2800 && first.charCodeAt(0) <= 0x28FF) {
-              sawActivity = true;
-            }
-          }
-        } else if (data.includes('\u2733')) {
-          finish();
-        }
-      });
-
-      p.onExit(() => finish());
-      setTimeout(finish, timeoutMs);
-    });
-  }
-
-  // A switched-off CLI is not spawned and not queried — the PTY run below is
-  // the most expensive thing in the app to do for a CLI the user has hidden.
   if (!harnessEnabled(DEFAULT_HARNESS)) return { stats: null, usage: {} };
+  if (statsRefreshInFlight) return statsRefreshInFlight;
 
-  try {
-    // Run /stats via PTY (for heatmap/chart data) and fetch usage via API in parallel
-    const [, usage] = await Promise.all([
-      runClaude('"/stats"', { waitFor: /streak/i, timeoutMs: 10000 }),
-      fetchAndTransformUsage().catch(() => ({})),
-    ]);
-
-    // Read refreshed stats cache
-    let stats = null;
-    try {
-      if (fs.existsSync(STATS_CACHE_PATH)) {
-        stats = JSON.parse(fs.readFileSync(STATS_CACHE_PATH, 'utf8'));
-      }
-    } catch {}
-
-    return { stats, usage: usage || {} };
-  } catch (err) {
-    log.error('Error refreshing stats:', err);
-    return { stats: null, usage: {} };
-  }
+  statsRefreshInFlight = (async () => {
+    const usagePromise = fetchAndTransformUsage().catch(() => ({}));
+    const result = await refreshStatsCache(STATS_CACHE_PATH, () => {
+      const globalSettings = getSetting('global') || {};
+      const profile = resolveShell(globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile);
+      return runStatsCommand({
+        spawn: (...args) => pty.spawn(...args),
+        shell: profile.path,
+        args: shellArgs(profile.path, 'claude "/stats"', profile.args || []),
+        options: {
+          name: 'xterm-256color', cols: 120, rows: 40, cwd: os.homedir(),
+          env: {
+            ...cleanPtyEnv,
+            TERM: 'xterm-256color', COLORTERM: 'truecolor',
+            TERM_PROGRAM: 'iTerm.app', TERM_PROGRAM_VERSION: '3.6.6',
+            FORCE_COLOR: '3', ITERM_SESSION_ID: '1',
+          },
+        },
+      });
+    });
+    if (result.statsError) log.warn('Error refreshing stats:', result.statsError);
+    return { ...result, usage: await usagePromise || {} };
+  })();
+  try { return await statsRefreshInFlight; }
+  finally { statsRefreshInFlight = null; }
 });
 
 // --- IPC: get-usage (lightweight, API-only, no PTY) ---
@@ -1146,16 +1068,7 @@ ipcMain.handle('get-shell-profiles', () => {
 function effectiveSettings(projectPath) {
   const global = getSetting('global') || {};
   const project = projectPath ? (getSetting('project:' + projectPath) || {}) : {};
-  const effective = { ...SETTING_DEFAULTS };
-  for (const key of Object.keys(SETTING_DEFAULTS)) {
-    if (global[key] !== undefined && global[key] !== null) {
-      effective[key] = global[key];
-    }
-    if (project[key] !== undefined && project[key] !== null) {
-      effective[key] = project[key];
-    }
-  }
-  return effective;
+  return resolveEffectiveSettings(SETTING_DEFAULTS, global, project);
 }
 
 ipcMain.handle('get-effective-settings', (_event, projectPath) => effectiveSettings(projectPath));
@@ -1428,7 +1341,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     if (!startFresh) {
       try {
         const jsonlPath = path.join(claudeProjectDir, sessionId + '.jsonl');
-        const head = fs.readFileSync(jsonlPath, 'utf8').slice(0, 8000);
+        const head = readHead(jsonlPath, 8192);
         const firstLines = head.split('\n').filter(Boolean);
         for (const line of firstLines) {
           const entry = JSON.parse(line);

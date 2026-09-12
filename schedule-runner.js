@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { readHead } = require('./jsonl-scan');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
@@ -102,7 +103,9 @@ function readProjectPathFromJsonl(folderPath) {
   try {
     const jsonlFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
     for (const jf of jsonlFiles) {
-      const head = fs.readFileSync(path.join(folderPath, jf), 'utf8').slice(0, 4000);
+      // Head only: legacy schedule import scans every project folder, and a
+      // session .jsonl can be hundreds of MB.
+      const head = readHead(path.join(folderPath, jf), 4096);
       for (const line of head.split('\n').filter(Boolean)) {
         try {
           const entry = JSON.parse(line);
@@ -124,7 +127,7 @@ function scanSchedules(log) {
 
     // Prefer the cached folder→projectPath mapping; only read JSONLs for
     // folders genuinely missing from the cache. This avoids re-reading 4KB of
-    // every JSONL of every project on each 60s tick.
+    // every JSONL of every project during import.
     const folderMeta = loadFolderMetaMap();
 
     for (const folder of folders) {

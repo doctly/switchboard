@@ -29,7 +29,7 @@ function resolveFolderPath(folder) {
  * Call init(ctx) once with the shared context object.
  */
 let PROJECTS_DIR, activeSessions, getMainWindow, log;
-let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession;
+let deleteCachedFolder, getCachedByFolder, getCachedSession, upsertCachedSessions, deleteCachedSession;
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
 let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, setSetting, getMeta, setName;
 let updateCachedAiTitle, updateSearchTitle;
@@ -42,6 +42,7 @@ function init(ctx) {
   // DB functions
   deleteCachedFolder = ctx.db.deleteCachedFolder;
   getCachedByFolder = ctx.db.getCachedByFolder;
+  getCachedSession = ctx.db.getCachedSession;
   upsertCachedSessions = ctx.db.upsertCachedSessions;
   deleteCachedSession = ctx.db.deleteCachedSession;
   deleteSearchFolder = ctx.db.deleteSearchFolder;
@@ -213,6 +214,10 @@ function refreshFolder(folder) {
     deleteCachedFolder(folder);
     return;
   }
+  // Never mark writes that arrive during this pass as already indexed. The
+  // Claude parser deliberately stops at its initial file size; a later append
+  // must remain visible to reconciliation even if its watcher event is missed.
+  const indexMtimeMs = getFolderIndexMtimeMs(folderPath);
 
   // For Claude a folder IS a project, and one with no readable cwd is unusable.
   // A codex folder is a date spanning many projects, so there is no folder-level
@@ -220,7 +225,7 @@ function refreshFolder(folder) {
   // null (which is also what cache_meta records for it).
   const folderProject = h.deriveProjectPath(folderPath, folder);
   if (h.groupsByProject && !folderProject) {
-    setFolderMeta(folder, null, getFolderIndexMtimeMs(folderPath));
+    setFolderMeta(folder, null, indexMtimeMs);
     return;
   }
 
@@ -256,8 +261,12 @@ function refreshFolder(folder) {
       continue; // unchanged, skip
     }
 
-    // File is new or modified — re-read it
-    const sess = h.readSessionFile(filePath, folder, folderProject);
+    // File is new or modified — re-read it. The cached row carries the resume
+    // state, so an append costs the size of the append rather than the size of
+    // the file. Fetched per changed session on purpose: a folder holds
+    // thousands of sessions and only a couple change per flush.
+    const cachedRow = getCachedSession(sessionId);
+    const sess = h.readSessionFile(filePath, folder, folderProject, cachedRow);
     if (sess) {
       sessionsToUpsert.push(sess);
       // Title precedence: user rename (session_meta.name) > JSONL custom-title > JSONL ai-title.
@@ -299,7 +308,7 @@ function refreshFolder(folder) {
   restoreProjectsWithNewSessions(sessionsToUpsert);
 
   // Update folder mtime
-  setFolderMeta(folder, folderProject, getFolderIndexMtimeMs(folderPath));
+  setFolderMeta(folder, folderProject, indexMtimeMs);
 }
 
 /**

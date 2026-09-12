@@ -23,7 +23,8 @@
 //   listTranscripts(dir)       absolute transcript paths in a folder directory
 //   sessionIdFromPath(file)    transcript path → session id, without reading it
 //   transcriptPath(row)        cached row → absolute transcript path
-//   readSessionFile(file, folder, projectPath) → session row, or null
+//   readSessionFile(file, folder, projectPath, prev?) → session row, or null
+//     prev is optional cached parser state; harnesses may ignore it.
 //   titleIndexPath()           optional external title-index path
 //   readSessionTitles()        optional Map<sessionId, title> from that index
 //   buildLaunchArgs({ sessionId, isNew, options }) → argv after the binary

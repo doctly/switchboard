@@ -48,6 +48,9 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Test postinstall helpers
+        run: node --test test/postinstall.test.js
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

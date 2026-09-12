@@ -35,6 +35,7 @@ function makeFakeDb(metaMap, globalSettings = {}) {
     db: {
       deleteCachedFolder() {},
       getCachedByFolder() { return []; },
+      getCachedSession() { return null; },
       upsertCachedSessions(sessions) {
         for (const s of sessions) { indexedFolders.add(s.folder); cachedRows.push(s); }
       },
@@ -81,11 +82,13 @@ test('refreshFolder upgrades only new or changed transcripts to full conversatio
     const searchEntries = new Map();
     const writes = [];
     for (const id of ['changed', 'unchanged']) {
-      fake.cachedRows.push({ sessionId: id, folder,
-        fileMtime: fs.statSync(path.join(folderPath, `${id}.jsonl`)).mtime.toISOString() });
+      const row = require('../harnesses/claude').readSessionFile(
+        path.join(folderPath, `${id}.jsonl`), folder, '/tmp/project');
+      fake.cachedRows.push({ ...row, headHash: 'v2:' + row.headHash.slice(3), textContent: 'legacy excerpt' });
       searchEntries.set(id, 'legacy excerpt');
     }
     fake.db.getCachedByFolder = key => fake.cachedRows.filter(row => row.folder === key);
+    fake.db.getCachedSession = id => fake.cachedRows.find(row => row.sessionId === id) || null;
     fake.db.upsertCachedSessions = sessions => {
       for (const session of sessions) {
         const old = fake.cachedRows.find(row => row.sessionId === session.sessionId);
@@ -156,6 +159,43 @@ test('reconcileCacheFromFilesystem indexes new and stale folders but skips up-to
     assert.ok(fake.indexedFolders.has('proj-stale'), 'stale folder (older indexMtimeMs) should be re-indexed');
     assert.ok(!fake.indexedFolders.has('proj-current'), 'up-to-date folder should be skipped');
   } finally {
+    fs.rmSync(projectsDir, { recursive: true, force: true });
+  }
+});
+
+test('an append arriving during refresh remains eligible for the next reconciliation', () => {
+  const claude = require('../harnesses/claude');
+  const originalRead = claude.readSessionFile;
+  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-concurrent-append-'));
+  const folder = 'project';
+  const folderPath = path.join(projectsDir, folder);
+  try {
+    writeSession(folderPath, '/tmp/project');
+    const file = path.join(folderPath, 'session.jsonl');
+    const before = getFolderIndexMtimeMs(folderPath);
+    const metaMap = new Map();
+    const fake = makeFakeDb(metaMap, { disabledHarnesses: ['codex'] });
+    fake.db.getCachedByFolder = () => fake.cachedRows;
+    fake.db.getCachedSession = id => fake.cachedRows.find(r => r.sessionId === id) || null;
+    sessionCache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(),
+      getMainWindow: () => null, log: console, db: fake.db });
+    claude.readSessionFile = (...args) => {
+      const row = originalRead(...args);
+      fs.appendFileSync(file, JSON.stringify({ type: 'assistant', message: 'arrived during refresh' }) + '\n');
+      const later = new Date(before + 5000);
+      fs.utimesSync(file, later, later);
+      return row;
+    };
+    sessionCache.refreshFolder(folder);
+    claude.readSessionFile = originalRead;
+    assert.equal(fake.cachedRows[0].messageCount, 1);
+    assert.ok(metaMap.get(folder).indexMtimeMs < getFolderIndexMtimeMs(folderPath));
+    fake.indexedFolders.clear();
+    sessionCache.reconcileCacheFromFilesystem();
+    assert.ok(fake.indexedFolders.has(folder), 'the late append must not be acknowledged without parsing it');
+    assert.equal(fake.cachedRows.at(-1).messageCount, 2);
+  } finally {
+    claude.readSessionFile = originalRead;
     fs.rmSync(projectsDir, { recursive: true, force: true });
   }
 });
