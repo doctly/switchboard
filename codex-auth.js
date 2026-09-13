@@ -46,7 +46,6 @@ function formatResetTime(value) {
   }
   if (isNaN(resetDate.getTime())) return null;
   const now = new Date();
-  const diffMs = resetDate - now;
 
   const hours = resetDate.getHours();
   const minutes = resetDate.getMinutes();
@@ -57,7 +56,13 @@ function formatResetTime(value) {
   const tz = Intl.DateTimeFormat('en', { timeZoneName: 'short' }).formatToParts(resetDate)
     .find(p => p.type === 'timeZoneName')?.value || '';
 
-  if (diffMs < 24 * 60 * 60 * 1000) return `${timeStr} (${tz})`;
+  // Which calendar day it lands on, not how far away it is: a reset 8 hours
+  // from 11pm is tomorrow, and a bare "7am" would read as one that has passed.
+  // Rounded, so a DST day of 23 or 25 hours still counts as one day.
+  const startOfDay = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x.getTime(); };
+  const days = Math.round((startOfDay(resetDate) - startOfDay(now)) / 86400000);
+  if (days === 0) return `${timeStr} (${tz})`;
+  if (days === 1) return `tomorrow at ${timeStr} (${tz})`;
 
   const month = resetDate.toLocaleString('en', { month: 'short' });
   const day = resetDate.getDate();

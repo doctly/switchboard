@@ -1,0 +1,207 @@
+.whats-new-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(4, 4, 9, 0.78);
+  backdrop-filter: blur(9px);
+}
+
+.whats-new-dialog {
+  position: relative;
+  width: min(1080px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border: 1px solid rgba(145, 151, 255, 0.28);
+  border-radius: 16px;
+  background: #17171f;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.62);
+}
+
+.whats-new-header {
+  padding: 25px 64px 20px 28px;
+}
+
+.whats-new-kicker {
+  margin-bottom: 5px;
+  color: #9298ff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.whats-new-header h2 {
+  color: #f0f0ff;
+  font-size: 25px;
+  line-height: 1.2;
+}
+
+.whats-new-header p {
+  max-width: 720px;
+  margin-top: 8px;
+  color: #9898b0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.whats-new-close {
+  position: absolute;
+  z-index: 2;
+  top: 17px;
+  right: 18px;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #8888a0;
+  font-size: 25px;
+  line-height: 30px;
+  cursor: pointer;
+}
+
+.whats-new-close:hover,
+.whats-new-close:focus-visible {
+  background: rgba(255, 255, 255, 0.07);
+  color: #e0e0f0;
+}
+
+.whats-new-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 280px;
+  margin: 0 28px;
+  aspect-ratio: 1440 / 760;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 11px;
+  background: #101017;
+}
+
+.whats-new-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+}
+
+.whats-new-arrow {
+  position: absolute;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 58px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(14, 14, 22, 0.86);
+  color: #f0f0ff;
+  font-size: 34px;
+  line-height: 1;
+  cursor: pointer;
+  transform: translateY(-50%);
+  opacity: 0.82;
+  transition: opacity 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.whats-new-arrow:hover,
+.whats-new-arrow:focus-visible {
+  background: rgba(35, 35, 55, 0.96);
+  opacity: 1;
+}
+
+.whats-new-arrow:active {
+  transform: translateY(-50%) scale(0.96);
+}
+
+.whats-new-arrow--previous { left: 14px; }
+.whats-new-arrow--next { right: 14px; }
+
+.whats-new-footer {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 18px 28px 22px;
+}
+
+.whats-new-slide-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.whats-new-caption {
+  min-height: 19px;
+  overflow: hidden;
+  color: #c0c0d8;
+  font-size: 13px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.whats-new-dots {
+  display: flex;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.whats-new-dot {
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: #4f4f65;
+  cursor: pointer;
+  transition: width 140ms ease, background 140ms ease;
+}
+
+.whats-new-dot.active {
+  width: 20px;
+  background: #8088ff;
+}
+
+.whats-new-dismiss {
+  flex: none;
+  min-width: 92px;
+  border: 1px solid rgba(128, 136, 255, 0.45);
+  border-radius: 8px;
+  padding: 8px 16px;
+  background: rgba(128, 136, 255, 0.18);
+  color: #d8d8f0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.whats-new-dismiss:hover,
+.whats-new-dismiss:focus-visible {
+  background: rgba(128, 136, 255, 0.28);
+  border-color: rgba(128, 136, 255, 0.7);
+}
+
+.whats-new-close:focus-visible,
+.whats-new-arrow:focus-visible,
+.whats-new-dot:focus-visible,
+.whats-new-dismiss:focus-visible {
+  outline: 2px solid #9298ff;
+  outline-offset: 2px;
+}
+
+@media (max-width: 760px), (max-height: 650px) {
+  .whats-new-overlay { padding: 12px; }
+  .whats-new-dialog {
+    width: min(1080px, calc(100vw - 24px));
+    max-height: calc(100vh - 24px);
+  }
+  .whats-new-header { padding: 18px 54px 14px 18px; }
+  .whats-new-header h2 { font-size: 21px; }
+  .whats-new-stage { min-height: 180px; margin: 0 18px; }
+  .whats-new-footer { padding: 14px 18px 17px; }
+}

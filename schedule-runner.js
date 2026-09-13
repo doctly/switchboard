@@ -1,8 +1,10 @@
-// schedule-runner.js — Scan schedule-*.md files, match cron, build commands
+// schedule-runner.js — Scan the old schedule-*.md files.
+// Only the scan survives: main imports what it finds as folder schedules
+// (projects.importLegacySchedules) once per file, retrying missed files at startup.
+// cronMatches stays for tests and for parity with public/schedule-time.js.
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const crypto = require('crypto');
 const { readHead } = require('./jsonl-scan');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
@@ -101,7 +103,7 @@ function readProjectPathFromJsonl(folderPath) {
   try {
     const jsonlFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
     for (const jf of jsonlFiles) {
-      // Head only: this runs every minute over every project folder, and a
+      // Head only: legacy schedule import scans every project folder, and a
       // session .jsonl can be hundreds of MB.
       const head = readHead(path.join(folderPath, jf), 4096);
       for (const line of head.split('\n').filter(Boolean)) {
@@ -125,7 +127,7 @@ function scanSchedules(log) {
 
     // Prefer the cached folder→projectPath mapping; only read JSONLs for
     // folders genuinely missing from the cache. This avoids re-reading 4KB of
-    // every JSONL of every project on each 60s tick.
+    // every JSONL of every project during import.
     const folderMeta = loadFolderMetaMap();
 
     for (const folder of folders) {
@@ -145,11 +147,11 @@ function scanSchedules(log) {
             const content = fs.readFileSync(path.join(commandsDir, file), 'utf8');
             const { meta, body } = parseFrontmatter(content);
             if (!meta.cron || !body) continue;
-            if (meta.enabled === 'false') continue;
+            // Disabled files are imported too, as schedules that are off.
             schedules.push({
               file, filePath: path.join(commandsDir, file),
               projectPath, folder: folder.name,
-              name: meta.name || file, cron: meta.cron,
+              name: meta.name || file, cron: meta.cron, enabled: meta.enabled !== 'false',
               slug: meta.slug || file.replace(/^schedule-/, '').replace(/\.md$/, ''),
               cli: meta.cli || {}, prompt: body,
             });
@@ -165,125 +167,4 @@ function scanSchedules(log) {
   return schedules;
 }
 
-/** Create a pre-seeded JSONL session file with user message and slug for grouping. */
-function createScheduleSession(schedule) {
-  const sessionId = crypto.randomUUID();
-  const timestamp = new Date().toISOString();
-  const claudeProjectDir = path.join(PROJECTS_DIR, schedule.folder);
-
-  fs.mkdirSync(claudeProjectDir, { recursive: true });
-  const jsonlPath = path.join(claudeProjectDir, `${sessionId}.jsonl`);
-
-  const msgId = crypto.randomUUID();
-  const lines = [
-    JSON.stringify({ type: 'user', parentUuid: null, uuid: msgId, sessionId, cwd: schedule.projectPath, slug: schedule.slug, timestamp, message: { role: 'user', content: 'Scheduled Task: ' + schedule.prompt } }),
-  ];
-  fs.writeFileSync(jsonlPath, lines.join('\n') + '\n');
-  return { sessionId, jsonlPath };
-}
-
-// Defense-in-depth: reject control chars in frontmatter values (shell-quoter is the real defense)
-function isSafeScalar(s) {
-  if (s == null) return true;
-  return !/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(String(s));
-}
-
-function assertSafe(field, value) {
-  if (!isSafeScalar(value)) {
-    throw new Error(`Schedule field "${field}" contains unsafe characters`);
-  }
-  return value;
-}
-
-/**
- * Build the argv for a scheduled claude invocation.
- * Returns `{ claudeArgs: string[] }` — a plain argv array, with zero shell interpretation.
- * The caller is responsible for shell-quoting when constructing a shell command string.
- */
-function buildScheduleCommand(sessionId, schedule) {
-  const cli = schedule.cli || {};
-  const args = [
-    '--resume', assertSafe('sessionId', sessionId),
-    '-p', 'Run the scheduled task',
-    '--permission-mode', assertSafe('permission-mode', cli['permission-mode'] || 'acceptEdits'),
-  ];
-
-  if (cli.model) args.push('--model', assertSafe('model', cli.model));
-  if (cli['max-budget-usd']) {
-    const budget = String(cli['max-budget-usd']).trim();
-    if (!/^\d+(\.\d+)?$/.test(budget)) {
-      throw new Error(`Schedule field "max-budget-usd" must be a number, got: ${cli['max-budget-usd']}`);
-    }
-    args.push('--max-budget-usd', budget);
-  }
-  args.push('--allowedTools', assertSafe('allowed-tools', cli['allowed-tools'] || 'Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch'));
-  if (cli['append-system-prompt']) {
-    // Allow newlines in prompt text, but not control chars other than \n, \r, \t
-    const prompt = String(cli['append-system-prompt']);
-    if (/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(prompt)) {
-      throw new Error('Schedule field "append-system-prompt" contains unsafe characters');
-    }
-    args.push('--append-system-prompt', prompt);
-  }
-  if (cli['add-dirs']) {
-    for (const dir of String(cli['add-dirs']).split(',').map(d => d.trim()).filter(Boolean)) {
-      args.push('--add-dir', assertSafe('add-dirs', dir));
-    }
-  }
-
-  return { claudeArgs: args };
-}
-
-/**
- * Start the cron loop. Checks every 60 seconds.
- * @param {object} log - Logger
- * @param {function} runCommand - Function to spawn a shell command: runCommand(cmd, cwd, name)
- * @returns {function} stop - Call to stop the scheduler
- */
-function startScheduler(log, runCommand) {
-  let running = true;
-  const runningTasks = new Set();
-
-  function tick() {
-    if (!running) return;
-    const now = new Date();
-    const schedules = scanSchedules(log);
-
-    for (const schedule of schedules) {
-      if (!cronMatches(schedule.cron, now)) continue;
-      const taskKey = `${schedule.folder}:${schedule.slug}`;
-      if (runningTasks.has(taskKey)) {
-        log.info(`[schedule] Skipping ${schedule.name} — still running from previous trigger`);
-        continue;
-      }
-
-      log.info(`[schedule] Triggering: ${schedule.name} (${schedule.cron})`);
-      try {
-        const { sessionId } = createScheduleSession(schedule);
-        const { claudeArgs } = buildScheduleCommand(sessionId, schedule);
-
-        runningTasks.add(taskKey);
-        runCommand(claudeArgs, schedule.projectPath, schedule.name, () => {
-          runningTasks.delete(taskKey);
-        });
-      } catch (err) {
-        log.error(`[schedule] Failed to run ${schedule.name}:`, err);
-      }
-    }
-  }
-
-  const msUntilNextMinute = (60 - new Date().getSeconds()) * 1000;
-  const initialTimer = setTimeout(() => {
-    tick();
-    const interval = setInterval(tick, 60 * 1000);
-    initialTimer._interval = interval;
-  }, msUntilNextMinute);
-
-  return function stop() {
-    running = false;
-    clearTimeout(initialTimer);
-    if (initialTimer._interval) clearInterval(initialTimer._interval);
-  };
-}
-
-module.exports = { parseFrontmatter, cronMatches, scanSchedules, startScheduler, createScheduleSession, buildScheduleCommand };
+module.exports = { parseFrontmatter, cronMatches, scanSchedules };

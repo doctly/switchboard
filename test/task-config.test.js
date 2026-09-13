@@ -1,8 +1,42 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const { loadTasksFromText, resolveTaskGraph, taskFileForWorkspace } = require('../task-config');
+const { loadProjectTasks, loadTasksFromText, resolveTaskGraph, taskFileForWorkspace } = require('../task-config');
+
+test('a known parent (project worktree under repos/) inherits without the .claude/worktrees layout', () => {
+  const worktree = '/projects/feature/repos/web';
+  const parent = '/src/web';
+  const parentTasks = path.join(parent, '.vscode', 'tasks.json');
+  const source = taskFileForWorkspace(worktree, filePath => filePath === parentTasks, parent);
+  assert.deepEqual(source, { filePath: parentTasks, inherited: true, parentPath: parent });
+  assert.equal(taskFileForWorkspace(worktree, () => false, parent), null, 'parent without tasks.json inherits nothing');
+  const localTasks = path.join(worktree, '.vscode', 'tasks.json');
+  assert.equal(taskFileForWorkspace(worktree, filePath => filePath === localTasks, parent).inherited, false, 'local file wins');
+});
+
+test('loadProjectTasks reads an inherited file through options.parentPath', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-task-parent-'));
+  try {
+    const parent = path.join(root, 'src', 'web');
+    const worktree = path.join(root, 'proj', 'repos', 'web');
+    fs.mkdirSync(path.join(parent, '.vscode'), { recursive: true });
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.writeFileSync(path.join(parent, '.vscode', 'tasks.json'), JSON.stringify({
+      version: '2.0.0',
+      tasks: [{ label: 'Dev', type: 'shell', command: 'echo dev' }],
+    }));
+    assert.equal(loadProjectTasks(worktree).length, 0, 'nothing without a parent');
+    const tasks = loadProjectTasks(worktree, { parentPath: parent });
+    assert.equal(tasks.length, 1);
+    assert.equal(tasks[0].label, 'Dev');
+    assert.equal(tasks[0].cwd, worktree, 'runs in the worktree, not the parent');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 const workspaceFolder = path.resolve('/tmp/example-project');
 

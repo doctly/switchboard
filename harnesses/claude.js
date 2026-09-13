@@ -228,31 +228,30 @@ function matchesLaunch(signals, { forkFrom, spawnedAt }) {
 // --- Transcript parsing ---
 
 const HEAD_BYTES = 4096;          // guard window for append-only transcripts
-const TEXT_CONTENT_CAP = 8000;    // how much body text the search index keeps
-const TEXT_LINE_CAP = 500;
 
 function hashHead(fd, stat) {
   const n = Math.min(HEAD_BYTES, stat.size);
   if (n === 0) return '';
   const buf = Buffer.allocUnsafe(n);
   if (fs.readSync(fd, buf, 0, n, 0) !== n) throw new Error('JSONL head changed during read');
-  // Version the state: pre-harness rows lack raw timestamp accumulators.
+  // Version the state: v2 cached capped text and included non-conversation records.
+  // Rebuild those rows only when their transcript next changes.
   // Include file identity so an atomic replacement with the same prefix resets.
-  return 'v2:' + crypto.createHash('sha1')
+  return 'v3:' + crypto.createHash('sha1')
     .update(`${stat.dev}:${stat.ino}:`).update(buf).digest('hex');
 }
 
 /** Accumulator. Every field is either a first-occurrence or a running total,
  *  which is what makes resuming mid-file valid. */
 function emptyState() {
-  return { summary: '', messageCount: 0, textContent: '', slug: null, customTitle: null, aiTitle: null, firstTimestamp: null, lastTimestamp: null };
+  return { summary: '', messageCount: 0, textParts: [], slug: null, customTitle: null, aiTitle: null, firstTimestamp: null, lastTimestamp: null };
 }
 
 function stateFrom(prev) {
   return {
     summary: prev.summary || '',
     messageCount: prev.messageCount || 0,
-    textContent: prev.textContent || '',
+    textParts: prev.textContent ? [prev.textContent] : [],
     slug: prev.slug || null,
     customTitle: prev.customTitle || null,
     aiTitle: prev.aiTitle || null,
@@ -274,15 +273,18 @@ function applyLine(line, st) {
   if (entry.type === 'custom-title' && entry.customTitle) st.customTitle = entry.customTitle;
   if (entry.type === 'ai-title' && entry.aiTitle) st.aiTitle = entry.aiTitle;
 
-  if (entry.type === 'user' || entry.type === 'assistant' ||
-      (entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'))) {
+  const isConversationMessage = entry.type === 'user' || entry.type === 'assistant' ||
+    (entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'));
+  if (isConversationMessage) {
     st.messageCount++;
   }
 
   const msg = entry.message;
   const text = typeof msg === 'string' ? msg :
     (typeof msg?.content === 'string' ? msg.content :
-    (msg?.content?.[0]?.text || ''));
+    (Array.isArray(msg?.content) ? msg.content
+      .filter(block => block?.type === 'text' && typeof block.text === 'string')
+      .map(block => block.text).join('\n') : ''));
 
   if (!st.summary && (entry.type === 'user' || (entry.type === 'message' && entry.role === 'user'))) {
     // Skip local command messages (! prefix) — use the next real user message
@@ -293,9 +295,8 @@ function applyLine(line, st) {
     }
   }
 
-  if (text && st.textContent.length < TEXT_CONTENT_CAP) {
-    st.textContent += text.slice(0, TEXT_LINE_CAP) + '\n';
-  }
+  // Search every conversation text block without tools, thinking, or bookkeeping.
+  if (isConversationMessage && text) st.textParts.push(text);
 }
 
 /**
@@ -335,7 +336,7 @@ function readSessionFile(filePath, folder, projectPath, prev = null) {
       created: st.firstTimestamp || stat.birthtime.toISOString(),
       modified: st.lastTimestamp || fileMtime,
       fileMtime,
-      messageCount: st.messageCount, textContent: st.textContent,
+      messageCount: st.messageCount, textContent: st.textParts.join('\n'),
       slug: st.slug, customTitle: st.customTitle, aiTitle: st.aiTitle,
       firstTimestamp: st.firstTimestamp, lastTimestamp: st.lastTimestamp,
       headHash,
@@ -406,6 +407,9 @@ function classifyNotification(message) {
  */
 function buildLaunchArgs({ sessionId, isNew, options }) {
   const args = [];
+  // This flag accepts multiple values; the session flag must delimit its value
+  // so the first prompt cannot be consumed as another allowed tool.
+  if (options?.allowedTools) args.push('--allowedTools', String(options.allowedTools));
   if (options?.forkFrom) {
     args.push('--resume', String(options.forkFrom), '--fork-session');
   } else if (isNew) {
@@ -445,6 +449,12 @@ function buildLaunchArgs({ sessionId, isNew, options }) {
 
   if (options?.appendSystemPrompt) {
     args.push('--append-system-prompt', String(options.appendSystemPrompt));
+  }
+
+  // A first prompt, as the positional argument. Only for a brand-new session:
+  // a resume continues where it was, and a fork carries its parent's prompt.
+  if (isNew && !options?.forkFrom && options?.initialPrompt) {
+    args.push(String(options.initialPrompt));
   }
 
   return args;

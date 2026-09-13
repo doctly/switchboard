@@ -5,6 +5,10 @@
 const taskLogViews = new Map();
 let activeTaskView = null;
 let openTaskPopover = null;
+// Every folder's tasks by path, including folders that only a project knows
+// about (attached folders and project roots with no sessions of their own).
+// The Projects tab builds its combined task menu from this.
+const tasksByPath = new Map();
 
 function taskViewKey(projectPath, label) {
   return `${projectPath}\0${label}`;
@@ -15,15 +19,21 @@ function findProject(projectPath) {
     const project = projects.find(item => item.projectPath === projectPath);
     if (project) return project;
   }
+  const entry = tasksByPath.get(projectPath);
+  if (entry) return { projectPath, tasks: entry.tasks, taskError: entry.error, hasTaskFile: entry.hasTaskFile };
   return null;
 }
 
-async function hydrateProjectTasks(projectLists) {
+async function hydrateProjectTasks(projectLists, extraPaths = []) {
   const projects = projectLists.flat();
-  const paths = [...new Set(projects.map(project => project.projectPath))];
+  const paths = [...new Set([...projects.map(project => project.projectPath), ...extraPaths])];
   if (!paths.length) return;
   let results;
   try { results = await window.api.listTasksForProjects(paths); } catch { return; }
+  for (const p of paths) {
+    const result = results[p] || { tasks: [], error: null, hasTaskFile: false };
+    tasksByPath.set(p, { tasks: result.tasks || [], error: result.error || null, hasTaskFile: !!result.hasTaskFile });
+  }
   for (const project of projects) {
     const result = results[project.projectPath] || { tasks: [], error: null, hasTaskFile: false };
     project.tasks = result.tasks || [];
@@ -40,6 +50,9 @@ function createProjectTaskButton(project, worktree = false) {
   const button = document.createElement('button');
   button.className = `project-task-btn${worktree ? ' worktree-task-btn' : ''}`;
   button.dataset.projectPath = project.projectPath;
+  // A project's button spans several folders; remember them so a change in any
+  // one of them refreshes the badge (updateProjectTaskButtons).
+  if (Array.isArray(project.projectPaths)) button.dataset.projectPaths = project.projectPaths.join('\n');
   button.title = project.taskError ? 'Task file has an error' : 'Run project task';
   button.innerHTML = `
     <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 2.8a1 1 0 0 1 1.52-.85l8 5.2a1 1 0 0 1 0 1.7l-8 5.2A1 1 0 0 1 4 13.2V2.8Z"/></svg>
@@ -67,8 +80,17 @@ function updateTaskButton(button, project) {
 function updateProjectTaskButtons(projectPath) {
   const project = findProject(projectPath);
   document.querySelectorAll('.project-task-btn').forEach(button => {
+    if (button.dataset.projectPaths) {
+      // Projects tab: the button is a union over several folders.
+      if (!button.dataset.projectPaths.split('\n').includes(projectPath)) return;
+      if (typeof findTreeProject !== 'function' || typeof taskPseudoProject !== 'function') return;
+      const node = findTreeProject(button.dataset.projectId);
+      if (node) updateTaskButton(button, taskPseudoProject(node));
+      return;
+    }
     if (button.dataset.projectPath === projectPath) updateTaskButton(button, project);
   });
+  if (typeof updateProjectTaskIndicators === 'function') updateProjectTaskIndicators(projectPath);
 }
 
 function closeTaskPopover() {
@@ -86,6 +108,9 @@ function taskStateText(run) {
 }
 
 function renderTaskPopover(project, popover) {
+  // The popover scrolls, and every task state change rebuilds it. Keep the
+  // offset so starting a task near the bottom does not jump to the top.
+  const scrollTop = popover.scrollTop;
   popover.replaceChildren();
   const header = document.createElement('div');
   header.className = 'task-popover-header';
@@ -101,7 +126,9 @@ function renderTaskPopover(project, popover) {
     stopAllButton.addEventListener('click', async event => {
       event.stopPropagation();
       stopAllButton.disabled = true;
-      await window.api.stopAllTasks(project.projectPath);
+      for (const p of project.projectPaths || [project.projectPath]) {
+        await window.api.stopAllTasks(p);
+      }
     });
     header.appendChild(stopAllButton);
   }
@@ -125,7 +152,17 @@ function renderTaskPopover(project, popover) {
     return;
   }
 
+  let lastGroup = null;
   for (const task of project.tasks || []) {
+    // A project's menu combines several folders; each task remembers its own.
+    const taskPath = task.projectPath || project.projectPath;
+    if (task.groupLabel && task.groupLabel !== lastGroup) {
+      const group = document.createElement('div');
+      group.className = 'task-popover-group';
+      group.textContent = task.groupLabel;
+      popover.appendChild(group);
+      lastGroup = task.groupLabel;
+    }
     const row = document.createElement('div');
     row.className = 'task-popover-row';
     row.classList.toggle('unsupported', task.supported === false);
@@ -155,30 +192,44 @@ function renderTaskPopover(project, popover) {
     action.disabled = task.supported === false;
     action.addEventListener('click', async event => {
       event.stopPropagation();
+      // Start, restart and stop all keep the menu open: the row's state
+      // column is the feedback. The log is a click on the name away.
       if (task.run?.running) {
-        await window.api.stopTask(project.projectPath, task.label);
+        await window.api.stopTask(taskPath, task.label);
       } else if (task.run) {
-        await restartProjectTask(project.projectPath, task.label);
-        closeTaskPopover();
+        await restartProjectTask(taskPath, task.label, { showLog: false });
       } else {
-        await runProjectTask(project.projectPath, task.label);
-        closeTaskPopover();
+        await runProjectTask(taskPath, task.label, { showLog: false });
       }
     });
-    row.append(copy, state, action);
+    row.append(copy, state);
+    if (task.run?.running) {
+      // A running server gets restart beside stop, the same pair as the log header.
+      const restart = document.createElement('button');
+      restart.className = 'task-row-action restart';
+      restart.title = `Restart ${task.label}`;
+      restart.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8.1 8.1 0 1 0 2 5.3"/><path d="M20 4v7h-7"/></svg>';
+      restart.addEventListener('click', async event => {
+        event.stopPropagation();
+        restart.disabled = true;
+        await restartProjectTask(taskPath, task.label, { showLog: false });
+      });
+      row.appendChild(restart);
+    }
+    row.appendChild(action);
 
     row.addEventListener('click', async () => {
       if (task.supported === false) return;
       if (task.run) {
         closeTaskPopover();
-        await showTaskLog(project.projectPath, task.label);
+        await showTaskLog(taskPath, task.label);
       } else {
-        await runProjectTask(project.projectPath, task.label);
-        closeTaskPopover();
+        await runProjectTask(taskPath, task.label, { showLog: false });
       }
     });
     popover.appendChild(row);
   }
+  popover.scrollTop = scrollTop;
 }
 
 function showTaskPopover(project, anchor) {
@@ -196,7 +247,10 @@ function showTaskPopover(project, anchor) {
   if (top + popover.offsetHeight > window.innerHeight - 8) top = Math.max(8, rect.top - popover.offsetHeight - 6);
   popover.style.left = `${left}px`;
   popover.style.top = `${top}px`;
-  openTaskPopover = { projectPath: project.projectPath, element: popover, anchor };
+  openTaskPopover = {
+    projectPath: project.projectPath, element: popover, anchor,
+    projectPaths: project.projectPaths || null, projectId: project.id || null,
+  };
   setTimeout(() => document.addEventListener('pointerdown', dismissTaskPopover, { once: true }), 0);
 }
 
@@ -276,7 +330,9 @@ async function showTaskLog(projectPath, label) {
   setActiveSession(null);
   document.querySelectorAll('.session-item.active').forEach(item => item.classList.remove('active'));
   document.querySelectorAll('.terminal-container').forEach(element => element.classList.remove('visible'));
-  hideAllViewers();
+  // Inside a project the log opens beside the session pane, not over it.
+  hideViewerPanels();
+  if (typeof onTaskLogShown === 'function') onTaskLogShown();
   placeholder.style.display = 'none';
   gridViewer.style.display = 'none';
   terminalHeader.style.display = '';
@@ -323,9 +379,10 @@ function leaveTaskLogView() {
   if (restartButton) restartButton.style.display = 'none';
 }
 
-async function runProjectTask(projectPath, label) {
+async function runProjectTask(projectPath, label, { showLog = true } = {}) {
   const run = await window.api.startTask(projectPath, label);
   applyTaskRun(run);
+  if (!showLog) return;
   await showTaskLog(projectPath, label);
   if (run.error && !run.running) {
     const entry = taskLogViews.get(taskViewKey(projectPath, label));
@@ -333,7 +390,7 @@ async function runProjectTask(projectPath, label) {
   }
 }
 
-async function restartProjectTask(projectPath, label) {
+async function restartProjectTask(projectPath, label, { showLog = true } = {}) {
   const entry = taskLogViews.get(taskViewKey(projectPath, label));
   if (entry) {
     entry.terminal.reset();
@@ -341,8 +398,9 @@ async function restartProjectTask(projectPath, label) {
     entry.loading = false;
     entry.queued = [];
   }
-  await window.api.restartTask(projectPath, label);
-  await showTaskLog(projectPath, label);
+  const run = await window.api.restartTask(projectPath, label);
+  if (run) applyTaskRun(run);
+  if (showLog) await showTaskLog(projectPath, label);
 }
 
 function applyTaskRun(run) {
@@ -352,9 +410,14 @@ function applyTaskRun(run) {
     const task = project?.tasks?.find(item => item.label === run.label);
     if (task) task.run = run;
   }
+  const byPath = tasksByPath.get(run.projectPath)?.tasks?.find(item => item.label === run.label);
+  if (byPath) byPath.run = run;
   updateProjectTaskButtons(run.projectPath);
   updateTaskHeader(run);
-  if (openTaskPopover?.projectPath === run.projectPath) {
+  if (openTaskPopover?.projectPaths?.includes(run.projectPath)) {
+    const node = typeof findTreeProject === 'function' ? findTreeProject(openTaskPopover.projectId) : null;
+    if (node && typeof taskPseudoProject === 'function') renderTaskPopover(taskPseudoProject(node), openTaskPopover.element);
+  } else if (openTaskPopover?.projectPath === run.projectPath) {
     const project = findProject(run.projectPath);
     if (project) renderTaskPopover(project, openTaskPopover.element);
   }
@@ -386,6 +449,7 @@ window.api.onTaskStateChanged(run => applyTaskRun(run));
 window.api.onProjectTasksChanged(async projectPath => {
   let result;
   try { result = await window.api.listProjectTasks(projectPath); } catch { return; }
+  tasksByPath.set(projectPath, { tasks: result.tasks || [], error: result.error || null, hasTaskFile: !!result.hasTaskFile });
   for (const projects of [cachedProjects, cachedAllProjects]) {
     const project = projects.find(item => item.projectPath === projectPath);
     if (!project) continue;

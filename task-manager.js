@@ -25,6 +25,9 @@ function createTaskManager(options) {
   const baseEnv = options.baseEnv || process.env;
   const logger = options.log || console;
   const send = options.send || (() => {});
+  // Project worktrees live under <project>/repos/<name>, which the path-shape
+  // inference in task-config cannot see; the caller looks their parent up.
+  const resolveParent = options.resolveWorktreeParent || (() => null);
 
   function serializeRun(run, includeOutput = false) {
     if (!run) return null;
@@ -360,7 +363,7 @@ function createTaskManager(options) {
         }
       }));
       watchVscodeDirectory();
-      const taskSource = taskFileForWorkspace(projectPath);
+      const taskSource = taskFileForWorkspace(projectPath, fs.existsSync, resolveParent(projectPath));
       if (taskSource?.inherited) {
         projectWatchers.push(fs.watch(path.dirname(taskSource.filePath), (_event, filename) => {
           if (!filename || String(filename) === 'tasks.json') changed();
@@ -374,9 +377,10 @@ function createTaskManager(options) {
 
   function listTasks(projectPath) {
     ensureWatch(projectPath);
-    const taskSource = taskFileForWorkspace(projectPath);
+    const parentPath = resolveParent(projectPath);
+    const taskSource = taskFileForWorkspace(projectPath, fs.existsSync, parentPath);
     try {
-      const tasks = loadTasks(projectPath);
+      const tasks = loadTasks(projectPath, { parentPath });
       return {
         tasks: tasks.map(task => ({
           ...task,

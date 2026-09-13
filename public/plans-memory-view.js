@@ -59,10 +59,44 @@ function buildPlanItem(plan) {
   info.appendChild(filenameEl);
   info.appendChild(metaEl);
   row.appendChild(info);
+
+  // A plan-mode plan can become a project's plan.md. The tracker is left for
+  // a session to derive; the project page says so.
+  const projects = (typeof cachedProjectTreeAll !== 'undefined' ? cachedProjectTreeAll?.projects : []) || [];
+  const active = projects.filter(p => p.status === 'active');
+  if (active.length && typeof showContextMenu === 'function') {
+    const actions = document.createElement('div');
+    actions.className = 'session-actions';
+    const adoptBtn = document.createElement('button');
+    adoptBtn.className = 'session-move-btn';
+    adoptBtn.title = 'Adopt into a project as plan.md';
+    adoptBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M9 13h6"/><path d="m12 10 3 3-3 3"/></svg>';
+    adoptBtn.onclick = (e) => {
+      e.stopPropagation();
+      showContextMenu([{ head: 'Adopt into project' }, ...active.map(p => ({
+        label: p.name, onClick: () => adoptPlanInto(p, plan),
+      }))], { anchor: adoptBtn });
+    };
+    actions.appendChild(adoptBtn);
+    row.appendChild(actions);
+  }
   item.appendChild(row);
 
   item.addEventListener('click', () => openPlan(plan));
   return item;
+}
+
+async function adoptPlanInto(project, plan) {
+  let result = await window.api.adoptPlan(project.id, plan.filename);
+  if (result?.exists && confirm(`${project.name} already has a plan.md with content.\n\nReplace it with "${plan.title}"?`)) {
+    result = await window.api.adoptPlan(project.id, plan.filename, { replace: true });
+  }
+  if (result?.error) { if (!result.exists) alert(result.error); return; }
+  if (confirm(`Adopted into ${project.name} as plan.md.\n\nOpen the project?`)) {
+    const tab = document.querySelector('.sidebar-tab[data-tab="projects"]');
+    if (tab && activeTab !== 'projects') tab.click();
+    if (typeof selectProject === 'function') selectProject(project.id, { tab: 'plan' });
+  }
 }
 
 async function openPlan(plan) {
@@ -81,6 +115,7 @@ async function openPlan(plan) {
   currentPlanFilename = plan.filename;
 
   // Hide terminal area and placeholder, show plan viewer
+  if (typeof hideProjectChrome === 'function') hideProjectChrome();
   placeholder.style.display = 'none';
   terminalArea.style.display = 'none';
   statsViewer.style.display = 'none';
@@ -91,13 +126,19 @@ async function openPlan(plan) {
   planPanel.open(plan.title, currentPlanFilePath, currentPlanContent);
 }
 
-function hideAllViewers() {
+/** Hide the full-page viewers and bring the terminal area back, leaving any project chrome alone. */
+function hideViewerPanels() {
   planViewer.style.display = 'none';
   statsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
   jsonlViewer.style.display = 'none';
   terminalArea.style.display = '';
+}
+
+function hideAllViewers() {
+  hideViewerPanels();
+  if (typeof hideProjectChrome === 'function') hideProjectChrome();
 }
 
 function hidePlanViewer() {
@@ -220,37 +261,6 @@ function buildMemoryItem(file) {
   info.appendChild(metaEl);
   row.appendChild(info);
 
-  // Play button for schedule files
-  if (isSchedule) {
-    const playBtn = document.createElement('button');
-    playBtn.className = 'schedule-play-btn';
-    playBtn.title = 'Run now';
-    playBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 384 512" fill="currentColor" stroke="currentColor" stroke-width="0"><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80L0 432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"></path></svg>';
-    const playIcon = '<svg width="12" height="12" viewBox="0 0 384 512" fill="currentColor" stroke="currentColor" stroke-width="0"><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80L0 432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"></path></svg>';
-    const spinnerIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>';
-    const checkIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
-    playBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      playBtn.classList.add('running');
-      playBtn.innerHTML = spinnerIcon;
-      playBtn.title = 'Running...';
-      const result = await window.api.runScheduleNow(file.filePath);
-      playBtn.classList.remove('running');
-      playBtn.classList.add('done');
-      playBtn.innerHTML = checkIcon;
-      playBtn.title = 'Launched!';
-      setTimeout(() => {
-        playBtn.classList.remove('done');
-        playBtn.innerHTML = playIcon;
-        playBtn.title = 'Run now';
-      }, 2000);
-      if (result && !result.ok) {
-        console.error('Schedule run failed:', result.error);
-      }
-    });
-    row.appendChild(playBtn);
-  }
-
   item.appendChild(row);
 
   item.addEventListener('click', () => openMemory(file));
@@ -268,6 +278,7 @@ async function openMemory(file) {
   currentMemoryContent = content;
 
   // Show memory viewer in main area
+  if (typeof hideProjectChrome === 'function') hideProjectChrome();
   placeholder.style.display = 'none';
   terminalArea.style.display = 'none';
   planViewer.style.display = 'none';

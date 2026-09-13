@@ -31,6 +31,9 @@ function inspectDb(dataDir) {
     const db = new Database(require('path').join(process.env.SWITCHBOARD_DATA_DIR, 'switchboard.db'), { readonly: true });
     console.log(JSON.stringify({
       cols: db.prepare('PRAGMA table_info(session_cache)').all().map(c => c.name),
+      metaCols: db.prepare('PRAGMA table_info(session_meta)').all().map(c => c.name),
+      projectCols: db.prepare('PRAGMA table_info(projects)').all().map(c => c.name),
+      tables: db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map(t => t.name),
       cacheCount: db.prepare('SELECT COUNT(*) AS n FROM session_cache').get().n,
       metaCount: db.prepare('SELECT COUNT(*) AS n FROM cache_meta').get().n,
       version: db.prepare("SELECT value FROM settings WHERE key = 'db_version'").get()?.value,
@@ -40,12 +43,359 @@ function inspectDb(dataDir) {
   return JSON.parse(r.stdout.trim().split('\n').pop());
 }
 
+const PROJECT_TABLES = ['projects', 'project_folders', 'tracks'];
+
+test('schedule settings preserve explicit defaults and separate CLI choices across restarts', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-schedule-config-'));
+  try {
+    const r = runInElectronNode(`
+      const assert = require('node:assert/strict');
+      let db = require('./db');
+      const sessionConfig = { claude: { permissionMode: null, chrome: false, addDirs: '',
+        allowedTools: 'Read,Write', appendSystemPrompt: 'Follow the task instructions.' },
+        codex: { codexSandbox: 'read-only', codexModel: 'chosen-model' } };
+      db.insertSchedule({ id: 'configured', name: 'Configured', cwd: '/project', prompt: 'Do it',
+        every: 'hour', created: '2026-09-01T00:00:00Z', sessionConfig });
+      db.insertSchedule({ id: 'inherited', name: 'Inherited', cwd: '/project', prompt: 'Do it',
+        every: 'hour', created: '2026-09-01T00:00:00Z' });
+      db.closeDb();
+      delete require.cache[require.resolve('./db')];
+      db = require('./db');
+      assert.deepEqual(db.getSchedule('configured').sessionConfig, sessionConfig);
+      assert.deepEqual(db.getSchedule('inherited').sessionConfig, {});
+      assert.deepEqual(db.listSchedules().find(s => s.id === 'configured').sessionConfig, sessionConfig);
+      db.updateSchedule('configured', { name: 'Renamed' });
+      assert.deepEqual(db.getSchedule('configured').sessionConfig, sessionConfig);
+      db.updateSchedule('configured', { sessionConfig: {} });
+      db.closeDb();
+      delete require.cache[require.resolve('./db')];
+      db = require('./db');
+      assert.deepEqual(db.getSchedule('configured').sessionConfig, {});
+      db.closeDb();
+    `, dir);
+    assert.equal(r.status, 0, r.stderr);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('legacy schedule imports survive restarts and deletion, and failed inserts remain retryable', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-schedule-imports-'));
+  try {
+    const r = runInElectronNode(`
+      const assert = require('node:assert/strict');
+      let db = require('./db');
+      const row = { id: 'legacy', name: 'Existing task', cwd: '/project',
+        prompt: 'Do the task', every: 'hour', created: '2026-09-01T00:00:00Z',
+        sourceFile: '/project/schedule-example.md' };
+      // Simulate a schedule imported before the per-file ledger existed.
+      db.insertSchedule(row);
+      db.setSetting('schedules_imported_from_files', { at: row.created, count: 1 });
+      const reopen = () => {
+        db.closeDb();
+        delete require.cache[require.resolve('./db')];
+        db = require('./db');
+      };
+      reopen();
+      assert.deepEqual(db.getImportedScheduleFiles(), [row.sourceFile]);
+      db.updateSchedule(row.id, { name: 'User edit', enabled: false });
+      assert.equal(db.importLegacySchedule({ ...row, id: 'duplicate' }), false);
+      assert.equal(db.getSchedule(row.id).name, 'User edit');
+      assert.equal(db.getSchedule(row.id).enabled, 0);
+      db.deleteSchedule(row.id);
+      reopen();
+      assert.equal(db.importLegacySchedule(row), false, 'a deleted task stays deleted');
+      assert.deepEqual(db.listSchedules(), []);
+
+      const later = { ...row, id: 'later', sourceFile: '/project/schedule-later.md' };
+      assert.throws(() => db.importLegacySchedule({ ...later, prompt: null }));
+      assert.ok(!db.getImportedScheduleFiles().includes(later.sourceFile), 'failed insert rolls back the ledger');
+      reopen();
+      assert.equal(db.importLegacySchedule(later), true, 'failed source can be retried');
+      reopen();
+      assert.equal(db.importLegacySchedule(later), false);
+      assert.equal(db.listSchedules().length, 1);
+      assert.equal(db.getSchedule(later.id).sourceFile, later.sourceFile);
+      db.closeDb();
+    `, dir);
+    assert.equal(r.status, 0, r.stderr);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('identical search entries perform no database writes, including after reopening', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-search-noop-'));
+  try {
+    const r = runInElectronNode(`
+      const assert = require('node:assert/strict');
+      const Database = require('better-sqlite3');
+      let db = require('./db');
+      const observer = new Database(require('path').join(process.env.SWITCHBOARD_DATA_DIR, 'switchboard.db'));
+      const version = () => observer.pragma('data_version', { simple: true });
+      const entry = { id: 'session', type: 'session', folder: 'folder', title: 'original title',
+        body: 'conversation '.repeat(1000) + 'move_fna_lines' };
+      db.upsertSearchEntries([entry]);
+      let before = version();
+      db.upsertSearchEntries([entry, { ...entry }]);
+      assert.equal(version(), before, 'identical entries must not commit any writes');
+
+      db.closeDb();
+      delete require.cache[require.resolve('./db')];
+      db = require('./db');
+      before = version();
+      db.upsertSearchEntries([entry]);
+      assert.equal(version(), before, 'the comparison must survive an app restart');
+
+      const renamed = { ...entry, title: 'renamed title' };
+      db.upsertSearchEntries([renamed]);
+      assert.deepEqual(db.searchSessionIds('renamed title', ['session']), ['session']);
+      assert.deepEqual(db.searchSessionIds('original title', ['session']), []);
+      const changed = { ...renamed, body: 'replacement conversation' };
+      db.upsertSearchEntries([changed]);
+      assert.deepEqual(db.searchSessionIds('replacement conversation', ['session']), ['session']);
+      assert.deepEqual(db.searchSessionIds('move_fna_lines', ['session']), []);
+      db.upsertSearchEntries([{ ...changed, folder: 'moved' }]);
+      assert.equal(observer.prepare('SELECT folder FROM search_map WHERE id = ?').get('session').folder, 'moved');
+      assert.equal(observer.prepare('SELECT COUNT(*) AS n FROM search_map').get().n, 1);
+      assert.equal(observer.prepare('SELECT COUNT(*) AS n FROM search_fts').get().n, 1);
+
+      // A missing FTS row must be repaired even if the mapping still exists.
+      observer.exec('DELETE FROM search_fts');
+      db.upsertSearchEntries([{ ...changed, folder: 'moved' }]);
+      assert.deepEqual(db.searchSessionIds('replacement conversation', ['session']), ['session']);
+
+      // Existing short excerpts upgrade when refreshed; they are not mistaken
+      // for identical full conversations just because the title is unchanged.
+      db.upsertSearchEntries([{ ...entry, id: 'legacy', body: 'conversation' }]);
+      db.upsertSearchEntries([{ ...entry, id: 'legacy' }]);
+      assert.deepEqual(db.searchSessionIds('move_fna_lines', ['legacy']), ['legacy']);
+      db.deleteSearchSession('legacy');
+      assert.deepEqual(db.searchSessionIds('move_fna_lines', ['legacy']), []);
+      db.closeDb();
+      observer.close();
+    `, dir);
+    assert.equal(r.status, 0, r.stderr);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('tool-only transcript refreshes update metadata without writing the search index', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-search-refresh-'));
+  try {
+    const r = runInElectronNode(`
+      const assert = require('node:assert/strict');
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const Database = require('better-sqlite3');
+      const statements = [];
+      // Trace the real SQLite connection so cache writes cannot hide an
+      // unnecessary FTS delete/insert behind unchanged final search results.
+      require.cache[require.resolve('better-sqlite3')].exports = function(filename, options) {
+        return new Database(filename, { ...options, verbose: sql => statements.push(sql) });
+      };
+      const db = require('./db');
+      const cache = require('./session-cache');
+      const projectsDir = path.join(process.env.SWITCHBOARD_DATA_DIR, 'transcripts');
+      const folderPath = path.join(projectsDir, 'project');
+      fs.mkdirSync(folderPath, { recursive: true });
+      const file = path.join(folderPath, 'session.jsonl');
+      fs.writeFileSync(file, JSON.stringify({ type: 'user', cwd: '/tmp/project',
+        message: { content: 'original question' } }) + '\\n');
+      const append = entry => {
+        const mtime = fs.statSync(file).mtimeMs;
+        fs.appendFileSync(file, JSON.stringify(entry) + '\\n');
+        fs.utimesSync(file, new Date(), new Date(mtime + 5000));
+      };
+      const searchWrites = () => statements.filter(sql =>
+        /^\\s*(INSERT|UPDATE|DELETE)\\b/i.test(sql) && /\\bsearch_(fts|map)\\b/.test(sql));
+      cache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(),
+        getMainWindow: () => null, log: console, db });
+      cache.refreshFolder('project');
+      assert.deepEqual(db.searchSessionIds('original question', ['session']), ['session']);
+
+      statements.length = 0;
+      append({ type: 'assistant', message: { content: [
+        { type: 'tool_use', name: 'Bash', input: { command: 'tool_input_marker' } },
+      ] } });
+      append({ type: 'user', message: { content: [
+        { type: 'tool_result', content: 'tool_output_marker' },
+      ] } });
+      append({ type: 'last-prompt', lastPrompt: 'original question' });
+      cache.refreshFolder('project');
+      assert.deepEqual(searchWrites(), [], 'tool calls, results and bookkeeping must not rewrite FTS');
+      assert.equal(db.getCachedSession('session').fileMtime, fs.statSync(file).mtime.toISOString());
+      assert.equal(db.getCachedSession('session').messageCount, 3);
+      assert.deepEqual(db.searchSessionIds('tool_output_marker', ['session']), []);
+
+      statements.length = 0;
+      append({ type: 'assistant', message: { content: 'new answer move_fna_lines' } });
+      cache.refreshFolder('project');
+      assert.ok(searchWrites().length > 0, 'new conversation text must update FTS');
+      assert.deepEqual(db.searchSessionIds('move_fna_lines', ['session']), ['session']);
+
+      statements.length = 0;
+      append({ type: 'custom-title', customTitle: 'renamed conversation' });
+      cache.refreshFolder('project');
+      assert.ok(searchWrites().length > 0, 'renaming must remain searchable');
+      assert.deepEqual(db.searchSessionIds('renamed conversation', ['session']), ['session']);
+
+      statements.length = 0;
+      cache.refreshFolder('project');
+      assert.deepEqual(searchWrites(), [], 'an unchanged file must still skip indexing');
+      fs.unlinkSync(file);
+      // Keep the folder's cwd discoverable when its session is deleted.
+      fs.writeFileSync(path.join(folderPath, 'empty.jsonl'), JSON.stringify({ type: 'system', cwd: '/tmp/project' }) + '\\n');
+      cache.refreshFolder('project');
+      assert.deepEqual(db.searchSessionIds('move_fna_lines', ['session']), []);
+      db.closeDb();
+    `, dir);
+    assert.equal(r.status, 0, r.stderr);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('session search scopes before limiting and supports archived and title-only matches', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-scoped-search-'));
+  try {
+    const r = runInElectronNode(`
+      const assert = require('node:assert/strict');
+      const db = require('./db');
+      db.upsertSearchEntries([
+        ...Array.from({ length: 1000 }, (_, i) => ({ id: 'outside-' + i, type: 'session', title: 'needle' })),
+        { id: 'active', type: 'session', title: 'needle active' },
+        { id: 'archived', type: 'session', title: 'older session', body: 'needle in transcript' },
+      ]);
+      db.setArchived('archived', 1);
+      const scope = ['active', 'archived'];
+      assert.deepEqual(new Set(db.searchByType('session', 'needle', 50, false, scope).map(r => r.id)), new Set(scope));
+      assert.deepEqual(db.searchByType('session', 'needle', 50, true, scope).map(r => r.id), ['active']);
+      assert.deepEqual(db.searchByType('session', 'needle', 50, false, []), []);
+      assert.equal(db.searchByType('session', 'needle').length, 50);
+      assert.deepEqual(new Set(db.searchSessionIds('needle', scope)), new Set(scope));
+      assert.deepEqual(db.searchSessionIds('transcript', scope), ['archived']);
+      assert.deepEqual(db.searchSessionIds('needle', []), []);
+      assert.deepEqual(db.searchSessionIds('', scope), []);
+      assert.deepEqual(db.searchSessionIds('" OR needle', scope), []);
+      const start = performance.now();
+      for (let i = 0; i < 100; i++) db.searchSessionIds('needle', scope);
+      console.log('Scoped ID search average ms:', (performance.now() - start) / 100);
+      db.closeDb();
+    `, dir);
+    assert.equal(r.status, 0, r.stderr);
+    console.log(r.stdout.trim());
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('fresh database gets fileMtime column', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-db-fresh-'));
   try {
     const r = loadDbModule(dir);
     assert.equal(r.status, 0, r.stderr);
-    assert.ok(inspectDb(dir).cols.includes('fileMtime'));
+    const state = inspectDb(dir);
+    assert.ok(state.cols.includes('fileMtime'));
+    for (const t of PROJECT_TABLES) assert.ok(state.tables.includes(t), `${t} table created`);
+    assert.ok(state.metaCols.includes('projectId') && state.metaCols.includes('trackId'), 'session_meta carries the assignment columns');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('deleting tracks retains their names and optionally archives only their sessions', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-delete-track-'));
+  try {
+    const r = runInElectronNode(`
+      const assert = require('node:assert/strict');
+      const db = require('./db');
+      db.insertTrack({ id: 'keep', projectId: 'project', name: 'Keep work', created: '2026-09-05' });
+      db.insertTrack({ id: 'archive', projectId: 'project', name: 'Finished work', created: '2026-09-05' });
+      db.setSessionAssignment('active', 'project', 'keep');
+      db.setSessionAssignment('done', 'project', 'archive');
+      db.setSessionAssignment('already-archived', 'project', 'archive');
+      db.setArchived('already-archived', 1);
+      db.setSessionAssignment('unrelated', 'project', null);
+      assert.deepEqual(db.deleteTrack('keep'), ['active']);
+      assert.equal(db.getMeta('active').archived, 0);
+      assert.equal(db.getMeta('active').formerTrackName, 'Keep work');
+      assert.equal(db.getMeta('active').trackId, null);
+      assert.deepEqual(new Set(db.deleteTrack('archive', { archiveSessions: true })), new Set(['done', 'already-archived']));
+      for (const id of ['done', 'already-archived']) {
+        const meta = db.getMeta(id);
+        assert.equal(meta.projectId, 'project');
+        assert.equal(meta.trackId, null);
+        assert.equal(meta.formerTrackName, 'Finished work');
+        assert.equal(meta.archived, 1);
+      }
+      assert.equal(db.getTrack('keep'), null);
+      assert.equal(db.getTrack('archive'), null);
+      assert.equal(db.getMeta('unrelated').archived, 0);
+      db.closeDb();
+      delete require.cache[require.resolve('./db')];
+      const reopened = require('./db');
+      assert.equal(reopened.getMeta('done').formerTrackName, 'Finished work');
+      reopened.closeDb();
+    `, dir);
+    assert.equal(r.status, 0, r.stderr);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The project tables and the two session_meta columns are added by inspecting
+// the schema, not by db_version, so a database from before projects existed
+// gets them without losing its names, stars or archive flags.
+test('projects tables and session_meta columns are added to an older database', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-db-projects-'));
+  try {
+    const seed = runInElectronNode(`
+      const Database = require('better-sqlite3');
+      const db = new Database(require('path').join(process.env.SWITCHBOARD_DATA_DIR, 'switchboard.db'));
+      db.exec('CREATE TABLE session_meta (sessionId TEXT PRIMARY KEY, name TEXT, starred INTEGER DEFAULT 0, archived INTEGER DEFAULT 0)');
+      db.exec(\`CREATE TABLE session_cache (
+        sessionId TEXT PRIMARY KEY, folder TEXT NOT NULL, projectPath TEXT,
+        summary TEXT, firstPrompt TEXT, created TEXT, modified TEXT,
+        messageCount INTEGER DEFAULT 0, slug TEXT, aiTitle TEXT, fileMtime TEXT,
+        runtime TEXT DEFAULT 'claude', sessionFile TEXT
+      )\`);
+      db.exec('CREATE TABLE cache_meta (folder TEXT PRIMARY KEY, projectPath TEXT, indexMtimeMs REAL)');
+      db.exec('CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)');
+      db.prepare("INSERT INTO settings (key, value) VALUES ('db_version', '4')").run();
+      db.prepare("INSERT INTO session_meta (sessionId, name, starred, archived) VALUES ('s1', 'kept', 1, 0)").run();
+      // A projects table from the first Phase 1 build, before defaultCwd existed.
+      db.exec(\`CREATE TABLE projects (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, root TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active', sharedBranch INTEGER NOT NULL DEFAULT 1,
+        branchName TEXT, created TEXT NOT NULL, modified TEXT NOT NULL
+      )\`);
+      db.prepare("INSERT INTO projects (id, name, slug, root, created, modified) VALUES ('p1', 'P', 'p', '/tmp/p', 'x', 'x')").run();
+    `, dir);
+    assert.equal(seed.status, 0, seed.stderr);
+
+    const r = loadDbModule(dir);
+    assert.equal(r.status, 0, r.stderr);
+
+    const state = inspectDb(dir);
+    for (const t of PROJECT_TABLES) assert.ok(state.tables.includes(t), `${t} table created`);
+    assert.ok(state.metaCols.includes('projectId') && state.metaCols.includes('trackId'));
+    assert.ok(state.projectCols.includes('defaultCwd'), 'defaultCwd added to an existing projects table');
+
+    const after = JSON.parse(runInElectronNode(`
+      const db = require(${JSON.stringify(path.join(APP_DIR, 'db.js'))});
+      db.setSessionAssignment('s1', 'p1', null);
+      db.setSessionAssignment('s2', 'p1', 't1');
+      db.copySessionAssignment('s1', 's3');
+      db.moveSessionAssignment('s2', 's4');
+      console.log(JSON.stringify({
+        s1: db.getMeta('s1'), s2: db.getMeta('s2'), s3: db.getMeta('s3'), s4: db.getMeta('s4'),
+      }));
+    `, dir).stdout.trim().split('\n').pop());
+    assert.equal(after.s1.name, 'kept', 'assignment does not touch the name');
+    assert.equal(after.s1.starred, 1, 'assignment does not touch the star');
+    assert.equal(after.s1.projectId, 'p1');
+    assert.equal(after.s3.projectId, 'p1', 'copy creates the fork\'s row');
+    assert.equal(after.s2.projectId, null, 'move clears the temporary id');
+    assert.equal(after.s4.projectId, 'p1');
+    assert.equal(after.s4.trackId, 't1');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

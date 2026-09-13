@@ -1,0 +1,5 @@
+{
+  "name": "Research",
+  "description": "A question to answer: gather sources, run experiments, write it up.",
+  "tracks": ["Reading", "Experiments", "Write-up"]
+}

@@ -14,4 +14,9 @@ function shouldStartFresh({ isNew, isPlainTerminal, hasCachedSession, resumeExis
   return !hasCachedSession;
 }
 
-module.exports = { shouldStartFresh };
+/** Archived transcript sessions must be restored before they can be resumed. */
+function shouldBlockArchivedSession({ isNew, isPlainTerminal, archived }) {
+  return !isNew && !isPlainTerminal && !!archived;
+}
+
+module.exports = { shouldStartFresh, shouldBlockArchivedSession };

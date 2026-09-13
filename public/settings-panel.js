@@ -29,14 +29,18 @@
     const settingsKey = isProject ? 'project:' + projectPath : 'global';
     const current = (await window.api.getSetting(settingsKey)) || {};
     const globalSettings = isProject ? ((await window.api.getSetting('global')) || {}) : {};
+    // What actually runs when nothing is stored: the app's defaults under the
+    // saved global values. A fresh install shows these, not blanks.
+    const appDefaults = (await window.api.getEffectiveSettings(null).catch(() => null)) || {};
 
     const shortName = isProject
       ? shortProjectPath(projectPath)
       : 'Global';
 
-    settingsViewerTitle.textContent = (isProject ? 'Project Settings — ' : 'Global Settings — ') + shortName;
+    settingsViewerTitle.textContent = (isProject ? 'Folder Settings — ' : 'Global Settings — ') + shortName;
 
     // Show settings viewer, hide others
+    if (typeof hideProjectChrome === 'function') hideProjectChrome();
     document.getElementById('placeholder').style.display = 'none';
     document.getElementById('terminal-area').style.display = 'none';
     document.getElementById('plan-viewer').style.display = 'none';
@@ -52,10 +56,13 @@
     }
 
     function fieldValue(fieldName, fallback) {
-      if (isProject && (current[fieldName] === undefined || current[fieldName] === null)) {
-        return globalSettings[fieldName] !== undefined ? globalSettings[fieldName] : fallback;
+      const set = (v) => v !== undefined && v !== null;
+      if (isProject && !set(current[fieldName])) {
+        if (set(globalSettings[fieldName])) return globalSettings[fieldName];
+        return set(appDefaults[fieldName]) ? appDefaults[fieldName] : fallback;
       }
-      return current[fieldName] !== undefined ? current[fieldName] : fallback;
+      if (set(current[fieldName])) return current[fieldName];
+      return set(appDefaults[fieldName]) ? appDefaults[fieldName] : fallback;
     }
 
     function fieldDisabled(fieldName) {
@@ -91,6 +98,9 @@
     const maxAgeValue = fieldValue('sessionMaxAgeDays', 3);
     const themeValue = fieldValue('terminalTheme', 'switchboard');
     const mcpEmulationValue = fieldValue('mcpEmulation', true);
+    // Global-only: where new projects get their folder (projects.js). Empty
+    // means the default, ~/Switchboard.
+    const projectsRootValue = (!isProject && typeof current.projectsRoot === 'string') ? current.projectsRoot : '';
     const shellProfileValue = fieldValue('shellProfile', 'auto');
 
     // Discover available shell profiles
@@ -276,7 +286,7 @@
         <div class="settings-field">
           <div class="settings-field-info">
             <span class="settings-label">Max Visible Sessions</span>
-            <div class="settings-description">Show up to this many sessions before collapsing the rest behind "+N older"</div>
+            <div class="settings-description">Show up to this many sessions per folder or project track before collapsing the rest</div>
           </div>
           <div class="settings-field-control">
             <input type="number" class="settings-input settings-input-compact" id="sv-visible-count" min="1" max="100" value="${visCountValue}">
@@ -290,6 +300,26 @@
           </div>
           <div class="settings-field-control">
             <input type="number" class="settings-input settings-input-compact" id="sv-max-age" min="1" max="365" value="${maxAgeValue}">
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <span class="settings-label">Projects Folder</span>
+            <div class="settings-description">Where new projects are created. Existing projects stay where they are.</div>
+          </div>
+          <div class="settings-field-control">
+            <input type="text" class="settings-input" id="sv-projects-root" placeholder="~/Switchboard" value="${escapeHtml(projectsRootValue)}" spellcheck="false">
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <span class="settings-label">Project Templates</span>
+            <div class="settings-description">One folder per template, each with a <code>template.json</code> and the files a new project starts with. Add a folder to add a template. <span id="sv-templates-dir"></span></div>
+          </div>
+          <div class="settings-field-control">
+            <button class="settings-check-updates-btn" id="sv-open-templates" type="button">Open Folder</button>
           </div>
         </div>
 
@@ -320,7 +350,7 @@
       <div class="settings-btn-row">
         <button class="settings-cancel-btn" id="sv-cancel-btn">Cancel</button>
         <button class="settings-save-btn" id="sv-save-btn">Save Settings</button>
-        ${isProject ? '<button class="settings-remove-btn" id="sv-remove-btn">Hide Project</button>' : ''}
+        ${isProject ? '<button class="settings-remove-btn" id="sv-remove-btn">Hide Folder</button>' : ''}
       </div>
     </div>
   `;
@@ -369,6 +399,16 @@
       });
     });
 
+    // Project templates folder (global only)
+    const openTemplates = settingsViewerBody.querySelector('#sv-open-templates');
+    if (openTemplates) {
+      window.api.listTemplates().then(result => {
+        const dirEl = settingsViewerBody.querySelector('#sv-templates-dir');
+        if (dirEl && result?.dir) dirEl.textContent = result.dir;
+        openTemplates.onclick = () => { if (result?.dir) window.api.openPath(result.dir); };
+      }).catch(() => {});
+    }
+
     // Save button
     settingsViewerBody.querySelector('#sv-save-btn').addEventListener('click', async () => {
       let settings = {};
@@ -415,6 +455,7 @@
         settings.terminalTheme = settingsViewerBody.querySelector('#sv-terminal-theme').value || 'switchboard';
         settings.mcpEmulation = settingsViewerBody.querySelector('#sv-mcp-emulation').checked;
         settings.shellProfile = settingsViewerBody.querySelector('#sv-shell-profile').value || 'auto';
+        settings.projectsRoot = settingsViewerBody.querySelector('#sv-projects-root').value.trim();
       }
 
       // Merge form values into existing settings to preserve keys not managed by the form

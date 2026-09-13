@@ -4,6 +4,8 @@ dist/
 *.db-wal
 *.db-shm
 public/codemirror-bundle.js
+public/pptx-preview-bundle.js
+public/pptx-preview-bundle.js.LEGAL.txt
 .DS_Store
 .idea/
 *.pem

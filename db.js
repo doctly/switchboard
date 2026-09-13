@@ -182,6 +182,138 @@ if (migrations.length > currentDbVersion) {
   }
 }
 
+// --- Projects ---
+// A project is a piece of work with a folder on disk (`root`). It attaches
+// zero or more folders (the cwds sessions run in) and, later, tracks. Sessions
+// are assigned through session_meta.projectId / trackId. These live in their
+// own tables, never under the `project:<path>` settings key, because hiding a
+// folder deletes that key (see remove-project in main.js).
+//
+// Same rule as above: tables and columns are ensured by inspecting the schema,
+// not by db_version, so a DB touched by a parallel branch still gets them.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    root TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    sharedBranch INTEGER NOT NULL DEFAULT 1,
+    branchName TEXT,
+    created TEXT NOT NULL,
+    modified TEXT NOT NULL
+  )
+`);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS project_folders (
+    projectId TEXT NOT NULL,
+    path TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'in-place',
+    sourcePath TEXT,
+    branch TEXT,
+    sortOrder INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (projectId, path)
+  )
+`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_project_folders_path ON project_folders(path)');
+db.exec(`
+  CREATE TABLE IF NOT EXISTS tracks (
+    id TEXT PRIMARY KEY,
+    projectId TEXT NOT NULL,
+    name TEXT NOT NULL,
+    cwd TEXT,
+    cli TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    sortOrder INTEGER NOT NULL DEFAULT 0,
+    created TEXT NOT NULL
+  )
+`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_tracks_project ON tracks(projectId)');
+// A scheduled task: a saved prompt plus a time. It lives in exactly one place,
+// decided by projectId — set, it is listed in the project view under trackId
+// (null = General) and runs in the track's cwd; null, it is a folder schedule
+// listed on the Sessions tab under `cwd`. Timing is stored as fields
+// (`every`, atHour, atMinute, weekday); `every = 'cron'` keeps a raw cron
+// string only for schedules imported from the old schedule-*.md files.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS schedules (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    projectId TEXT,
+    trackId TEXT,
+    cwd TEXT,
+    prompt TEXT NOT NULL,
+    every TEXT NOT NULL,
+    atHour INTEGER,
+    atMinute INTEGER,
+    weekday INTEGER,
+    cron TEXT,
+    cli TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    catchUp INTEGER NOT NULL DEFAULT 0,
+    sourceFile TEXT,
+    lastRunAt TEXT,
+    lastSessionId TEXT,
+    created TEXT NOT NULL
+  )
+`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_schedules_project ON schedules(projectId)');
+{
+  const cols = new Set(db.prepare('PRAGMA table_info(schedules)').all().map(c => c.name));
+  if (!cols.has('sessionConfig')) db.exec('ALTER TABLE schedules ADD COLUMN sessionConfig TEXT');
+}
+// Record successful imports separately from schedule rows: deleting an
+// imported task must not make its source file eligible for import again.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS legacy_schedule_imports (
+    sourceFile TEXT PRIMARY KEY,
+    importedAt TEXT NOT NULL
+  )
+`);
+// Adopt rows from builds that only stored a global import-completed flag.
+// That flag cannot tell us which files an incomplete scan missed.
+db.exec(`
+  INSERT OR IGNORE INTO legacy_schedule_imports (sourceFile, importedAt)
+  SELECT sourceFile, created FROM schedules WHERE sourceFile IS NOT NULL AND sourceFile != ''
+`);
+{
+  const cols = new Set(db.prepare('PRAGMA table_info(session_meta)').all().map(c => c.name));
+  if (!cols.has('projectId')) db.exec('ALTER TABLE session_meta ADD COLUMN projectId TEXT');
+  if (!cols.has('trackId')) db.exec('ALTER TABLE session_meta ADD COLUMN trackId TEXT');
+  if (!cols.has('formerTrackName')) db.exec('ALTER TABLE session_meta ADD COLUMN formerTrackName TEXT');
+  // Which schedule started the session, and when it fired. Read by the
+  // session row's clock chip; nothing else depends on it.
+  if (!cols.has('scheduleId')) db.exec('ALTER TABLE session_meta ADD COLUMN scheduleId TEXT');
+  if (!cols.has('scheduledAt')) db.exec('ALTER TABLE session_meta ADD COLUMN scheduledAt TEXT');
+}
+{
+  // Where a project's sessions start by default (null = the project folder).
+  // Tracks inherit it unless they set their own cwd.
+  const cols = new Set(db.prepare('PRAGMA table_info(projects)').all().map(c => c.name));
+  if (!cols.has('defaultCwd')) db.exec('ALTER TABLE projects ADD COLUMN defaultCwd TEXT');
+  // Snooze is an overlay on an active project: the row keeps status 'active'
+  // and is hidden from the list while snoozedUntil is in the future. Nothing
+  // clears the columns at wake time; a past snoozedUntil simply no longer
+  // counts, so the renderer decides from the timestamp alone.
+  if (!cols.has('snoozedUntil')) db.exec('ALTER TABLE projects ADD COLUMN snoozedUntil TEXT');
+  if (!cols.has('snoozedAt')) db.exec('ALTER TABLE projects ADD COLUMN snoozedAt TEXT');
+}
+// Which session started or finished a plan phase or a todo. Items are matched
+// by their text, not their line, so editing the file above an item does not
+// orphan its history.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS plan_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    projectId TEXT NOT NULL,
+    file TEXT NOT NULL,
+    itemText TEXT NOT NULL,
+    sessionId TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    at TEXT NOT NULL
+  )
+`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_plan_links_project ON plan_links(projectId)');
+
 // --- FTS5 full-text search ---
 db.exec(`
   CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
@@ -262,7 +394,8 @@ const stmts = {
   searchMapDeleteByType: db.prepare('DELETE FROM search_map WHERE type = ?'),
   searchInsertFts: db.prepare('INSERT OR REPLACE INTO search_fts(rowid, title, body) VALUES (?, ?, ?)'),
   searchInsertMap: db.prepare('INSERT OR REPLACE INTO search_map(id, type, folder) VALUES (?, ?, ?)'),
-  searchMapLookup: db.prepare('SELECT rowid FROM search_map WHERE id = ? AND type = ?'),
+  searchMapLookup: db.prepare('SELECT rowid, folder FROM search_map WHERE id = ? AND type = ?'),
+  searchContentMatches: db.prepare('SELECT 1 FROM search_fts WHERE rowid = ? AND title = ? AND body = ?'),
   searchUpdateTitle: db.prepare('UPDATE search_fts SET title = ? WHERE rowid = (SELECT rowid FROM search_map WHERE id = ? AND type = ?)'),
   searchDeleteByRowid: db.prepare('DELETE FROM search_fts WHERE rowid = ?'),
   searchMapDeleteByRowid: db.prepare('DELETE FROM search_map WHERE rowid = ?'),
@@ -278,9 +411,79 @@ const stmts = {
     FROM search_fts
     JOIN search_map ON search_fts.rowid = search_map.rowid
     WHERE search_map.type = ? AND search_fts MATCH ?
+      AND (? IS NULL OR search_map.id IN (SELECT value FROM json_each(?)))
     ORDER BY rank
     LIMIT ?
   `),
+  searchSessionIds: db.prepare(`
+    SELECT search_map.id
+    FROM search_map
+    CROSS JOIN search_fts ON search_fts.rowid = search_map.rowid
+    WHERE search_map.type = 'session'
+      AND search_map.id IN (SELECT value FROM json_each(?))
+      AND search_fts MATCH ?
+  `),
+  // Project statements
+  projectList: db.prepare('SELECT * FROM projects ORDER BY created'),
+  projectGet: db.prepare('SELECT * FROM projects WHERE id = ?'),
+  projectGetBySlug: db.prepare('SELECT * FROM projects WHERE slug = ?'),
+  projectInsert: db.prepare(`
+    INSERT INTO projects (id, name, slug, root, status, sharedBranch, branchName, created, modified)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  projectDelete: db.prepare('DELETE FROM projects WHERE id = ?'),
+  projectFoldersList: db.prepare('SELECT * FROM project_folders WHERE projectId = ? ORDER BY sortOrder, path'),
+  projectFoldersListAll: db.prepare('SELECT * FROM project_folders ORDER BY projectId, sortOrder, path'),
+  projectFolderUpsert: db.prepare(`
+    INSERT INTO project_folders (projectId, path, mode, sourcePath, branch, sortOrder)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(projectId, path) DO UPDATE SET
+      mode = excluded.mode, sourcePath = excluded.sourcePath,
+      branch = excluded.branch, sortOrder = excluded.sortOrder
+  `),
+  projectFolderDelete: db.prepare('DELETE FROM project_folders WHERE projectId = ? AND path = ?'),
+  projectFoldersDeleteByProject: db.prepare('DELETE FROM project_folders WHERE projectId = ?'),
+  tracksList: db.prepare('SELECT * FROM tracks WHERE projectId = ? ORDER BY sortOrder, created'),
+  tracksListAll: db.prepare('SELECT * FROM tracks ORDER BY projectId, sortOrder, created'),
+  trackGet: db.prepare('SELECT * FROM tracks WHERE id = ?'),
+  trackInsert: db.prepare(`
+    INSERT INTO tracks (id, projectId, name, cwd, cli, status, sortOrder, created)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  trackDelete: db.prepare('DELETE FROM tracks WHERE id = ?'),
+  tracksDeleteByProject: db.prepare('DELETE FROM tracks WHERE projectId = ?'),
+  schedulesListAll: db.prepare('SELECT * FROM schedules ORDER BY created'),
+  schedulesListByProject: db.prepare('SELECT * FROM schedules WHERE projectId = ? ORDER BY created'),
+  scheduleGet: db.prepare('SELECT * FROM schedules WHERE id = ?'),
+  scheduleInsert: db.prepare(`
+    INSERT INTO schedules (id, name, projectId, trackId, cwd, prompt, every, atHour, atMinute, weekday, cron, cli, enabled, catchUp, sourceFile, lastRunAt, lastSessionId, created, sessionConfig)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  scheduleDelete: db.prepare('DELETE FROM schedules WHERE id = ?'),
+  scheduleImportList: db.prepare('SELECT sourceFile FROM legacy_schedule_imports'),
+  scheduleImportRecord: db.prepare('INSERT OR IGNORE INTO legacy_schedule_imports (sourceFile, importedAt) VALUES (?, ?)'),
+  schedulesDeleteByProject: db.prepare('DELETE FROM schedules WHERE projectId = ?'),
+  schedulesClearTrack: db.prepare('UPDATE schedules SET trackId = NULL WHERE trackId = ?'),
+  scheduleRekeySession: db.prepare('UPDATE schedules SET lastSessionId = ? WHERE lastSessionId = ?'),
+  scheduleLinkSet: db.prepare(`
+    INSERT INTO session_meta (sessionId, scheduleId, scheduledAt) VALUES (?, ?, ?)
+    ON CONFLICT(sessionId) DO UPDATE SET scheduleId = excluded.scheduleId, scheduledAt = excluded.scheduledAt
+  `),
+  scheduleLinkRekey: db.prepare('UPDATE session_meta SET scheduleId = ?, scheduledAt = ? WHERE sessionId = ?'),
+  scheduleLinkClear: db.prepare('UPDATE session_meta SET scheduleId = NULL, scheduledAt = NULL WHERE scheduleId = ?'),
+  // Session ↔ project assignment lives on session_meta so it survives cache
+  // rebuilds. name/starred/archived are left untouched by these statements.
+  assignmentSet: db.prepare(`
+    INSERT INTO session_meta (sessionId, projectId, trackId) VALUES (?, ?, ?)
+    ON CONFLICT(sessionId) DO UPDATE SET projectId = excluded.projectId, trackId = excluded.trackId
+  `),
+  assignmentClearProject: db.prepare('UPDATE session_meta SET projectId = NULL, trackId = NULL WHERE projectId = ?'),
+  assignmentClearTrack: db.prepare('UPDATE session_meta SET trackId = NULL WHERE trackId = ?'),
+  // Plan links
+  planLinkInsert: db.prepare('INSERT INTO plan_links (projectId, file, itemText, sessionId, kind, at) VALUES (?, ?, ?, ?, ?, ?)'),
+  planLinksByProject: db.prepare('SELECT * FROM plan_links WHERE projectId = ? ORDER BY at'),
+  planLinksDeleteByProject: db.prepare('DELETE FROM plan_links WHERE projectId = ?'),
+  planLinksRekey: db.prepare('UPDATE plan_links SET sessionId = ? WHERE sessionId = ?'),
 };
 
 function getMeta(sessionId) {
@@ -375,18 +578,27 @@ function setFolderMeta(folder, projectPath, indexMtimeMs) {
 
 const upsertSearchEntriesBatch = db.transaction((entries) => {
   for (const e of entries) {
+    const folder = e.folder || null;
+    const title = e.title || '';
+    const body = e.body || '';
+    const existing = stmts.searchMapLookup.get(e.id, e.type);
+    // Transcript mtime also changes for tool output and CLI bookkeeping. Keep
+    // the FTS row when its searchable content is identical, including across
+    // app restarts. Comparing the stored text needs no migration or rebuild.
+    if (existing && existing.folder === folder &&
+        stmts.searchContentMatches.get(existing.rowid, title, body)) continue;
+
     // Delete any existing FTS row for this (id, type) pair before inserting.
     // search_map uses INSERT OR REPLACE which deletes the old row and creates
     // a new one with a new rowid, but the orphaned FTS5 row keyed to the old
     // rowid would never be cleaned up — causing duplicate search results and
     // unbounded FTS table growth.
-    const existing = stmts.searchMapLookup.get(e.id, e.type);
     if (existing) {
       stmts.searchDeleteByRowid.run(existing.rowid);
       stmts.searchMapDeleteByRowid.run(existing.rowid);
     }
-    const result = stmts.searchInsertMap.run(e.id, e.type, e.folder || null);
-    stmts.searchInsertFts.run(result.lastInsertRowid, e.title || '', e.body || '');
+    const result = stmts.searchInsertMap.run(e.id, e.type, folder);
+    stmts.searchInsertFts.run(result.lastInsertRowid, title, body);
   }
 });
 
@@ -415,17 +627,24 @@ function updateSearchTitle(id, type, title) {
   } catch {}
 }
 
-function searchByType(type, query, limit = 50, titleOnly = false) {
+function searchByType(type, query, limit = 50, titleOnly = false, sessionIds = null) {
   try {
     // Wrap in double quotes for exact substring matching with trigram tokenizer.
     // This prevents FTS5 from splitting on punctuation (e.g. "spec.md" → "spec" + "md")
     const escaped = '"' + query.replace(/"/g, '""') + '"';
     // FTS5 column filter: prefix with "title:" to restrict match to title column
     const match = titleOnly ? 'title:' + escaped : escaped;
-    return stmts.searchQuery.all(type, match, limit);
+    const scope = sessionIds === null ? null : JSON.stringify(sessionIds);
+    return stmts.searchQuery.all(type, match, scope, scope, limit);
   } catch {
     return [];
   }
+}
+
+function searchSessionIds(query, sessionIds) {
+  if (!query.trim() || !sessionIds.length) return [];
+  const match = '"' + query.replace(/"/g, '""') + '"';
+  return stmts.searchSessionIds.all(JSON.stringify(sessionIds), match).map(row => row.id);
 }
 
 function isSearchIndexPopulated() {
@@ -449,6 +668,246 @@ function deleteSetting(key) {
   stmts.settingsDelete.run(key);
 }
 
+// --- Project functions ---
+
+const PROJECT_PATCH_KEYS = ['name', 'status', 'sharedBranch', 'branchName', 'defaultCwd', 'snoozedUntil', 'snoozedAt', 'modified'];
+const TRACK_PATCH_KEYS = ['name', 'cwd', 'cli', 'status', 'sortOrder'];
+const SCHEDULE_PATCH_KEYS = ['name', 'trackId', 'cwd', 'prompt', 'every', 'atHour', 'atMinute', 'weekday', 'cron', 'cli', 'enabled', 'catchUp', 'lastRunAt', 'lastSessionId', 'sessionConfig'];
+
+function listProjects() {
+  return stmts.projectList.all();
+}
+
+function getProject(id) {
+  return stmts.projectGet.get(id) || null;
+}
+
+function getProjectBySlug(slug) {
+  return stmts.projectGetBySlug.get(slug) || null;
+}
+
+function insertProject(row) {
+  stmts.projectInsert.run(
+    row.id, row.name, row.slug, row.root,
+    row.status || 'active', row.sharedBranch === false ? 0 : 1, row.branchName || null,
+    row.created, row.modified
+  );
+}
+
+// Only whitelisted columns can change; the patch is applied with one UPDATE so
+// callers cannot rename `id`, `slug` or `root` by accident.
+function updatePatch(table, allowed, id, patch) {
+  const sets = [];
+  const values = [];
+  for (const key of allowed) {
+    if (!(key in patch)) continue;
+    sets.push(`${key} = ?`);
+    let value = patch[key];
+    if (key === 'sharedBranch') value = value ? 1 : 0;
+    values.push(value === undefined ? null : value);
+  }
+  if (!sets.length) return 0;
+  values.push(id);
+  return db.prepare(`UPDATE ${table} SET ${sets.join(', ')} WHERE id = ?`).run(...values).changes;
+}
+
+function updateProject(id, patch) {
+  return updatePatch('projects', PROJECT_PATCH_KEYS, id, patch);
+}
+
+const deleteProjectTx = db.transaction((id) => {
+  stmts.assignmentClearProject.run(id);
+  stmts.tracksDeleteByProject.run(id);
+  stmts.schedulesDeleteByProject.run(id);
+  stmts.projectFoldersDeleteByProject.run(id);
+  stmts.planLinksDeleteByProject.run(id);
+  stmts.projectDelete.run(id);
+});
+
+// --- Plan links ---
+
+function insertPlanLink(row) {
+  stmts.planLinkInsert.run(row.projectId, row.file, row.itemText, row.sessionId, row.kind, row.at || new Date().toISOString());
+}
+
+function listPlanLinks(projectId) {
+  return stmts.planLinksByProject.all(projectId);
+}
+
+/** A session that started under a temporary id keeps its links once the real id is known. */
+function rekeyPlanLinks(fromId, toId) {
+  return stmts.planLinksRekey.run(toId, fromId).changes;
+}
+
+function deleteProject(id) {
+  deleteProjectTx(id);
+}
+
+function listProjectFolders(projectId) {
+  return stmts.projectFoldersList.all(projectId);
+}
+
+function listAllProjectFolders() {
+  return stmts.projectFoldersListAll.all();
+}
+
+function upsertProjectFolder(row) {
+  stmts.projectFolderUpsert.run(
+    row.projectId, row.path, row.mode || 'in-place',
+    row.sourcePath || null, row.branch || null, row.sortOrder || 0
+  );
+}
+
+function deleteProjectFolder(projectId, folderPath) {
+  stmts.projectFolderDelete.run(projectId, folderPath);
+}
+
+function listTracks(projectId) {
+  return stmts.tracksList.all(projectId);
+}
+
+function listAllTracks() {
+  return stmts.tracksListAll.all();
+}
+
+function getTrack(id) {
+  return stmts.trackGet.get(id) || null;
+}
+
+function insertTrack(row) {
+  stmts.trackInsert.run(
+    row.id, row.projectId, row.name, row.cwd || null, row.cli || null,
+    row.status || 'active', row.sortOrder || 0, row.created
+  );
+}
+
+function updateTrack(id, patch) {
+  return updatePatch('tracks', TRACK_PATCH_KEYS, id, patch);
+}
+
+const deleteTrackTx = db.transaction((id, archiveSessions) => {
+  const track = stmts.trackGet.get(id);
+  if (!track) return [];
+  const sessionIds = db.prepare('SELECT sessionId FROM session_meta WHERE trackId = ?').all(id).map(row => row.sessionId);
+  db.prepare(`UPDATE session_meta SET formerTrackName = ?, trackId = NULL,
+    archived = CASE WHEN ? THEN 1 ELSE archived END WHERE trackId = ?`).run(track.name, archiveSessions ? 1 : 0, id);
+  stmts.trackDelete.run(id);
+  // Its schedules stay in the project, under General, like its sessions.
+  stmts.schedulesClearTrack.run(id);
+  return sessionIds;
+});
+
+function deleteTrack(id, { archiveSessions = false } = {}) {
+  return deleteTrackTx(id, archiveSessions);
+}
+
+// --- Schedules ---
+
+function scheduleFromRow(row) {
+  return row ? { ...row, sessionConfig: row.sessionConfig ? JSON.parse(row.sessionConfig) : {} } : null;
+}
+
+function listSchedules() {
+  return stmts.schedulesListAll.all().map(scheduleFromRow);
+}
+
+function listSchedulesByProject(projectId) {
+  return stmts.schedulesListByProject.all(projectId).map(scheduleFromRow);
+}
+
+function getSchedule(id) {
+  return scheduleFromRow(stmts.scheduleGet.get(id));
+}
+
+function insertSchedule(row) {
+  stmts.scheduleInsert.run(
+    row.id, row.name, row.projectId || null, row.trackId || null, row.cwd || null,
+    row.prompt, row.every,
+    row.atHour ?? null, row.atMinute ?? null, row.weekday ?? null, row.cron || null,
+    row.cli || null, row.enabled === false ? 0 : 1, row.catchUp ? 1 : 0,
+    row.sourceFile || null, row.lastRunAt || null, row.lastSessionId || null, row.created,
+    JSON.stringify(row.sessionConfig || {})
+  );
+}
+
+function getImportedScheduleFiles() {
+  return stmts.scheduleImportList.all().map(row => row.sourceFile);
+}
+
+// Both writes commit together. A failed schedule insert leaves the file
+// eligible for retry; a repeated scan cannot create a second schedule.
+const importLegacySchedule = db.transaction((row) => {
+  if (!row.sourceFile) throw new Error('An imported schedule needs a source file');
+  const recorded = stmts.scheduleImportRecord.run(row.sourceFile, row.created);
+  if (!recorded.changes) return false;
+  insertSchedule(row);
+  return true;
+});
+
+function updateSchedule(id, patch) {
+  const clean = { ...patch };
+  if ('sessionConfig' in clean) clean.sessionConfig = JSON.stringify(clean.sessionConfig || {});
+  if ('enabled' in clean) clean.enabled = clean.enabled ? 1 : 0;
+  if ('catchUp' in clean) clean.catchUp = clean.catchUp ? 1 : 0;
+  return updatePatch('schedules', SCHEDULE_PATCH_KEYS, id, clean);
+}
+
+const deleteScheduleTx = db.transaction((id) => {
+  const row = stmts.scheduleGet.get(id);
+  if (row?.sourceFile) stmts.scheduleImportRecord.run(row.sourceFile, row.created);
+  stmts.scheduleLinkClear.run(id);
+  stmts.scheduleDelete.run(id);
+});
+
+function deleteSchedule(id) {
+  deleteScheduleTx(id);
+}
+
+/** A session started by a schedule: the row remembers it, and the schedule remembers the run. */
+const recordScheduleRunTx = db.transaction((scheduleId, sessionId, at) => {
+  stmts.scheduleLinkSet.run(sessionId, scheduleId, at);
+  db.prepare('UPDATE schedules SET lastRunAt = ?, lastSessionId = ? WHERE id = ?').run(at, sessionId, scheduleId);
+});
+
+function recordScheduleRun(scheduleId, sessionId, at) {
+  recordScheduleRunTx(scheduleId, sessionId, at);
+}
+
+// A session that started under a temporary id keeps its schedule link once
+// the real id is known (codex).
+const rekeyScheduleSessionTx = db.transaction((fromId, toId) => {
+  const row = stmts.get.get(fromId);
+  if (row?.scheduleId) {
+    stmts.scheduleLinkSet.run(toId, row.scheduleId, row.scheduledAt);
+    stmts.scheduleLinkRekey.run(null, null, fromId);
+  }
+  stmts.scheduleRekeySession.run(toId, fromId);
+});
+
+function rekeyScheduleSession(fromId, toId) {
+  rekeyScheduleSessionTx(fromId, toId);
+}
+
+function setSessionAssignment(sessionId, projectId, trackId) {
+  stmts.assignmentSet.run(sessionId, projectId || null, trackId || null);
+}
+
+// A fork inherits its parent's project and track.
+function copySessionAssignment(fromId, toId) {
+  const row = stmts.get.get(fromId);
+  if (!row || (!row.projectId && !row.trackId)) return false;
+  stmts.assignmentSet.run(toId, row.projectId || null, row.trackId || null);
+  return true;
+}
+
+// A Codex session runs under a temporary id until its transcript appears; the
+// assignment recorded at launch has to follow it to the real id.
+function moveSessionAssignment(fromId, toId) {
+  const copied = copySessionAssignment(fromId, toId);
+  if (copied) stmts.assignmentSet.run(fromId, null, null);
+  return copied;
+}
+
 function closeDb() {
   try { db.close(); } catch {}
 }
@@ -460,7 +919,15 @@ module.exports = {
   deleteCachedSession, deleteCachedFolder,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
-  searchByType, isSearchIndexPopulated, searchFtsRecreated,
+  searchByType, searchSessionIds, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting,
+  listProjects, getProject, getProjectBySlug, insertProject, updateProject, deleteProject,
+  listProjectFolders, listAllProjectFolders, upsertProjectFolder, deleteProjectFolder,
+  listTracks, listAllTracks, getTrack, insertTrack, updateTrack, deleteTrack,
+  listSchedules, listSchedulesByProject, getSchedule, insertSchedule, updateSchedule, deleteSchedule,
+  getImportedScheduleFiles, importLegacySchedule,
+  recordScheduleRun, rekeyScheduleSession,
+  setSessionAssignment, copySessionAssignment, moveSessionAssignment,
+  insertPlanLink, listPlanLinks, rekeyPlanLinks,
   closeDb,
 };

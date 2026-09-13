@@ -215,3 +215,36 @@ test('cwd derivation supports an unterminated first record without reading the r
     } finally { fs.readSync = read; }
   });
 });
+
+test('capped parser state upgrades once, then appends full conversation text incrementally', () => {
+  withTmp(dir => {
+    const file = path.join(dir, 'session.jsonl');
+    fs.writeFileSync(file, buildSession(40));
+    const first = readSessionFile(file, FOLDER, PROJECT);
+    const legacy = { ...first, headHash: 'v2:' + first.headHash.slice(3),
+      textContent: first.textContent.slice(0, 8000) + '\ntool_output_marker' };
+    fs.appendFileSync(file, line({ type: 'assistant', message: 'upgrade reply' }));
+
+    const upgraded = readSessionFile(file, FOLDER, PROJECT, legacy);
+    assert.equal(upgraded.textContent, readSessionFile(file, FOLDER, PROJECT).textContent);
+    assert.ok(upgraded.textContent.length > 8000);
+    assert.ok(upgraded.bytesRead >= fs.statSync(file).size, 'legacy state needs one full read');
+
+    const answer = 'a'.repeat(600) + ' move_fna_lines';
+    fs.appendFileSync(file, line({ type: 'assistant', message: { content: [
+      { type: 'thinking', text: 'thinking_marker' },
+      { type: 'text', text: answer },
+      { type: 'tool_use', input: { command: 'tool_input_marker' } },
+      { type: 'text', text: 'second_block_marker' },
+    ] } }));
+    fs.appendFileSync(file, line({ type: 'user', message: { content: [
+      { type: 'tool_result', content: [{ type: 'text', text: 'tool_output_marker' }] },
+    ] } }));
+    fs.appendFileSync(file, line({ type: 'system', message: 'system_marker' }));
+
+    const incremental = readSessionFile(file, FOLDER, PROJECT, upgraded);
+    assert.equal(incremental.textContent, upgraded.textContent + '\n' + answer + '\nsecond_block_marker');
+    assert.equal(incremental.textContent, readSessionFile(file, FOLDER, PROJECT).textContent);
+    assert.ok(incremental.bytesRead < upgraded.indexedBytes / 10, 'later changes must resume incrementally');
+  });
+});

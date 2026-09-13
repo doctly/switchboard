@@ -120,6 +120,184 @@ function buildSlugGroup(slug, sessions) {
   return group;
 }
 
+// Process a list of sessions: filter, sort, slug-group, order, and truncate.
+// `project` needs `.sessions`, a `.projectPath` used as the order key, and an
+// optional `._projectMatchedOnly`. The Projects tab passes a synthetic key
+// ("project:<id>") and its own previous order list.
+// Returns { filtered, visible, older, sortOrderEntry } or null if the group
+// should be skipped.
+function processProjectSessions(project, resort, previousOrder = sortedOrder) {
+  let filtered = project.sessions;
+  if (showStarredOnly) filtered = filtered.filter(s => s.starred);
+  if (showRunningOnly) filtered = filtered.filter(s => activePtyIds.has(s.sessionId));
+  if (showTodayOnly) {
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    filtered = filtered.filter(s => {
+      if (!s.modified) return false;
+      const d = new Date(s.modified);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` === todayStr;
+    });
+  }
+  const anyFilterActive = showStarredOnly || showRunningOnly || showTodayOnly || searchMatchIds !== null;
+  if (filtered.length === 0 && !project._projectMatchedOnly && (project.sessions.length > 0 || anyFilterActive)) return null;
+
+  // Sort
+  filtered = [...filtered].sort((a, b) => {
+    const aRunning = isSessionRunning(a.sessionId);
+    const bRunning = isSessionRunning(b.sessionId);
+    const aPri = (a.starred && aRunning ? 3 : aRunning ? 2 : a.starred ? 1 : 0);
+    const bPri = (b.starred && bRunning ? 3 : bRunning ? 2 : b.starred ? 1 : 0);
+    if (aPri !== bPri) return bPri - aPri;
+    return new Date(b.modified) - new Date(a.modified);
+  });
+
+  // Slug grouping
+  const slugMap = new Map();
+  const ungrouped = [];
+  for (const session of filtered) {
+    if (session.slug) {
+      if (!slugMap.has(session.slug)) slugMap.set(session.slug, []);
+      slugMap.get(session.slug).push(session);
+    } else {
+      ungrouped.push(session);
+    }
+  }
+  const allItems = [];
+  for (const session of ungrouped) {
+    const isRunning = isSessionRunning(session.sessionId);
+    allItems.push({ sortTime: new Date(session.modified).getTime(), pinned: !!session.starred, running: isRunning, element: buildSessionItem(session) });
+  }
+  for (const [slug, sessions] of slugMap) {
+    const mostRecentTime = Math.max(...sessions.map(s => new Date(s.modified).getTime()));
+    const hasRunning = sessions.some(s => isSessionRunning(s.sessionId));
+    const hasPinned = sessions.some(s => s.starred);
+    const element = sessions.length === 1 ? buildSessionItem(sessions[0]) : buildSlugGroup(slug, sessions);
+    allItems.push({ sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning, element });
+  }
+
+  // Sort render items
+  const prevEntry = previousOrder.find(e => e.projectPath === project.projectPath);
+  if (resort || !prevEntry) {
+    allItems.sort((a, b) => {
+      const aPri = (a.pinned && a.running ? 3 : a.running ? 2 : a.pinned ? 1 : 0);
+      const bPri = (b.pinned && b.running ? 3 : b.running ? 2 : b.pinned ? 1 : 0);
+      if (aPri !== bPri) return bPri - aPri;
+      return b.sortTime - a.sortTime;
+    });
+  } else {
+    const orderIndex = new Map(prevEntry.itemIds.map((id, i) => [id, i]));
+    allItems.sort((a, b) => {
+      const aPos = orderIndex.get(a.element.id);
+      const bPos = orderIndex.get(b.element.id);
+      if (aPos !== undefined && bPos !== undefined) return aPos - bPos;
+      if (aPos === undefined && bPos !== undefined) return -1;
+      if (aPos !== undefined && bPos === undefined) return 1;
+      return b.sortTime - a.sortTime;
+    });
+  }
+
+  // Truncate
+  let visible = [];
+  let older = [];
+  if (searchMatchIds !== null || showStarredOnly || showRunningOnly || showTodayOnly) {
+    visible = allItems;
+  } else {
+    let count = 0;
+    const ageCutoff = Date.now() - sessionMaxAgeDays * 86400000;
+    for (const item of allItems) {
+      if (item.running || item.pinned || (count < visibleSessionCount && item.sortTime >= ageCutoff)) {
+        visible.push(item);
+        count++;
+      } else {
+        older.push(item);
+      }
+    }
+    if (visible.length === 0 && older.length > 0) { visible = older; older = []; }
+  }
+
+  return {
+    filtered, visible, older,
+    sortOrderEntry: { projectPath: project.projectPath, itemIds: allItems.map(item => item.element.id) },
+  };
+}
+
+// Build the sessions list DOM (shared between folders, worktrees and projects)
+function buildSessionsList(fId, visible, older) {
+  const sessionsList = document.createElement('div');
+  sessionsList.className = 'project-sessions';
+  sessionsList.id = 'sessions-' + fId;
+  for (const item of visible) sessionsList.appendChild(item.element);
+  if (older.length > 0) {
+    const moreBtn = document.createElement('div');
+    moreBtn.className = 'sessions-more-toggle';
+    moreBtn.id = 'older-' + fId;
+
+    const moreLabel = document.createElement('span');
+    moreLabel.className = 'sessions-more-label';
+
+    const archiveOlderBtn = document.createElement('button');
+    archiveOlderBtn.className = 'sessions-older-archive-btn';
+    archiveOlderBtn.title = 'Archive all older sessions';
+    archiveOlderBtn.setAttribute('aria-label', 'Archive all older sessions');
+    archiveOlderBtn.innerHTML = ICONS.archive(14);
+
+    moreBtn.appendChild(moreLabel);
+    moreBtn.appendChild(archiveOlderBtn);
+    const olderList = document.createElement('div');
+    olderList.className = 'sessions-older';
+    olderList.id = 'older-list-' + fId;
+    olderList.style.display = 'none';
+    for (const item of older) olderList.appendChild(item.element);
+    // An older render item can be a slug group containing several sessions.
+    // Count the actual unarchived session rows so this label matches the
+    // archive confirmation and the work the archive button will perform.
+    const olderSessionCount = olderList.querySelectorAll('.session-item:not(.archived-item)').length;
+    moreLabel.textContent = `+ ${olderSessionCount} older`;
+    sessionsList.appendChild(moreBtn);
+    sessionsList.appendChild(olderList);
+  }
+  return sessionsList;
+}
+
+// morphdom callback: carry DOM-only state (collapse, expansion, an open rename)
+// from the element on screen to its replacement. Shared with the Projects tab.
+function preserveSidebarDomState(fromEl, toEl) {
+  // Skip updating session items that have an active rename input
+  if (fromEl.classList.contains('session-item') && fromEl.querySelector('.session-rename-input')) {
+    return false;
+  }
+  if (fromEl.classList.contains('project-header')) {
+    if (fromEl.classList.contains('collapsed')) {
+      toEl.classList.add('collapsed');
+    } else {
+      toEl.classList.remove('collapsed');
+    }
+  }
+  if (fromEl.classList.contains('slug-group') || fromEl.classList.contains('worktree-header')) {
+    if (fromEl.classList.contains('collapsed')) {
+      toEl.classList.add('collapsed');
+    } else {
+      toEl.classList.remove('collapsed');
+    }
+  }
+  if (fromEl.classList.contains('sessions-older') && fromEl.style.display !== 'none') {
+    toEl.style.display = '';
+  }
+  if (fromEl.classList.contains('sessions-more-toggle') && fromEl.classList.contains('expanded')) {
+    toEl.classList.add('expanded');
+    const label = toEl.querySelector('.sessions-more-label');
+    if (label) label.textContent = '- hide older';
+  }
+  if (fromEl.classList.contains('slug-group-older') && fromEl.style.display !== 'none') {
+    toEl.style.display = '';
+  }
+  if (fromEl.classList.contains('slug-group-more') && fromEl.classList.contains('expanded')) {
+    toEl.classList.add('expanded');
+  }
+  return true;
+}
+
 function renderProjects(projects, resort) {
   const newSidebar = document.createElement('div');
 
@@ -153,142 +331,6 @@ function renderProjects(projects, resort) {
 
   const newSortedOrder = [];
 
-  // Process a project's sessions: filter, sort, slug-group, order, and truncate.
-  // Returns { filtered, visible, older, sortOrderEntry } or null if project should be skipped.
-  function processProjectSessions(project, resort) {
-    let filtered = project.sessions;
-    if (showStarredOnly) filtered = filtered.filter(s => s.starred);
-    if (showRunningOnly) filtered = filtered.filter(s => activePtyIds.has(s.sessionId));
-    if (showTodayOnly) {
-      const now = new Date();
-      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-      filtered = filtered.filter(s => {
-        if (!s.modified) return false;
-        const d = new Date(s.modified);
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` === todayStr;
-      });
-    }
-    const anyFilterActive = showStarredOnly || showRunningOnly || showTodayOnly || searchMatchIds !== null;
-    if (filtered.length === 0 && !project._projectMatchedOnly && (project.sessions.length > 0 || anyFilterActive)) return null;
-
-    // Sort
-    filtered = [...filtered].sort((a, b) => {
-      const aRunning = isSessionRunning(a.sessionId);
-      const bRunning = isSessionRunning(b.sessionId);
-      const aPri = (a.starred && aRunning ? 3 : aRunning ? 2 : a.starred ? 1 : 0);
-      const bPri = (b.starred && bRunning ? 3 : bRunning ? 2 : b.starred ? 1 : 0);
-      if (aPri !== bPri) return bPri - aPri;
-      return new Date(b.modified) - new Date(a.modified);
-    });
-
-    // Slug grouping
-    const slugMap = new Map();
-    const ungrouped = [];
-    for (const session of filtered) {
-      if (session.slug) {
-        if (!slugMap.has(session.slug)) slugMap.set(session.slug, []);
-        slugMap.get(session.slug).push(session);
-      } else {
-        ungrouped.push(session);
-      }
-    }
-    const allItems = [];
-    for (const session of ungrouped) {
-      const isRunning = isSessionRunning(session.sessionId);
-      allItems.push({ sortTime: new Date(session.modified).getTime(), pinned: !!session.starred, running: isRunning, element: buildSessionItem(session) });
-    }
-    for (const [slug, sessions] of slugMap) {
-      const mostRecentTime = Math.max(...sessions.map(s => new Date(s.modified).getTime()));
-      const hasRunning = sessions.some(s => isSessionRunning(s.sessionId));
-      const hasPinned = sessions.some(s => s.starred);
-      const element = sessions.length === 1 ? buildSessionItem(sessions[0]) : buildSlugGroup(slug, sessions);
-      allItems.push({ sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning, element });
-    }
-
-    // Sort render items
-    const prevEntry = sortedOrder.find(e => e.projectPath === project.projectPath);
-    if (resort || !prevEntry) {
-      allItems.sort((a, b) => {
-        const aPri = (a.pinned && a.running ? 3 : a.running ? 2 : a.pinned ? 1 : 0);
-        const bPri = (b.pinned && b.running ? 3 : b.running ? 2 : b.pinned ? 1 : 0);
-        if (aPri !== bPri) return bPri - aPri;
-        return b.sortTime - a.sortTime;
-      });
-    } else {
-      const orderIndex = new Map(prevEntry.itemIds.map((id, i) => [id, i]));
-      allItems.sort((a, b) => {
-        const aPos = orderIndex.get(a.element.id);
-        const bPos = orderIndex.get(b.element.id);
-        if (aPos !== undefined && bPos !== undefined) return aPos - bPos;
-        if (aPos === undefined && bPos !== undefined) return -1;
-        if (aPos !== undefined && bPos === undefined) return 1;
-        return b.sortTime - a.sortTime;
-      });
-    }
-
-    // Truncate
-    let visible = [];
-    let older = [];
-    if (searchMatchIds !== null || showStarredOnly || showRunningOnly || showTodayOnly) {
-      visible = allItems;
-    } else {
-      let count = 0;
-      const ageCutoff = Date.now() - sessionMaxAgeDays * 86400000;
-      for (const item of allItems) {
-        if (item.running || item.pinned || (count < visibleSessionCount && item.sortTime >= ageCutoff)) {
-          visible.push(item);
-          count++;
-        } else {
-          older.push(item);
-        }
-      }
-      if (visible.length === 0 && older.length > 0) { visible = older; older = []; }
-    }
-
-    return {
-      filtered, visible, older,
-      sortOrderEntry: { projectPath: project.projectPath, itemIds: allItems.map(item => item.element.id) },
-    };
-  }
-
-  // Build the sessions list DOM (shared between projects and worktrees)
-  function buildSessionsList(fId, visible, older) {
-    const sessionsList = document.createElement('div');
-    sessionsList.className = 'project-sessions';
-    sessionsList.id = 'sessions-' + fId;
-    for (const item of visible) sessionsList.appendChild(item.element);
-    if (older.length > 0) {
-      const moreBtn = document.createElement('div');
-      moreBtn.className = 'sessions-more-toggle';
-      moreBtn.id = 'older-' + fId;
-
-      const moreLabel = document.createElement('span');
-      moreLabel.className = 'sessions-more-label';
-
-      const archiveOlderBtn = document.createElement('button');
-      archiveOlderBtn.className = 'sessions-older-archive-btn';
-      archiveOlderBtn.title = 'Archive all older sessions';
-      archiveOlderBtn.setAttribute('aria-label', 'Archive all older sessions');
-      archiveOlderBtn.innerHTML = ICONS.archive(14);
-
-      moreBtn.appendChild(moreLabel);
-      moreBtn.appendChild(archiveOlderBtn);
-      const olderList = document.createElement('div');
-      olderList.className = 'sessions-older';
-      olderList.id = 'older-list-' + fId;
-      olderList.style.display = 'none';
-      for (const item of older) olderList.appendChild(item.element);
-      // An older render item can be a slug group containing several sessions.
-      // Count the actual unarchived session rows so this label matches the
-      // archive confirmation and the work the archive button will perform.
-      const olderSessionCount = olderList.querySelectorAll('.session-item:not(.archived-item)').length;
-      moreLabel.textContent = `+ ${olderSessionCount} older`;
-      sessionsList.appendChild(moreBtn);
-      sessionsList.appendChild(olderList);
-    }
-    return sessionsList;
-  }
-
   for (const project of projects) {
     // Skip worktree projects — they'll be rendered nested under their parent
     if (worktreeSet.has(project.projectPath)) continue;
@@ -307,16 +349,29 @@ function renderProjects(projects, resort) {
     const header = document.createElement('div');
     header.className = 'project-header';
     header.id = 'ph-' + fId;
-    const shortName = shortProjectPath(project.projectPath);
-    header.innerHTML = `<span class="arrow">&#9660;</span> <span class="project-name">${shortName}</span>`;
+    // A folder that sits inside a project's folder is labelled by the project
+    // ("<project> · repos/website") instead of by its last two path segments.
+    const rootLabel = typeof projectRootLabel === 'function' ? projectRootLabel(project.projectPath) : null;
+    const shortName = rootLabel || shortProjectPath(project.projectPath);
+    header.title = project.projectPath;
+    if (rootLabel) header.classList.add('project-header--in-project');
+    // A project worktree (checked out under <project>/repos/) gets the same
+    // branch mark a Claude worktree has.
+    const folderMode = typeof projectFolderMode === 'function' ? projectFolderMode(project.projectPath) : null;
+    const branchMark = folderMode === 'worktree'
+      ? '<span class="worktree-branch-icon project-worktree-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8c0-2.76-2.46-5-5.5-5S2 5.24 2 8h2l1-1 1 1h4"/><path d="M13 7.14A5.82 5.82 0 0 1 16.5 6c3.04 0 5.5 2.24 5.5 5h-3l-1-1-1 1h-3"/><path d="M5.89 9.71c-2.15 2.15-2.3 5.47-.35 7.43l4.24-4.25.7-.7.71-.71 2.12-2.12c-1.95-1.96-5.27-1.8-7.42.35"/><path d="M11 15.5c.5 2.5-.17 4.5-1 6.5h4c2-5.5-.5-12-1-14"/></svg></span> '
+      : '';
+    header.innerHTML = `<span class="arrow">&#9660;</span> ${branchMark}<span class="project-name">${escapeHtml(shortName)}</span>`;
 
     const taskBtn = createProjectTaskButton(project);
     if (taskBtn) header.appendChild(taskBtn);
 
+    // The folder's scheduled tasks: a plain clock opens the dialog for a new
+    // one; with schedules it is tinted, counts them, and lists them.
     const scheduleBtn = document.createElement('button');
     scheduleBtn.className = 'project-schedule-btn';
-    scheduleBtn.title = 'Create scheduled task';
     scheduleBtn.innerHTML = ICONS.schedule(16);
+    decorateScheduleButton(scheduleBtn, schedulesForFolder(project.projectPath));
     header.appendChild(scheduleBtn);
 
     const settingsBtn = document.createElement('button');
@@ -413,41 +468,7 @@ function renderProjects(projects, resort) {
 
   morphdom(sidebarContent, newSidebar, {
     childrenOnly: true,
-    onBeforeElUpdated(fromEl, toEl) {
-      // Skip updating session items that have an active rename input
-      if (fromEl.classList.contains('session-item') && fromEl.querySelector('.session-rename-input')) {
-        return false;
-      }
-      if (fromEl.classList.contains('project-header')) {
-        if (fromEl.classList.contains('collapsed')) {
-          toEl.classList.add('collapsed');
-        } else {
-          toEl.classList.remove('collapsed');
-        }
-      }
-      if (fromEl.classList.contains('slug-group') || fromEl.classList.contains('worktree-header')) {
-        if (fromEl.classList.contains('collapsed')) {
-          toEl.classList.add('collapsed');
-        } else {
-          toEl.classList.remove('collapsed');
-        }
-      }
-      if (fromEl.classList.contains('sessions-older') && fromEl.style.display !== 'none') {
-        toEl.style.display = '';
-      }
-      if (fromEl.classList.contains('sessions-more-toggle') && fromEl.classList.contains('expanded')) {
-        toEl.classList.add('expanded');
-        const label = toEl.querySelector('.sessions-more-label');
-        if (label) label.textContent = '- hide older';
-      }
-      if (fromEl.classList.contains('slug-group-older') && fromEl.style.display !== 'none') {
-        toEl.style.display = '';
-      }
-      if (fromEl.classList.contains('slug-group-more') && fromEl.classList.contains('expanded')) {
-        toEl.classList.add('expanded');
-      }
-      return true;
-    },
+    onBeforeElUpdated: preserveSidebarDomState,
     getNodeKey(node) {
       return node.id || undefined;
     }
@@ -482,7 +503,7 @@ function rebindSidebarEvents(projects) {
     }
     const scheduleBtn = header.querySelector('.project-schedule-btn');
     if (scheduleBtn) {
-      scheduleBtn.onclick = (e) => { e.stopPropagation(); launchScheduleCreator(project); };
+      scheduleBtn.onclick = (e) => { e.stopPropagation(); showFolderScheduleMenu(project.projectPath, scheduleBtn); };
     }
     const settingsBtn = header.querySelector('.project-settings-btn');
     if (settingsBtn) {
@@ -501,6 +522,7 @@ function rebindSidebarEvents(projects) {
             await window.api.stopSession(s.sessionId);
           }
           await window.api.archiveSession(s.sessionId, 1);
+          forgetTerminalHistory(s.sessionId);
           s.archived = 1;
         }
         pollActiveSessions();
@@ -543,7 +565,14 @@ function rebindSidebarEvents(projects) {
     };
   });
 
-  sidebarContent.querySelectorAll('.slug-group-header').forEach(header => {
+  bindSessionListEvents(sidebarContent);
+}
+
+// Per-row handlers for every session list: slug groups, "+N older" toggles and
+// the session items themselves. Shared by the Sessions tab (sidebarContent)
+// and the Projects tab (projectsContent).
+function bindSessionListEvents(container) {
+  container.querySelectorAll('.slug-group-header').forEach(header => {
     const archiveBtn = header.querySelector('.slug-group-archive-btn');
     if (archiveBtn) {
       archiveBtn.onclick = async (e) => {
@@ -556,6 +585,7 @@ function rebindSidebarEvents(projects) {
           if (!session || session.archived) continue;
           if (activePtyIds.has(sid)) await window.api.stopSession(sid);
           await window.api.archiveSession(sid, 1);
+          forgetTerminalHistory(sid);
           session.archived = 1;
         }
         pollActiveSessions();
@@ -569,7 +599,7 @@ function rebindSidebarEvents(projects) {
     };
   });
 
-  sidebarContent.querySelectorAll('.slug-group-more').forEach(moreBtn => {
+  container.querySelectorAll('.slug-group-more').forEach(moreBtn => {
     moreBtn.onclick = () => {
       const group = moreBtn.closest('.slug-group');
       if (group) {
@@ -579,7 +609,7 @@ function rebindSidebarEvents(projects) {
     };
   });
 
-  sidebarContent.querySelectorAll('.sessions-more-toggle').forEach(moreBtn => {
+  container.querySelectorAll('.sessions-more-toggle').forEach(moreBtn => {
     const olderList = moreBtn.nextElementSibling;
     if (!olderList || !olderList.classList.contains('sessions-older')) return;
     const count = olderList.querySelectorAll('.session-item:not(.archived-item)').length;
@@ -606,6 +636,7 @@ function rebindSidebarEvents(projects) {
             await window.api.stopSession(session.sessionId);
           }
           await window.api.archiveSession(session.sessionId, 1);
+          forgetTerminalHistory(session.sessionId);
           session.archived = 1;
         }
         pollActiveSessions();
@@ -614,7 +645,7 @@ function rebindSidebarEvents(projects) {
     }
   });
 
-  sidebarContent.querySelectorAll('.session-item').forEach(item => {
+  container.querySelectorAll('.session-item').forEach(item => {
     const sessionId = item.dataset.sessionId;
     const session = sessionMap.get(sessionId);
     if (!session) return;
@@ -660,14 +691,6 @@ function rebindSidebarEvents(projects) {
       };
     }
 
-    const launchConfigBtn = item.querySelector('.session-launch-config-btn');
-    if (launchConfigBtn) {
-      launchConfigBtn.onclick = (e) => {
-        e.stopPropagation();
-        showResumeSessionDialog(session);
-      };
-    }
-
     const forkBtn = item.querySelector('.session-fork-btn');
     if (forkBtn) {
       forkBtn.onclick = async (e) => {
@@ -682,11 +705,27 @@ function rebindSidebarEvents(projects) {
       };
     }
 
-    const jsonlBtn = item.querySelector('.session-jsonl-btn');
-    if (jsonlBtn) {
-      jsonlBtn.onclick = (e) => {
+    const moreBtn = item.querySelector('.session-more-btn');
+    if (moreBtn) {
+      moreBtn.onclick = (e) => {
         e.stopPropagation();
-        showJsonlViewer(session);
+        const menuItems = [
+          { label: 'Rename session', onClick: () => startRename(item.querySelector('.session-summary'), session) },
+          { label: 'Copy session ID', onClick: () => window.api.writeClipboard(session.sessionId) },
+        ];
+        if (session.type !== 'terminal') {
+          menuItems.push(
+            { label: 'View messages', onClick: () => showJsonlViewer(session) },
+            { label: 'Move to project…', onClick: () => showMovePopover(session, moreBtn) },
+          );
+          if (!activePtyIds.has(session.sessionId)) {
+            menuItems.push({ label: 'Resume with config…', onClick: () => showResumeSessionDialog(session) });
+          }
+        }
+        if (isDismissibleSession(session.sessionId)) {
+          menuItems.push({ label: 'Dismiss session', onClick: () => dismissSession(session.sessionId) });
+        }
+        showContextMenu(menuItems, { anchor: moreBtn });
       };
     }
 
@@ -700,6 +739,7 @@ function rebindSidebarEvents(projects) {
           pollActiveSessions();
         }
         await window.api.archiveSession(session.sessionId, newVal);
+        if (newVal) forgetTerminalHistory(session.sessionId);
         session.archived = newVal;
         loadProjects();
       };
@@ -708,7 +748,7 @@ function rebindSidebarEvents(projects) {
 
   // Auto-expand slug group if it contains the active session
   if (activeSessionId) {
-    const activeItem = sidebarContent.querySelector(`[data-session-id="${activeSessionId}"]`);
+    const activeItem = container.querySelector(`[data-session-id="${activeSessionId}"]`);
     const collapsedGroup = activeItem?.closest('.slug-group.collapsed');
     if (collapsedGroup) {
       collapsedGroup.classList.remove('collapsed');
@@ -737,17 +777,16 @@ function buildSessionItem(session) {
   const row = document.createElement('div');
   row.className = 'session-row';
 
-  // Pin
-  const pin = document.createElement('span');
+  // Title and star share the top line; status and actions sit below.
+  const pin = document.createElement('button');
   pin.className = 'session-pin' + (session.starred ? ' pinned' : '');
-  pin.innerHTML = session.starred
-    ? '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.707.707c-.28-.28-.576-.49-.888-.656L10.073 9.333l-.07 3.181a.5.5 0 0 1-.853.354l-3.535-3.536-4.243 4.243a.5.5 0 1 1-.707-.707l4.243-4.243L1.372 5.11a.5.5 0 0 1 .354-.854l3.18-.07L8.37 .722A3.37 3.37 0 0 1 9.12.074a.5.5 0 0 1 .708.002l-.707.707z"/></svg>'
-    : '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.707.707c-.28-.28-.576-.49-.888-.656L10.073 9.333l-.07 3.181a.5.5 0 0 1-.853.354l-3.535-3.536-4.243 4.243a.5.5 0 1 1-.707-.707l4.243-4.243L1.372 5.11a.5.5 0 0 1 .354-.854l3.18-.07L8.37 .722A3.37 3.37 0 0 1 9.12.074a.5.5 0 0 1 .708.002l-.707.707z"/></svg>';
+  pin.type = 'button';
+  pin.title = session.starred ? 'Unstar session' : 'Star session';
+  pin.setAttribute('aria-label', pin.title);
+  pin.setAttribute('aria-pressed', String(!!session.starred));
+  pin.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="${session.starred ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.78 5.63L21 9.54l-4.5 4.39 1.06 6.2L12 17.2l-5.56 2.93 1.06-6.2L3 9.54l6.22-.91L12 3z"/></svg>`;
 
-  // Which CLI this session belongs to, and whether it is running — one mark in
-  // the gutter rather than a badge inline with the title, which pushed titles
-  // out of alignment with rows that had none. The dot keeps its own element so
-  // the busy/attention/response-ready states still drive it.
+  // Keep the status dot separate so running, busy and unread updates still apply.
   const mark = document.createElement('span');
   mark.className = 'session-mark';
 
@@ -768,30 +807,30 @@ function buildSessionItem(session) {
   dot.className = 'session-status-dot' + (activePtyIds.has(session.sessionId) ? ' running' : '');
   mark.append(markIcon, dot);
 
-  // Info block
-  const info = document.createElement('div');
-  info.className = 'session-info';
-
+  const header = document.createElement('div');
+  header.className = 'session-header';
   const summaryEl = document.createElement('div');
   summaryEl.className = 'session-summary';
   summaryEl.textContent = displayName;
+  header.append(summaryEl, pin);
 
-  // Compact meta line: time + msgs on the left, first UUID segment on the right
-  // (replaces the full-width session-id line). The 30s label ticker in app.js
-  // updates .session-time only, so it must stay its own span.
+  const footer = document.createElement('div');
+  footer.className = 'session-footer';
   const metaEl = document.createElement('div');
   metaEl.className = 'session-meta';
+  // The 30-second ticker updates this span, including the message count.
   const timeEl = document.createElement('span');
   timeEl.className = 'session-time';
+  timeEl.title = session.sessionId;
   timeEl.textContent = timeStr + (session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '');
-  const shortIdEl = document.createElement('span');
-  shortIdEl.className = 'session-short-id';
-  shortIdEl.title = session.sessionId;
-  shortIdEl.textContent = session.sessionId.split('-')[0];
-  metaEl.append(timeEl, shortIdEl);
-
-  info.appendChild(summaryEl);
-  info.appendChild(metaEl);
+  metaEl.append(mark, timeEl);
+  // Started by a scheduled task: a clock, with which one and when in its tooltip.
+  if (session.scheduleId && typeof scheduleChipHtml === 'function') {
+    const chip = document.createElement('span');
+    chip.className = 'session-schedule-chip';
+    chip.innerHTML = scheduleChipHtml(session, { compact: true });
+    metaEl.appendChild(chip);
+  }
 
   // Action buttons container
   const actions = document.createElement('div');
@@ -815,41 +854,29 @@ function buildSessionItem(session) {
   forkBtn.title = 'Fork session';
   forkBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M8 3h-5v5"/><path d="M21 3l-7.536 7.536a5 5 0 0 0-1.464 3.534v6.93"/><path d="M3 3l7.536 7.536a5 5 0 0 1 1.464 3.534v.93"/></svg>';
 
-  const jsonlBtn = document.createElement('button');
-  jsonlBtn.className = 'session-jsonl-btn';
-  jsonlBtn.title = 'View messages';
-  jsonlBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>';
-
-  const launchConfigBtn = document.createElement('button');
-  launchConfigBtn.className = 'session-launch-config-btn';
-  launchConfigBtn.title = 'Resume with config';
-  launchConfigBtn.innerHTML = ICONS.launchConfig(14);
-
   const isUnread = responseReadySessions.has(session.sessionId);
   const unreadBtn = document.createElement('button');
   unreadBtn.className = 'session-unread-btn';
   unreadBtn.title = isUnread ? 'Mark as read' : 'Mark as unread';
   unreadBtn.innerHTML = isUnread ? ICONS.markRead(14) : ICONS.markUnread(14);
 
-  actions.appendChild(stopBtn);
-  actions.appendChild(unreadBtn);
+  const moreBtn = document.createElement('button');
+  moreBtn.className = 'session-more-btn';
+  moreBtn.title = 'More session actions';
+  moreBtn.setAttribute('aria-haspopup', 'menu');
+  moreBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>';
+
   if (session.type !== 'terminal') {
-    actions.appendChild(forkBtn);
-    actions.appendChild(jsonlBtn);
-    actions.appendChild(archiveBtn);
-    actions.appendChild(launchConfigBtn);
+    actions.append(archiveBtn, forkBtn);
+  }
+  actions.append(unreadBtn, stopBtn, moreBtn);
+  for (const button of actions.children) {
+    button.type = 'button';
+    button.setAttribute('aria-label', button.title);
   }
 
-  // Logo and pin stack vertically in a single gutter column — the logo beside
-  // the title, the pin beside the meta line under it. Side by side they cost
-  // every row a second column of horizontal space the title needs more.
-  const gutter = document.createElement('div');
-  gutter.className = 'session-gutter';
-  gutter.append(mark, pin);
-
-  row.appendChild(gutter);
-  row.appendChild(info);
-  row.appendChild(actions);
+  footer.append(metaEl, actions);
+  row.append(header, footer);
   item.appendChild(row);
 
   return item;
