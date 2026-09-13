@@ -258,6 +258,10 @@ db.exec(`
   )
 `);
 db.exec('CREATE INDEX IF NOT EXISTS idx_schedules_project ON schedules(projectId)');
+{
+  const cols = new Set(db.prepare('PRAGMA table_info(schedules)').all().map(c => c.name));
+  if (!cols.has('sessionConfig')) db.exec('ALTER TABLE schedules ADD COLUMN sessionConfig TEXT');
+}
 // Record successful imports separately from schedule rows: deleting an
 // imported task must not make its source file eligible for import again.
 db.exec(`
@@ -452,8 +456,8 @@ const stmts = {
   schedulesListByProject: db.prepare('SELECT * FROM schedules WHERE projectId = ? ORDER BY created'),
   scheduleGet: db.prepare('SELECT * FROM schedules WHERE id = ?'),
   scheduleInsert: db.prepare(`
-    INSERT INTO schedules (id, name, projectId, trackId, cwd, prompt, every, atHour, atMinute, weekday, cron, cli, enabled, catchUp, sourceFile, lastRunAt, lastSessionId, created)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO schedules (id, name, projectId, trackId, cwd, prompt, every, atHour, atMinute, weekday, cron, cli, enabled, catchUp, sourceFile, lastRunAt, lastSessionId, created, sessionConfig)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   scheduleDelete: db.prepare('DELETE FROM schedules WHERE id = ?'),
   scheduleImportList: db.prepare('SELECT sourceFile FROM legacy_schedule_imports'),
@@ -668,7 +672,7 @@ function deleteSetting(key) {
 
 const PROJECT_PATCH_KEYS = ['name', 'status', 'sharedBranch', 'branchName', 'defaultCwd', 'snoozedUntil', 'snoozedAt', 'modified'];
 const TRACK_PATCH_KEYS = ['name', 'cwd', 'cli', 'status', 'sortOrder'];
-const SCHEDULE_PATCH_KEYS = ['name', 'trackId', 'cwd', 'prompt', 'every', 'atHour', 'atMinute', 'weekday', 'cron', 'cli', 'enabled', 'catchUp', 'lastRunAt', 'lastSessionId'];
+const SCHEDULE_PATCH_KEYS = ['name', 'trackId', 'cwd', 'prompt', 'every', 'atHour', 'atMinute', 'weekday', 'cron', 'cli', 'enabled', 'catchUp', 'lastRunAt', 'lastSessionId', 'sessionConfig'];
 
 function listProjects() {
   return stmts.projectList.all();
@@ -799,16 +803,20 @@ function deleteTrack(id, { archiveSessions = false } = {}) {
 
 // --- Schedules ---
 
+function scheduleFromRow(row) {
+  return row ? { ...row, sessionConfig: row.sessionConfig ? JSON.parse(row.sessionConfig) : {} } : null;
+}
+
 function listSchedules() {
-  return stmts.schedulesListAll.all();
+  return stmts.schedulesListAll.all().map(scheduleFromRow);
 }
 
 function listSchedulesByProject(projectId) {
-  return stmts.schedulesListByProject.all(projectId);
+  return stmts.schedulesListByProject.all(projectId).map(scheduleFromRow);
 }
 
 function getSchedule(id) {
-  return stmts.scheduleGet.get(id) || null;
+  return scheduleFromRow(stmts.scheduleGet.get(id));
 }
 
 function insertSchedule(row) {
@@ -817,7 +825,8 @@ function insertSchedule(row) {
     row.prompt, row.every,
     row.atHour ?? null, row.atMinute ?? null, row.weekday ?? null, row.cron || null,
     row.cli || null, row.enabled === false ? 0 : 1, row.catchUp ? 1 : 0,
-    row.sourceFile || null, row.lastRunAt || null, row.lastSessionId || null, row.created
+    row.sourceFile || null, row.lastRunAt || null, row.lastSessionId || null, row.created,
+    JSON.stringify(row.sessionConfig || {})
   );
 }
 
@@ -837,6 +846,7 @@ const importLegacySchedule = db.transaction((row) => {
 
 function updateSchedule(id, patch) {
   const clean = { ...patch };
+  if ('sessionConfig' in clean) clean.sessionConfig = JSON.stringify(clean.sessionConfig || {});
   if ('enabled' in clean) clean.enabled = clean.enabled ? 1 : 0;
   if ('catchUp' in clean) clean.catchUp = clean.catchUp ? 1 : 0;
   return updatePatch('schedules', SCHEDULE_PATCH_KEYS, id, clean);

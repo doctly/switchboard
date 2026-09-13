@@ -81,6 +81,12 @@ Each CLI exposes its own options when you start or resume a session:
 
 Set them per session, per project, or globally in Settings.
 
+Schedules use the same CLI-specific configuration form as **New Session → Configure**. Choose **Use folder defaults** to follow the current settings at each run, or **Customize** to save individual overrides. Each customized field can be reset to its folder default, and Claude and Codex choices are kept separately when switching CLIs.
+
+Legacy schedule imports keep permission mode, allowed tools, additional directories, and appended system instructions, with the old runner's defaults saved explicitly. Model and budget are intentionally omitted. Successfully imported schedules are left alone on later scans.
+
+For Project View schedules, defaults come from the track's starting folder, then the project's default starting folder, then the Switchboard project folder. The schedule dialog shows the resolved folder. Attached project folders are supplied automatically; additional directories in the form are optional extras.
+
 ### Status notifications
 
 Switchboard watches every session in the background, Claude and Codex alike, and shows status in the sidebar so you can tell at a glance which sessions need attention while you work in a different one.

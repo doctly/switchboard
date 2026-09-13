@@ -3752,13 +3752,26 @@ body { display: flex; flex-direction: column; }
 
 .new-session-dialog {
   background: #1e1e2a;
+  color-scheme: dark;
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 12px;
   padding: 24px;
   width: 540px;
   max-width: 90vw;
+  max-height: 90vh;
+  overflow-y: auto;
   box-shadow: 0 16px 48px rgba(0,0,0,0.4);
 }
+
+.session-config-fields[hidden] { display: none !important; }
+.session-config-fields .settings-field-control { min-width: 0; }
+.session-config-fields .settings-field-wide .settings-field-control { width: 100%; }
+.session-config-fields .permission-grid { width: 100%; }
+.session-config-fields .settings-input { max-width: 100%; }
+.session-config-inheritance { margin-top: 4px; color: #8a8aa0; font-size: 11px; }
+.session-config-reset { padding: 0; border: 0; background: none; color: #a8b9f0; font: inherit; cursor: pointer; }
+.session-config-reset:hover { text-decoration: underline; }
+.session-config-error { color: #e36a78; font-size: 12px; margin-top: 12px; }
 
 .new-session-dialog h3 {
   font-size: 15px;

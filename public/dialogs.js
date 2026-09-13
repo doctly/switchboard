@@ -8,26 +8,13 @@
 // --- New session dialog ---
 async function resolveDefaultSessionOptions(project) {
   const effective = await window.api.getEffectiveSettings(project.projectPath);
-  const options = {};
-  if (effective.dangerouslySkipPermissions) {
-    options.dangerouslySkipPermissions = true;
-  } else if (effective.permissionMode) {
-    options.permissionMode = effective.permissionMode;
-  }
-  if (effective.worktree) {
-    options.worktree = true;
-    if (effective.worktreeName) options.worktreeName = effective.worktreeName;
-  }
-  if (effective.chrome) options.chrome = true;
-  if (effective.preLaunchCmd) options.preLaunchCmd = effective.preLaunchCmd;
-  if (effective.addDirs) options.addDirs = effective.addDirs;
-  if (effective.mcpEmulation === false) options.mcpEmulation = false;
-  // Passed through for every session; each harness reads only the keys it
-  // understands and ignores the rest (see buildLaunchArgs).
-  if (effective.codexSandbox) options.codexSandbox = effective.codexSandbox;
-  if (effective.codexApproval) options.codexApproval = effective.codexApproval;
-  if (effective.codexModel) options.codexModel = effective.codexModel;
-  return options;
+  // All quick-launch callers share the same option registry as the forms.
+  // A harness reads only its own fields; explicit false/null/empty defaults
+  // remain intact instead of being mistaken for missing settings.
+  const keys = new Set(Object.keys(SessionConfig.FIELDS).flatMap(runtime =>
+    SessionConfig.fieldsFor(runtime).map(field => field.key)));
+  return Object.fromEntries([...keys].filter(key => SessionConfig.own(effective, key))
+    .map(key => [key, effective[key]]));
 }
 
 async function forkSession(session, project) {
@@ -183,174 +170,39 @@ async function launchTerminalSession(project) {
 
 async function showNewSessionDialog(project, runtime = 'claude') {
   const effective = await window.api.getEffectiveSettings(project.projectPath);
-  const isCodex = runtime === 'codex';
-
   const overlay = document.createElement('div');
   overlay.className = 'new-session-overlay';
-
   const dialog = document.createElement('div');
   dialog.className = 'new-session-dialog';
-
-  let selectedMode = effective.permissionMode || null;
-  let dangerousSkip = effective.dangerouslySkipPermissions || false;
-
-  const modes = PERMISSION_MODES;
-
-  function renderModeGrid() {
-    return modes.map(m => {
-      const isSelected = !dangerousSkip && selectedMode === m.value;
-      return `<button class="permission-option${isSelected ? ' selected' : ''}" data-mode="${m.value}"><span class="perm-name">${m.label}</span><span class="perm-desc">${m.desc}</span></button>`;
-    }).join('') +
-    `<button class="permission-option dangerous${dangerousSkip ? ' selected' : ''}" data-mode="dangerous-skip"><span class="perm-name">Dangerous Skip</span><span class="perm-desc">Skip all safety prompts (use with caution)</span></button>`;
-  }
-
-  // Codex has no permission modes, no worktree flag and no Chrome integration;
-  // it has a sandbox policy and an approval policy instead. Showing Claude's
-  // controls would offer settings that are silently dropped at launch.
-  const claudeFields = `
-    <div class="settings-field">
-      <div class="settings-label">Permission Mode</div>
-      <div class="permission-grid" id="nsd-mode-grid">${renderModeGrid()}</div>
-    </div>
-    <div class="settings-field">
-      <div class="settings-field-info">
-        <span class="settings-label">Worktree</span>
-        <div class="settings-description">Run session in an isolated git worktree</div>
-      </div>
-      <div class="settings-field-control">
-        <input type="text" class="settings-input" id="nsd-worktree-name" placeholder="name (optional)" value="${escapeHtml(effective.worktreeName || '')}" style="width:140px">
-        <label class="settings-toggle"><input type="checkbox" id="nsd-worktree" ${effective.worktree ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
-      </div>
-    </div>
-    <div class="settings-field">
-      <div class="settings-field-info">
-        <span class="settings-label">Chrome</span>
-        <div class="settings-description">Enable Chrome browser automation</div>
-      </div>
-      <div class="settings-field-control">
-        <label class="settings-toggle"><input type="checkbox" id="nsd-chrome" ${effective.chrome ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
-      </div>
-    </div>`;
-
-  const codexFields = `
-    <div class="settings-field">
-      <div class="settings-field-info">
-        <span class="settings-label">Sandbox</span>
-        <div class="settings-description">What Codex is allowed to touch</div>
-      </div>
-      <div class="settings-field-control">
-        <select class="settings-select" id="nsd-codex-sandbox">
-          ${CODEX_SANDBOX_MODES.map(m => `<option value="${m.value}" ${(effective.codexSandbox || '') === m.value ? 'selected' : ''}>${escapeHtml(m.label)}</option>`).join('')}
-        </select>
-      </div>
-    </div>
-    <div class="settings-field">
-      <div class="settings-field-info">
-        <span class="settings-label">Approval</span>
-        <div class="settings-description">When Codex stops to ask before running a command</div>
-      </div>
-      <div class="settings-field-control">
-        <select class="settings-select" id="nsd-codex-approval">
-          ${CODEX_APPROVAL_POLICIES.map(m => `<option value="${m.value}" ${(effective.codexApproval || '') === m.value ? 'selected' : ''}>${escapeHtml(m.label)}</option>`).join('')}
-        </select>
-      </div>
-    </div>
-    <div class="settings-field">
-      <div class="settings-field-info">
-        <span class="settings-label">Model</span>
-        <div class="settings-description">Blank uses Codex's default</div>
-      </div>
-      <div class="settings-field-control">
-        <input type="text" class="settings-input" id="nsd-codex-model" placeholder="default" value="${escapeHtml(effective.codexModel || '')}" style="width:140px">
-      </div>
-    </div>`;
-
+  dialog.setAttribute('role', 'dialog');
+  dialog.setAttribute('aria-modal', 'true');
   dialog.innerHTML = `
-    <h3>New ${isCodex ? 'Codex' : 'Claude'} Session — ${escapeHtml(shortProjectPath(project.projectPath))}</h3>
-    ${isCodex ? codexFields : claudeFields}
-    <div class="settings-field settings-field-wide">
-      <div class="settings-field-info">
-        <span class="settings-label">Pre-launch Command</span>
-        <div class="settings-description">Prepended to the ${isCodex ? 'codex' : 'claude'} command</div>
-      </div>
-      <div class="settings-field-control">
-        <input type="text" class="settings-input" id="nsd-pre-launch" placeholder="e.g. aws-vault exec profile --" value="${escapeHtml(effective.preLaunchCmd || '')}">
-      </div>
-    </div>
-    <div class="settings-field settings-field-wide">
-      <div class="settings-field-info">
-        <span class="settings-label">Additional Directories</span>
-        <div class="settings-description">Extra directories to include (comma-separated)</div>
-      </div>
-      <div class="settings-field-control">
-        <input type="text" class="settings-input" id="nsd-add-dirs" placeholder="/path/to/dir1, /path/to/dir2" value="${escapeHtml(effective.addDirs || '')}">
-      </div>
-    </div>
+    <h3>New ${escapeHtml(runtime === 'codex' ? 'Codex' : runtime === 'claude' ? 'Claude' : runtime)} Session — ${escapeHtml(shortProjectPath(project.projectPath))}</h3>
+    <div class="session-config-fields"></div>
+    <div class="session-config-error" role="alert" hidden></div>
     <div class="new-session-actions">
-      <button class="new-session-cancel-btn">Cancel</button>
-      <button class="new-session-start-btn">Start</button>
-    </div>
-  `;
-
+      <button type="button" class="new-session-cancel-btn">Cancel</button>
+      <button type="button" class="new-session-start-btn">Start</button>
+    </div>`;
+  const form = SessionConfigForm.mount(dialog.querySelector('.session-config-fields'), { runtime, defaults: effective });
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
-
-  // Bind mode grid clicks (Claude only — codex has no permission modes)
-  const modeGrid = dialog.querySelector('#nsd-mode-grid');
-  if (modeGrid) modeGrid.addEventListener('click', (e) => {
-    const btn = e.target.closest('.permission-option');
-    if (!btn) return;
-    const mode = btn.dataset.mode;
-    if (mode === 'dangerous-skip') {
-      dangerousSkip = !dangerousSkip;
-      if (dangerousSkip) selectedMode = null;
-    } else {
-      dangerousSkip = false;
-      selectedMode = mode === 'null' ? null : mode;
-    }
-    modeGrid.innerHTML = renderModeGrid();
-  });
-
-  function close() {
-    overlay.remove();
-    document.removeEventListener('keydown', onKey);
-  }
-
+  function close() { overlay.remove(); document.removeEventListener('keydown', onKey); }
   function start() {
-    const options = { runtime };
-    if (isCodex) {
-      options.codexSandbox = dialog.querySelector('#nsd-codex-sandbox').value;
-      options.codexApproval = dialog.querySelector('#nsd-codex-approval').value;
-      options.codexModel = dialog.querySelector('#nsd-codex-model').value.trim();
-    } else {
-      if (dangerousSkip) {
-        options.dangerouslySkipPermissions = true;
-      } else if (selectedMode) {
-        options.permissionMode = selectedMode;
-      }
-      if (dialog.querySelector('#nsd-worktree').checked) {
-        options.worktree = true;
-        options.worktreeName = dialog.querySelector('#nsd-worktree-name').value.trim();
-      }
-      if (dialog.querySelector('#nsd-chrome').checked) {
-        options.chrome = true;
-      }
+    let options;
+    try { options = form.getOptions(); } catch (err) {
+      const error = dialog.querySelector('.session-config-error');
+      error.textContent = err.message; error.hidden = false;
+      return;
     }
-    const preLaunch = dialog.querySelector('#nsd-pre-launch').value.trim();
-    if (preLaunch) options.preLaunchCmd = preLaunch;
-    options.addDirs = dialog.querySelector('#nsd-add-dirs').value.trim();
-    if (effective.mcpEmulation === false) options.mcpEmulation = false;
     close();
-    launchNewSession(project, options);
+    launchNewSession(project, { ...options, runtime });
   }
-
   dialog.querySelector('.new-session-cancel-btn').onclick = close;
   dialog.querySelector('.new-session-start-btn').onclick = start;
-
-  // Keyboard support
   function onKey(e) {
     if (e.key === 'Escape') close();
-    if (e.key === 'Enter' && !e.target.matches('input')) start();
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) start();
   }
   document.addEventListener('keydown', onKey);
 }

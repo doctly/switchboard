@@ -77,6 +77,7 @@ contextBridge.exposeInMainWorld('api', {
   updateSchedule: (id, patch) => ipcRenderer.invoke('update-schedule', id, patch),
   deleteSchedule: (id) => ipcRenderer.invoke('delete-schedule', id),
   resolveScheduleLaunch: (id) => ipcRenderer.invoke('resolve-schedule-launch', id),
+  getScheduleContext: (spec) => ipcRenderer.invoke('get-schedule-context', spec),
   onScheduleDue: (callback) => {
     ipcRenderer.on('schedule-due', (_event, launch) => callback(launch));
   },

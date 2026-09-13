@@ -45,6 +45,38 @@ function inspectDb(dataDir) {
 
 const PROJECT_TABLES = ['projects', 'project_folders', 'tracks'];
 
+test('schedule settings preserve explicit defaults and separate CLI choices across restarts', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-schedule-config-'));
+  try {
+    const r = runInElectronNode(`
+      const assert = require('node:assert/strict');
+      let db = require('./db');
+      const sessionConfig = { claude: { permissionMode: null, chrome: false, addDirs: '',
+        allowedTools: 'Read,Write', appendSystemPrompt: 'Follow the task instructions.' },
+        codex: { codexSandbox: 'read-only', codexModel: 'chosen-model' } };
+      db.insertSchedule({ id: 'configured', name: 'Configured', cwd: '/project', prompt: 'Do it',
+        every: 'hour', created: '2026-09-01T00:00:00Z', sessionConfig });
+      db.insertSchedule({ id: 'inherited', name: 'Inherited', cwd: '/project', prompt: 'Do it',
+        every: 'hour', created: '2026-09-01T00:00:00Z' });
+      db.closeDb();
+      delete require.cache[require.resolve('./db')];
+      db = require('./db');
+      assert.deepEqual(db.getSchedule('configured').sessionConfig, sessionConfig);
+      assert.deepEqual(db.getSchedule('inherited').sessionConfig, {});
+      assert.deepEqual(db.listSchedules().find(s => s.id === 'configured').sessionConfig, sessionConfig);
+      db.updateSchedule('configured', { name: 'Renamed' });
+      assert.deepEqual(db.getSchedule('configured').sessionConfig, sessionConfig);
+      db.updateSchedule('configured', { sessionConfig: {} });
+      db.closeDb();
+      delete require.cache[require.resolve('./db')];
+      db = require('./db');
+      assert.deepEqual(db.getSchedule('configured').sessionConfig, {});
+      db.closeDb();
+    `, dir);
+    assert.equal(r.status, 0, r.stderr);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('legacy schedule imports survive restarts and deletion, and failed inserts remain retryable', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-schedule-imports-'));
   try {

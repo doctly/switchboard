@@ -407,6 +407,9 @@ function classifyNotification(message) {
  */
 function buildLaunchArgs({ sessionId, isNew, options }) {
   const args = [];
+  // This flag accepts multiple values; the session flag must delimit its value
+  // so the first prompt cannot be consumed as another allowed tool.
+  if (options?.allowedTools) args.push('--allowedTools', String(options.allowedTools));
   if (options?.forkFrom) {
     args.push('--resume', String(options.forkFrom), '--fork-session');
   } else if (isNew) {

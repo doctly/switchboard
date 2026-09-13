@@ -31,7 +31,7 @@ function makeFakeDb({ global = {} } = {}) {
     updateSchedule: (id, patch) => {
       const r = rows.schedules.find(x => x.id === id);
       if (!r) return 0;
-      for (const key of ['name', 'trackId', 'cwd', 'prompt', 'every', 'atHour', 'atMinute', 'weekday', 'cron', 'cli', 'enabled', 'catchUp', 'lastRunAt', 'lastSessionId']) {
+      for (const key of ['name', 'trackId', 'cwd', 'prompt', 'every', 'atHour', 'atMinute', 'weekday', 'cron', 'cli', 'enabled', 'catchUp', 'lastRunAt', 'lastSessionId', 'sessionConfig']) {
         if (key in patch) r[key] = (key === 'enabled' || key === 'catchUp') ? (patch[key] ? 1 : 0) : patch[key];
       }
       return 1;
@@ -1133,6 +1133,39 @@ test('resolveScheduleLaunch runs where the track starts, and a folder schedule i
   } finally { t.cleanup(); }
 });
 
+test('schedule configuration stays per CLI while inherited project folders and track CLIs move', async () => {
+  const t = setup();
+  try {
+    const { project } = await projects.createProject({ name: 'Configured schedules' });
+    const sub = path.join(project.root, 'working');
+    fs.mkdirSync(sub);
+    const { track } = projects.createTrack(project.id, { name: 'Run', cli: 'claude' });
+    const sessionConfig = { claude: { permissionMode: null, chrome: false }, codex: { codexModel: 'saved-model' } };
+    const { schedule } = projects.createSchedule({ name: 'Configured', prompt: 'Do it', every: 'hour', projectId: project.id, trackId: track.id, sessionConfig });
+    assert.deepEqual(schedule.sessionConfig, sessionConfig);
+    let launch = projects.resolveScheduleLaunch(schedule.id);
+    assert.equal(launch.target.projectPath, project.root);
+    assert.equal(launch.runtime, 'claude');
+    projects.updateProject(project.id, { defaultCwd: sub });
+    launch = projects.resolveScheduleLaunch(schedule.id);
+    assert.equal(launch.target.projectPath, sub, 'track without a cwd follows the project default');
+    projects.updateTrack(track.id, { cwd: project.root, cli: 'codex' });
+    launch = projects.resolveScheduleLaunch(schedule.id);
+    assert.equal(launch.target.projectPath, project.root);
+    assert.equal(launch.runtime, 'codex');
+    assert.deepEqual(launch.schedule.sessionConfig, sessionConfig, 'a CLI change preserves both sets of custom settings');
+    const preview = projects.resolveScheduleContext({ projectId: project.id, trackId: track.id });
+    assert.deepEqual(preview.target, launch.target);
+    assert.equal(preview.runtime, launch.runtime);
+    const updated = projects.updateSchedule(schedule.id, { sessionConfig: { codex: sessionConfig.codex } });
+    assert.deepEqual(updated.schedule.sessionConfig, { codex: sessionConfig.codex }, 'resetting Claude keeps Codex choices');
+    assert.match(projects.updateSchedule(schedule.id, { sessionConfig: { codex: { permissionMode: 'plan' } } }).error, /Unsupported codex setting/);
+    assert.match(projects.updateSchedule(schedule.id, { sessionConfig: { claude: { chrome: 'false' } } }).error, /on or off/);
+    assert.match(projects.updateSchedule(schedule.id, { sessionConfig: { claude: { runtime: 'codex' } } }).error, /Unsupported/);
+    assert.deepEqual(projects.updateSchedule(schedule.id, { name: 'Renamed' }).schedule.sessionConfig, { codex: sessionConfig.codex });
+  } finally { t.cleanup(); }
+});
+
 test('deleting a track moves its schedules to General; deleting the project removes them', async () => {
   const t = setup();
   try {
@@ -1200,5 +1233,77 @@ test('legacy schedules retry after empty and partial scans without repeating suc
     assert.equal(t.db.getSchedule(ready.id).name, 'Edited task');
     assert.equal(t.db.getSchedule(ready.id).enabled, 0);
     assert.equal(projects.importLegacySchedules(scanned), 0);
+  } finally { t.cleanup(); }
+});
+
+
+test('legacy CLI settings survive import, editing and launch without inheriting folder overrides', () => {
+  const t = setup();
+  try {
+    const config = require('../public/session-config');
+    const claude = require('../harnesses/claude');
+    const { parseFrontmatter } = require('../schedule-runner');
+    const { meta } = parseFrontmatter(`---
+cron: 0 * * * *
+cli:
+  permission-mode: dontAsk
+  allowed-tools: Read,Bash(git status:*)
+  append-system-prompt: Follow the task instructions exactly.
+  add-dirs: /one, /two
+  model: old-model
+  max-budget-usd: 2.50
+---
+Do the task.`);
+    const source = { filePath: path.join(t.root, 'schedule-custom.md'), projectPath: t.root, ...meta };
+    assert.equal(projects.importLegacySchedules([source]), 1);
+    const row = projects.listSchedules()[0];
+    assert.equal(row.cli, 'claude');
+    const saved = row.sessionConfig.claude;
+    assert.equal(saved.permissionMode, 'dontAsk');
+    assert.equal(saved.allowedTools, 'Read,Bash(git status:*)');
+    assert.equal(saved.appendSystemPrompt, meta.cli['append-system-prompt']);
+    assert.equal(saved.addDirs, '/one, /two');
+    assert.equal(saved.model, undefined, 'model is deliberately omitted');
+    assert.equal(saved.maxBudgetUsd, undefined, 'budget is deliberately omitted');
+    const options = config.resolveOptions('claude', {
+      permissionMode: 'bypassPermissions', dangerouslySkipPermissions: true,
+      worktree: true, worktreeName: 'new-default', chrome: true, mcpEmulation: true,
+      preLaunchCmd: 'other-prefix', addDirs: '/other',
+      allowedTools: 'Bash', appendSystemPrompt: 'other instructions',
+    }, saved);
+    assert.deepEqual(options, saved, 'all previous launch defaults are explicitly pinned');
+    const args = claude.buildLaunchArgs({ sessionId: 'imported', isNew: true, options: { ...options, initialPrompt: row.prompt, scheduleId: row.id } });
+    assert.ok(!args.includes('--model'));
+    assert.ok(!args.includes('--print'));
+    assert.ok(!args.includes('--max-budget-usd'));
+    assert.ok(!args.includes('--worktree'));
+    assert.ok(!args.includes('--chrome'));
+    assert.ok(!args.includes('--dangerously-skip-permissions'));
+    assert.equal(args[args.indexOf('--permission-mode') + 1], 'dontAsk');
+    assert.equal(args[args.indexOf('--allowedTools') + 1], saved.allowedTools);
+    assert.equal(args[args.indexOf('--append-system-prompt') + 1], saved.appendSystemPrompt);
+    assert.deepEqual(args.slice(args.indexOf('--add-dir'), args.indexOf('--add-dir') + 4), ['--add-dir', '/one', '--add-dir', '/two']);
+    assert.equal(args.at(-1), row.prompt);
+    assert.deepEqual(projects.updateSchedule(row.id, { sessionConfig: row.sessionConfig }).schedule.sessionConfig, row.sessionConfig);
+    projects.updateSchedule(row.id, { sessionConfig: { claude: { permissionMode: 'plan' } } });
+    assert.equal(projects.importLegacySchedules([source]), 0);
+    assert.deepEqual(projects.listSchedules()[0].sessionConfig, { claude: { permissionMode: 'plan' } });
+  } finally { t.cleanup(); }
+});
+
+test('legacy omitted options preserve old defaults and invalid settings retry independently', () => {
+  const t = setup();
+  try {
+    const defaults = { filePath: path.join(t.root, 'schedule-defaults.md'), projectPath: t.root, cron: '0 * * * *' };
+    const bad = { ...defaults, filePath: path.join(t.root, 'schedule-bad.md'), cli: { 'permission-mode': 'invalid' } };
+    const explicitDefault = { ...defaults, filePath: path.join(t.root, 'schedule-explicit.md'), cli: { 'permission-mode': 'default' } };
+    assert.equal(projects.importLegacySchedules([bad, defaults, explicitDefault]), 2);
+    const row = projects.listSchedules().find(s => s.sourceFile === defaults.filePath);
+    assert.equal(row.sessionConfig.claude.permissionMode, 'acceptEdits');
+    assert.equal(row.sessionConfig.claude.allowedTools, 'Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch');
+    assert.equal(projects.listSchedules().find(s => s.sourceFile === explicitDefault.filePath).sessionConfig.claude.permissionMode, null);
+    assert.ok(!t.db.getImportedScheduleFiles().includes(bad.filePath));
+    bad.cli['permission-mode'] = 'plan';
+    assert.equal(projects.importLegacySchedules([bad, defaults]), 1, 'fixed files can be retried');
   } finally { t.cleanup(); }
 });

@@ -440,6 +440,7 @@ ipcMain.handle('create-schedule', guarded((spec) => projects.createSchedule(spec
 ipcMain.handle('update-schedule', guarded((id, patch) => projects.updateSchedule(id, patch || {})));
 ipcMain.handle('delete-schedule', guarded((id) => projects.deleteSchedule(id)));
 ipcMain.handle('resolve-schedule-launch', guarded((id) => projects.resolveScheduleLaunch(id)));
+ipcMain.handle('get-schedule-context', guarded((spec) => projects.resolveScheduleContext(spec || {})));
 ipcMain.handle('create-track', guarded((projectId, spec) => projects.createTrack(projectId, spec || {})));
 ipcMain.handle('update-track', guarded((id, patch) => projects.updateTrack(id, patch || {})));
 ipcMain.handle('delete-track', guarded((id, options = {}) => {

@@ -22,6 +22,7 @@ const path = require('path');
 const crypto = require('crypto');
 const git = require('./git');
 const planParser = require('./public/plan-parser');
+const sessionConfig = require('./public/session-config');
 
 const DEFAULT_ROOT_NAME = 'Switchboard';
 const REPOS_DIR = 'repos';
@@ -523,6 +524,7 @@ function scheduleNode(row) {
     every: row.every, atHour: row.atHour ?? null, atMinute: row.atMinute ?? null,
     weekday: row.weekday ?? null, cron: row.cron || null,
     cli: row.cli || null, enabled: !!row.enabled, catchUp: !!row.catchUp,
+    sessionConfig: row.sessionConfig || {},
     sourceFile: row.sourceFile || null,
     lastRunAt: row.lastRunAt || null, lastSessionId: row.lastSessionId || null,
     created: row.created,
@@ -1103,6 +1105,16 @@ function listSchedules() {
   return db.listSchedules().map(scheduleNode);
 }
 
+function normalizeScheduleConfig(value) {
+  try {
+    const config = sessionConfig.normalizeByCli(value);
+    for (const runtime of Object.keys(config)) {
+      if (!isHarnessId(runtime)) return { error: `Unknown CLI: ${runtime}` };
+    }
+    return { config };
+  } catch (err) { return { error: err.message }; }
+}
+
 function createSchedule(spec) {
   const name = typeof spec?.name === 'string' ? spec.name.trim() : '';
   if (!name) return { error: 'Give the task a name' };
@@ -1114,8 +1126,11 @@ function createSchedule(spec) {
   if (timing.error) return { error: timing.error };
   const cli = normalizeTrackCli(spec.cli);
   if (cli.error) return { error: cli.error };
+  const config = normalizeScheduleConfig(spec.sessionConfig === undefined ? {} : spec.sessionConfig);
+  if (config.error) return config;
   const row = {
     id: crypto.randomUUID(), name, ...place, prompt, ...timing.timing, cli: cli.cli,
+    sessionConfig: config.config,
     enabled: spec.enabled !== false, catchUp: !!spec.catchUp,
     sourceFile: typeof spec.sourceFile === 'string' ? spec.sourceFile : null,
     created: new Date().toISOString(),
@@ -1130,6 +1145,11 @@ function updateSchedule(id, patch) {
   const row = db.getSchedule(id);
   if (!row) return { error: 'Schedule not found' };
   const clean = {};
+  if (patch?.sessionConfig !== undefined) {
+    const config = normalizeScheduleConfig(patch.sessionConfig);
+    if (config.error) return config;
+    clean.sessionConfig = config.config;
+  }
   if (typeof patch?.name === 'string') {
     const name = patch.name.trim();
     if (!name) return { error: 'Give the task a name' };
@@ -1206,12 +1226,22 @@ function schedulePausedReason(row) {
 function resolveScheduleLaunch(id) {
   const row = db.getSchedule(id);
   if (!row) return { error: 'Schedule not found' };
+  const context = resolveScheduleContext(row);
+  if (context.error) return context;
+  if (!isDirectory(context.target.projectPath)) return { error: `Not a directory: ${context.target.projectPath}` };
+  return { schedule: scheduleNode(row), ...context };
+}
+
+// Shared by the dialog's preview and the actual launch. Defaults are resolved
+// from the current track/project folder, never copied into the schedule row.
+function resolveScheduleContext(row) {
   let target;
   let runtime = row.cli || null;
   if (row.projectId) {
     const project = db.getProject(row.projectId);
     if (!project) return { error: 'Project not found' };
     const track = row.trackId ? db.getTrack(row.trackId) : null;
+    if (row.trackId && (!track || track.projectId !== project.id)) return { error: 'Track not found in that project' };
     target = {
       projectPath: track?.cwd || project.defaultCwd || project.root,
       projectId: project.id,
@@ -1220,10 +1250,10 @@ function resolveScheduleLaunch(id) {
     };
     if (!runtime && track?.cli) runtime = track.cli;
   } else {
+    if (typeof row.cwd !== 'string' || !path.isAbsolute(row.cwd)) return { error: 'A folder schedule needs a folder' };
     target = { projectPath: row.cwd, projectId: null, trackId: null, projectName: null };
   }
-  if (!isDirectory(target.projectPath)) return { error: `Not a directory: ${target.projectPath}` };
-  return { schedule: scheduleNode(row), target, runtime };
+  return { target, runtime: runtime || 'claude' };
 }
 
 /**
@@ -1266,6 +1296,20 @@ function recordScheduleRun(scheduleId, sessionId) {
   return true;
 }
 
+/** Preserve the old runner's options without inheriting new folder defaults. */
+function legacyScheduleConfig(cli = {}) {
+  return sessionConfig.normalizeByCli({ claude: {
+    permissionMode: cli['permission-mode'] === 'default' ? null : cli['permission-mode'] || 'acceptEdits',
+    allowedTools: cli['allowed-tools'] || 'Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch',
+    appendSystemPrompt: cli['append-system-prompt'] || '',
+    addDirs: cli['add-dirs'] || '',
+    dangerouslySkipPermissions: false,
+    worktree: false, worktreeName: '', chrome: false, mcpEmulation: false,
+    preLaunchCmd: '',
+    // Model and budget are deliberately omitted from legacy migration.
+  } });
+}
+
 /**
  * Import each old file-based schedule once. Each schedule-*.md becomes
  * a folder schedule on the folder it sits in. The file stays the source of
@@ -1280,6 +1324,14 @@ function importLegacySchedules(scanned) {
   for (const s of scanned || []) {
     if (!s.filePath || existing.has(s.filePath)) continue;
     if (!isDirectory(s.projectPath)) continue;
+    let config;
+    try {
+      config = legacyScheduleConfig(s.cli);
+    } catch (err) {
+      // An invalid file must not prevent other imports or mark itself complete.
+      log.error?.(`[schedule] Failed to import ${s.filePath}: ${err.message}`);
+      continue;
+    }
     const preset = scheduleTime.presetFromCron(s.cron);
     const timing = preset
       ? { every: preset.every, atHour: preset.atHour ?? null, atMinute: preset.atMinute ?? null, weekday: preset.weekday ?? null, cron: null }
@@ -1290,7 +1342,7 @@ function importLegacySchedules(scanned) {
       projectId: null, trackId: null, cwd: s.projectPath,
       prompt: `Run the scheduled task defined in ${s.filePath}. Read that file and follow its instructions.`,
       ...timing,
-      cli: null, enabled: s.enabled !== false, catchUp: false,
+      cli: 'claude', sessionConfig: config, enabled: s.enabled !== false, catchUp: false,
       sourceFile: s.filePath,
       created: new Date().toISOString(),
     });
@@ -1700,7 +1752,7 @@ module.exports = {
   listTemplates, templatesRoot, renderTemplateText, editPlanItem,
   listEnvFiles, defaultEnvSelection, copyEnvFiles,
   createTrack, updateTrack, deleteTrack,
-  listSchedules, createSchedule, updateSchedule, deleteSchedule, resolveScheduleLaunch,
+  listSchedules, createSchedule, updateSchedule, deleteSchedule, resolveScheduleLaunch, resolveScheduleContext,
   dueSchedules, missedSchedules, recordScheduleRun, importLegacySchedules, schedulePausedReason,
   assignSession, recordLaunchAssignment,
   projectForCwd, buildProjectTree,

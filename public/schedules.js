@@ -70,8 +70,10 @@ function scheduleLastRunLabel(schedule) {
 async function launchScheduledSession(launch) {
   if (!launch || launch.error || !launch.schedule || !launch.target) return;
   const { schedule, target, runtime } = launch;
-  const options = await resolveDefaultSessionOptions(target);
-  options.runtime = runtime || 'claude';
+  const runtimeId = runtime || 'claude';
+  const defaults = await window.api.getEffectiveSettings(target.projectPath);
+  const options = SessionConfig.resolveOptions(runtimeId, defaults, schedule.sessionConfig?.[runtimeId] || {});
+  options.runtime = runtimeId;
   options.initialPrompt = schedule.prompt;
   options.scheduleId = schedule.id;
   await launchNewSession(target, options, { focus: false });
@@ -206,6 +208,7 @@ function showScheduleDialog({ schedule = null, projectId = null, trackId = null,
   const isProject = editing ? !!schedule.projectId : !!projectId;
   const tracks = (project?.tracks || []).filter(t => t.status !== 'done' || t.id === schedule?.trackId);
   const fromFile = !!schedule?.sourceFile;
+  const configs = SessionConfig.normalizeByCli(schedule?.sessionConfig || {});
   const state = {
     every: schedule?.every || 'day',
     atHour: schedule?.atHour ?? 9,
@@ -262,6 +265,13 @@ function showScheduleDialog({ schedule = null, projectId = null, trackId = null,
         <select class="settings-select" id="sd-cli"></select>
       </div>
     </div>
+    <div class="settings-field settings-field-wide">
+      <div class="settings-field-info"><span class="settings-label">Session Settings</span><div class="settings-description" id="sd-defaults-folder">Loading folder defaults…</div></div>
+      <div class="settings-field-control"><select class="settings-select" id="sd-config-mode" aria-label="Session settings" disabled>
+        <option value="defaults">Use folder defaults</option><option value="custom">Customize</option>
+      </select></div>
+    </div>
+    <div class="session-config-fields" id="sd-config-fields" hidden></div>
     <div class="settings-field">
       <div class="settings-field-info"><span class="settings-label">On</span><div class="settings-description">Off keeps it here without firing</div></div>
       <div class="settings-field-control"><label class="settings-toggle"><input type="checkbox" id="sd-enabled" ${schedule ? (schedule.enabled ? 'checked' : '') : 'checked'}><span class="settings-toggle-slider"></span></label></div>
@@ -276,7 +286,7 @@ function showScheduleDialog({ schedule = null, projectId = null, trackId = null,
       ${editing ? '<button type="button" class="sd-delete-btn">Delete</button>' : ''}
       <span class="ws-flex"></span>
       <button type="button" class="new-session-cancel-btn">Cancel</button>
-      <button type="button" class="new-session-start-btn">${editing ? 'Save' : 'Create'}</button>
+      <button type="button" class="new-session-start-btn" disabled>${editing ? 'Save' : 'Create'}</button>
     </div>`;
 
   overlay.appendChild(dialog);
@@ -288,23 +298,95 @@ function showScheduleDialog({ schedule = null, projectId = null, trackId = null,
   const minuteInput = dialog.querySelector('#sd-minute');
   const weekdaySel = dialog.querySelector('#sd-weekday');
   const errorEl = dialog.querySelector('#sd-error');
+  const configMode = dialog.querySelector('#sd-config-mode');
+  const configFields = dialog.querySelector('#sd-config-fields');
+  const defaultsFolder = dialog.querySelector('#sd-defaults-folder');
+  const saveButton = dialog.querySelector('.new-session-start-btn');
+  let configForm = null;
+  let configRuntime = null;
+  let effectiveDefaults = {};
+  let configVersion = 0;
+  let configRequest = null;
+  let configReady = false;
 
   // The CLI list comes from the harness registry, like the track row's does,
   // so a CLI added later appears here and one switched off in settings does
   // not. A schedule already naming a disabled one keeps it, visibly.
   const cliSel = dialog.querySelector('#sd-cli');
   const renderCli = (harnesses) => {
-    const options = [{ id: '', label: isProject ? 'Track default' : `Default (${harnesses[0]?.label || 'Claude'})` }, ...harnesses.map(h => ({ id: h.id, label: h.label }))];
+    const selected = cliSel.options.length ? cliSel.value : (schedule?.cli || '');
+    const options = [{ id: '', label: isProject ? 'Track default' : 'Default (Claude)' }, ...harnesses.map(h => ({ id: h.id, label: h.label }))];
     if (schedule?.cli && !options.some(o => o.id === schedule.cli)) options.push({ id: schedule.cli, label: `${schedule.cli} (off in settings)` });
     cliSel.replaceChildren();
     for (const opt of options) {
       const o = document.createElement('option');
-      o.value = opt.id; o.textContent = opt.label; o.selected = (schedule?.cli || '') === opt.id;
+      o.value = opt.id; o.textContent = opt.label; o.selected = selected === opt.id;
       cliSel.appendChild(o);
     }
   };
   renderCli([{ id: 'claude', label: 'Claude' }]);
   window.api.getHarnesses().then(list => { if (dialog.isConnected) renderCli((list || []).filter(h => h.enabled)); }).catch(() => {});
+
+  function keepConfiguration() {
+    if (configForm && configMode.value === 'custom') configs[configRuntime] = configForm.getOverrides();
+  }
+
+  function renderConfiguration() {
+    configFields.hidden = configMode.value !== 'custom';
+    configForm = null;
+    configFields.replaceChildren();
+    if (configFields.hidden) return;
+    const runtime = configRuntime;
+    if (!SessionConfig.own(configs, runtime)) configs[runtime] = {};
+    configForm = SessionConfigForm.mount(configFields, {
+      runtime, defaults: effectiveDefaults, overrides: configs[runtime], inherit: true,
+      onChange: values => { configs[runtime] = values; },
+    });
+  }
+
+  async function refreshConfiguration() {
+    keepConfiguration();
+    const version = ++configVersion;
+    configReady = false;
+    configForm = null;
+    configFields.hidden = true;
+    configMode.disabled = true;
+    saveButton.disabled = true;
+    defaultsFolder.textContent = 'Loading folder defaults…';
+    try {
+      const place = isProject
+        ? { projectId: editing ? schedule.projectId : projectId, trackId: dialog.querySelector('#sd-track').value || null }
+        : { cwd: editing ? schedule.cwd : cwd };
+      const context = await window.api.getScheduleContext({ ...place, cli: cliSel.value || null });
+      if (version !== configVersion || !dialog.isConnected) return;
+      if (context?.error) throw new Error(context.error);
+      const defaults = await window.api.getEffectiveSettings(context.target.projectPath);
+      if (version !== configVersion || !dialog.isConnected) return;
+      configRuntime = context.runtime || 'claude';
+      effectiveDefaults = defaults;
+      const label = configRuntime === 'claude' ? 'Claude' : configRuntime === 'codex' ? 'Codex' : configRuntime;
+      defaultsFolder.textContent = `${label} defaults from ${context.target.projectPath}`;
+      defaultsFolder.title = context.target.projectPath;
+      configMode.value = SessionConfig.own(configs, configRuntime) ? 'custom' : 'defaults';
+      configMode.disabled = false;
+      renderConfiguration();
+      configReady = true;
+      saveButton.disabled = false;
+    } catch (err) {
+      if (version !== configVersion || !dialog.isConnected) return;
+      defaultsFolder.textContent = 'Could not load session settings';
+      showError(err.message);
+    }
+  }
+  const reloadConfiguration = () => { configRequest = refreshConfiguration(); };
+  cliSel.onchange = reloadConfiguration;
+  const trackSelect = dialog.querySelector('#sd-track');
+  if (trackSelect) trackSelect.onchange = reloadConfiguration;
+  configMode.onchange = () => {
+    if (configMode.value === 'defaults') delete configs[configRuntime];
+    renderConfiguration();
+  };
+  reloadConfiguration();
 
   function currentTiming() {
     const t = { every: state.every, atHour: null, atMinute: null, weekday: null, cron: null };
@@ -350,16 +432,20 @@ function showScheduleDialog({ schedule = null, projectId = null, trackId = null,
   weekdaySel.onchange = updateWhenDesc;
   renderPresets();
 
-  function close() { overlay.remove(); document.removeEventListener('keydown', onKey); }
+  function close() { configVersion++; overlay.remove(); document.removeEventListener('keydown', onKey); }
   function showError(msg) { errorEl.textContent = msg; errorEl.hidden = false; }
 
   async function save() {
+    await configRequest;
+    if (!dialog.isConnected || !configReady) return;
+    try { keepConfiguration(); } catch (err) { showError(err.message); return; }
     const timing = currentTiming();
     const patch = {
       name: dialog.querySelector('#sd-name').value,
       prompt: dialog.querySelector('#sd-prompt').value,
       ...timing,
       cli: dialog.querySelector('#sd-cli').value || null,
+      sessionConfig: configs,
       enabled: dialog.querySelector('#sd-enabled').checked,
       catchUp: dialog.querySelector('#sd-catchup').checked,
     };
