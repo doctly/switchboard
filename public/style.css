@@ -404,6 +404,13 @@ body { display: flex; flex-direction: column; }
   padding: 0 0 12px;
 }
 
+/* The Projects tab's list sits in the same column and scrolls the same way. */
+#projects-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 0 12px;
+}
+
 /* ---- Project groups ---- */
 .project-group {
   margin: 6px 8px;
@@ -1739,10 +1746,10 @@ body { display: flex; flex-direction: column; }
 }
 
 /* ========== SCROLLBAR ========== */
-#sidebar-content::-webkit-scrollbar, #plans-content::-webkit-scrollbar { width: 5px; }
-#sidebar-content::-webkit-scrollbar-track, #plans-content::-webkit-scrollbar-track { background: transparent; }
-#sidebar-content::-webkit-scrollbar-thumb, #plans-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 3px; }
-#sidebar-content::-webkit-scrollbar-thumb:hover, #plans-content::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.1); }
+#sidebar-content::-webkit-scrollbar, #projects-content::-webkit-scrollbar, #plans-content::-webkit-scrollbar { width: 5px; }
+#sidebar-content::-webkit-scrollbar-track, #projects-content::-webkit-scrollbar-track, #plans-content::-webkit-scrollbar-track { background: transparent; }
+#sidebar-content::-webkit-scrollbar-thumb, #projects-content::-webkit-scrollbar-thumb, #plans-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 3px; }
+#sidebar-content::-webkit-scrollbar-thumb:hover, #projects-content::-webkit-scrollbar-thumb:hover, #plans-content::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.1); }
 
 /* ========== PLANS ========== */
 #plans-content {
