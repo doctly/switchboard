@@ -326,6 +326,48 @@ function addedFilesAtRoot(root) {
   return { dirPath, files };
 }
 
+// Bounds for the Overview's Recent Files walk, so a project folder that
+// collects something huge cannot stall the page.
+const RECENT_FILES_MAX_DEPTH = 6;
+const RECENT_FILES_MAX_ENTRIES = 5000;
+
+/**
+ * The newest files in the project folder, by when each was created, so a plan
+ * edited every hour does not crowd out a file added today. Skips the briefs
+ * every project starts with, attached repositories under repos/, hidden
+ * entries and dependency folders. Symlinks are not followed.
+ */
+function listRecentProjectFiles(projectId, limit = 5) {
+  const project = db.getProject(projectId);
+  if (!project) return { error: 'Project not found' };
+  const count = Math.max(1, Math.min(50, Number(limit) || 5));
+  const root = project.root;
+  const found = [];
+  let visited = 0;
+  const walk = (rel, depth) => {
+    let entries;
+    try { entries = fs.readdirSync(path.join(root, rel), { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (++visited > RECENT_FILES_MAX_ENTRIES) return;
+      if (entry.name.startsWith('.')) continue;
+      const childRel = rel ? path.join(rel, entry.name) : entry.name;
+      if (entry.isDirectory()) {
+        if ((!rel && entry.name === REPOS_DIR) || ENV_SKIP_DIRS.has(entry.name) || depth >= RECENT_FILES_MAX_DEPTH) continue;
+        walk(childRel, depth + 1);
+      } else if (entry.isFile() && !(!rel && BRIEF_FILES.includes(entry.name))) {
+        let stat;
+        try { stat = fs.lstatSync(path.join(root, childRel)); } catch { continue; }
+        // Filesystems that do not record creation time report 0; use mtime there.
+        const addedMs = stat.birthtimeMs > 0 ? stat.birthtimeMs : stat.mtimeMs;
+        found.push({ name: entry.name, relativePath: childRel, added: new Date(addedMs).toISOString(), size: stat.size, addedMs });
+      }
+    }
+  };
+  walk('', 0);
+  found.sort((a, b) => b.addedMs - a.addedMs || a.relativePath.localeCompare(b.relativePath));
+  return { ok: true, files: found.slice(0, count).map(({ addedMs, ...file }) => file) };
+}
+
 function listAddedFiles(projectId) {
   const project = db.getProject(projectId);
   if (!project) return { error: 'Project not found' };
@@ -1306,7 +1348,11 @@ function legacyScheduleConfig(cli = {}) {
     dangerouslySkipPermissions: false,
     worktree: false, worktreeName: '', chrome: false, mcpEmulation: false,
     preLaunchCmd: '',
-    // Model and budget are deliberately omitted from legacy migration.
+    // The old runner passed --model. Effort did not exist, so it is pinned
+    // unset rather than picking up a folder default the old run never had.
+    model: cli.model || '',
+    effort: '',
+    // Budget is deliberately omitted from legacy migration.
   } });
 }
 
@@ -1744,7 +1790,7 @@ module.exports = {
   projectsRoot, slugify, uniqueSlug, defaultBrief,
   createProject, updateProject, deleteProject, attachFolder, detachFolder,
   folderGitStatus, folderGitInfo, projectGitInfo, projectGitDiff,
-  syncProjectBrief, syncAllProjectBriefs, saveBrief, createProjectFile, addProjectFiles, listAddedFiles,
+  syncProjectBrief, syncAllProjectBriefs, saveBrief, createProjectFile, addProjectFiles, listAddedFiles, listRecentProjectFiles,
   launchContext, mergeAddDirs, worktreeParentFor,
   PROJECT_FILES, ADDED_FILES_DIR,
   readProjectPlan, setPlanItem, appendPlanItem, recordPlanLink, adoptPlan,

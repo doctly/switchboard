@@ -1538,7 +1538,12 @@ async function appendTodo(project, text) {
 
 /** Open one of the project's own files on the Files tab, in the page's editor. */
 function openProjectFileInEditor(project, name) {
-  filesState(project).selected = name;
+  const state = filesState(project);
+  state.selected = name;
+  // A nested file only has a row in the tree once its folders are open.
+  const sep = name.includes('/') ? '/' : '\\';
+  const parts = name.split(sep);
+  for (let i = 1; i < parts.length; i++) state.expanded.add(parts.slice(0, i).join(sep));
   setProjectTab(project, 'files');
   if (!projectViewer || projectViewer.style.display === 'none') showProjectOverview();
   else renderOverview();
@@ -2218,6 +2223,57 @@ function bindAddedFilesCard(project, side) {
   };
 }
 
+// Recent Files on the Overview. The side cards redraw several times while a
+// page loads, so one listing is reused for a few seconds.
+const recentFilesByProject = new Map(); // projectId → { at, files, error, pending }
+
+function loadRecentFiles(project) {
+  const entry = recentFilesByProject.get(project.id);
+  if (entry?.pending) return entry.pending;
+  if (entry && Date.now() - entry.at < FILES_LIST_TTL_MS) return Promise.resolve(entry);
+  const pending = Promise.resolve()
+    .then(() => window.api.listRecentProjectFiles(project.id))
+    .then(result => ({ at: Date.now(), files: result?.ok ? result.files : [], error: result?.ok ? null : (result?.error || 'Could not list the files.') }))
+    .catch(err => ({ at: Date.now(), files: [], error: err.message }))
+    .then(next => { recentFilesByProject.set(project.id, next); return next; });
+  recentFilesByProject.set(project.id, { at: 0, files: entry?.files ?? null, error: null, pending });
+  return pending;
+}
+
+function recentFilesHtml(project) {
+  const entry = recentFilesByProject.get(project.id);
+  if (!entry || entry.files === null) return '<div class="ws-card-text muted">Looking for files…</div>';
+  if (entry.error) return `<div class="ws-card-text muted">${escapeHtml(entry.error)}</div>`;
+  if (!entry.files.length) return '<div class="ws-card-text muted">Nothing yet besides the brief. Files you or a session add to the project folder show up here.</div>';
+  return entry.files.map(file => {
+    const dir = file.relativePath.slice(0, file.relativePath.length - file.name.length).replace(/[\\/]$/, '');
+    return `<button type="button" class="ws-frow ws-recent-file" data-rel="${escapeHtml(file.relativePath)}" title="${escapeHtml(file.relativePath)}">` +
+      `<span class="ws-frow-icon">${PICONS.file(13)}</span>` +
+      `<span class="ws-recent-file-name">${escapeHtml(file.name)}</span>` +
+      (dir ? `<span class="ws-recent-file-dir">${escapeHtml(dir)}</span>` : '') +
+      `<span class="ws-flex"></span><span class="ws-card-meta">${escapeHtml(formatDate(new Date(file.added)))}</span>` +
+      `</button>`;
+  }).join('');
+}
+
+function bindRecentFilesCard(project, side) {
+  const list = side.querySelector('#ws-recent-files');
+  if (!list) return;
+  side.querySelector('#ws-recent-files-all').onclick = () => { setProjectTab(project, 'files'); renderOverview(); };
+  const bindRows = () => list.querySelectorAll('.ws-recent-file').forEach(row => {
+    row.onclick = () => openProjectFileInEditor(project, row.dataset.rel);
+  });
+  bindRows();
+  loadRecentFiles(project).then(() => {
+    if (!list.isConnected || selectedProject()?.id !== project.id) return;
+    const html = recentFilesHtml(project);
+    if (list._html === html) return;
+    list._html = html;
+    list.innerHTML = html;
+    bindRows();
+  });
+}
+
 function renderSideCards(project, side) {
   const brief = briefSummary(fileContent(project, 'CLAUDE.md'));
   const plan = parsePlan(fileContent(project, 'plan-tracker.md'));
@@ -2244,6 +2300,10 @@ function renderSideCards(project, side) {
       <div class="ws-card-h"><span class="ws-card-title">Todos</span><span class="ws-card-meta">${open.length ? `${open.length} open` : ''}${doneTodos ? ` · ${doneTodos} done` : ''}</span><span class="ws-flex"></span><button type="button" class="ws-ghost ws-ghost--sm" id="ws-todo-add">${PICONS.plus(11)}<span>Add</span></button></div>
       <div id="ws-todos">${open.length ? open.slice(0, 8).map(t => `<div class="ws-todo" data-line="${t.line}"><input type="checkbox" data-line="${t.line}" title="Mark done"><span class="ws-todo-text" title="Double-click to edit">${escapeHtml(t.text)}</span><button type="button" class="ws-item-start" data-line="${t.line}" title="Start a session on this todo">${PICONS.play(10)}</button></div>`).join('') : '<div class="ws-card-text muted">Nothing open. Any session can add to todos.md.</div>'}${open.length > 8 ? `<button type="button" class="ws-ghost ws-ghost--muted" id="ws-todo-more">+ ${open.length - 8} more</button>` : ''}</div>
       <div class="ws-card-hint">Any session can add here. Try "add a todo: …" in a session of this project.</div>
+    </div>
+    <div class="ws-card ws-recent-files-card">
+      <div class="ws-card-h"><span class="ws-card-title">Recent Files</span><span class="ws-flex"></span><button type="button" class="ws-ghost ws-ghost--sm" id="ws-recent-files-all" title="Every file in the project folder">All files</button></div>
+      <div class="ws-recent-list" id="ws-recent-files">${recentFilesHtml(project)}</div>
     </div>
     <div class="ws-card">
       <div class="ws-card-h"><span class="ws-card-title">Attached Folders</span><span class="ws-flex"></span><button type="button" class="ws-ghost ws-ghost--sm" id="ws-folders-add">${PICONS.plus(11)}<span>Attach</span></button></div>
@@ -2272,6 +2332,7 @@ function renderSideCards(project, side) {
   side.querySelector('#ws-plan-tracker').onclick = () => openProjectFileInEditor(project, 'plan-tracker.md');
   side.querySelector('#ws-folders-add').onclick = () => attachFolderAsk(project);
   bindAddedFilesCard(project, side);
+  bindRecentFilesCard(project, side);
   side.querySelectorAll('.ws-todo input').forEach(box => {
     box.onchange = async () => {
       box.disabled = true;

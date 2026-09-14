@@ -6,7 +6,7 @@
  * Watches files for external changes and reloads automatically.
  *
  * Toolbar buttons are shown/hidden automatically based on file type:
- *   - Preview: shown for markdown and HTML files
+ *   - Preview: shown for markdown, HTML and JSON/JSONC files (JSON opens as a tree)
  *   - Images, PDFs and PowerPoint: read-only previews with text editing controls hidden
  *   - Wrap: shown for text (defaults on for markdown, off for others)
  *   - Save: shown if onSave is provided
@@ -41,6 +41,8 @@ class ViewerPanel {
     this.previewType = 'text';
     this._objectUrl = null;
     this._openVersion = 0;
+    // Expanded nodes in the JSON reader, kept across reloads of the same file.
+    this._jsonState = { open: null };
 
     // Create toolbar — always include preview, wrap, save; visibility managed in open()
     this.toolbar = window.createViewerToolbar({
@@ -138,32 +140,37 @@ class ViewerPanel {
 
     const previousPath = this.filePath;
     this.filePath = filePath;
+    if (previousPath !== filePath) this._jsonState = { open: null };
     this.previewUrl = preview.previewUrl || '';
     this.previewType = preview.previewType || (/\.html?$/i.test(filePath) ? 'html' : 'text');
     this.toolbar.setTitle(title);
     this.toolbar.setPath(filePath);
 
     const isMd = this._isMarkdown(filePath);
+    const isJson = this._isJson(filePath);
     const isMedia = this._isMedia();
     const isHtml = this.previewType === 'html';
 
     // Show/hide preview button based on file type
     if (this.toolbar.previewBtn) {
-      this.toolbar.previewBtn.style.display = !isMedia && (isMd || isHtml) ? '' : 'none';
+      this.toolbar.previewBtn.style.display = !isMedia && (isMd || isHtml || isJson) ? '' : 'none';
     }
     for (const key of ['wrapBtn', 'gotoLineBtn', 'saveBtn', 'copyContentBtn']) {
       if (this.toolbar[key]) this.toolbar[key].style.display = isMedia ? 'none' : '';
     }
 
     // Save preview preference before resetting
-    const wantPreview = isHtml || (isMd && this.opts.storageKey && localStorage.getItem(this.opts.storageKey) === 'true');
+    // JSON opens in the reader unless this viewer was last switched to editing it.
+    const jsonKey = this._jsonPreviewKey();
+    const wantPreview = isHtml || (isMd && this.opts.storageKey && localStorage.getItem(this.opts.storageKey) === 'true')
+      || (isJson && (!jsonKey || localStorage.getItem(jsonKey) !== 'false'));
 
     // Reset to edit mode before updating content (without touching localStorage)
     this.editorEl.style.display = isMedia ? 'none' : '';
     this.previewMode = false;
     this.toolbar.setPreviewMode(false);
     if (this.toolbar.previewBtn) {
-      this.toolbar.previewBtn.title = isHtml ? 'Preview HTML' : 'Toggle markdown preview';
+      this.toolbar.previewBtn.title = this._previewLabel();
       this.toolbar.previewBtn.setAttribute('aria-label', this.toolbar.previewBtn.title);
       this.toolbar.previewBtn.setAttribute('aria-pressed', 'false');
     }
@@ -239,18 +246,20 @@ class ViewerPanel {
   }
 
   _togglePreview() {
-    if (this._isMedia() || (!this._isMarkdown(this.filePath) && this.previewType !== 'html')) return;
+    if (this._isMedia() || (!this._isMarkdown(this.filePath) && !this._isJson(this.filePath) && this.previewType !== 'html')) return;
     this.previewMode = !this.previewMode;
     if (this.previewMode) this._renderPreview();
     else this._clearPreview();
     this.editorEl.style.display = this.previewMode ? 'none' : '';
     this.toolbar.setPreviewMode(this.previewMode);
-    const label = this.previewMode ? 'Back to editor' : this.previewType === 'html' ? 'Preview HTML' : 'Toggle markdown preview';
+    const label = this._previewLabel();
     this.toolbar.previewBtn.title = label;
     this.toolbar.previewBtn.setAttribute('aria-label', label);
     this.toolbar.previewBtn.setAttribute('aria-pressed', String(this.previewMode));
     if (this._isMarkdown(this.filePath) && this.opts.storageKey) {
       localStorage.setItem(this.opts.storageKey, String(this.previewMode));
+    } else if (this._isJson(this.filePath) && this._jsonPreviewKey()) {
+      localStorage.setItem(this._jsonPreviewKey(), String(this.previewMode));
     }
   }
 
@@ -322,11 +331,45 @@ class ViewerPanel {
         frame.srcdoc = '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
       }
       this.previewEl.appendChild(frame);
+    } else if (this._isJson(this.filePath)) {
+      this.previewEl.className = 'json-reader';
+      this.previewEl.style.display = 'block';
+      this._renderJson();
     } else {
       this.previewEl.className = 'markdown-preview';
       this.previewEl.style.display = 'block';
       this.previewEl.innerHTML = window.marked.parse(this.getContent());
     }
+  }
+
+  /** The tree from the live buffer, or where the file breaks and a way to get there. */
+  _renderJson() {
+    const parsed = window.JsonReader.parseJsonForReader(this.getContent(), { comments: /\.jsonc$/i.test(this.filePath) });
+    if (parsed.ok) {
+      window.JsonReader.renderTree(this.previewEl, parsed.root, this._jsonState);
+      return;
+    }
+    const error = document.createElement('div');
+    error.className = 'json-reader-error';
+    const message = document.createElement('div');
+    message.textContent = `This file is not valid JSON: ${parsed.message} (line ${parsed.line}, column ${parsed.column}).`;
+    const jump = document.createElement('button');
+    jump.type = 'button';
+    jump.className = 'json-reader-jump';
+    jump.textContent = 'Show in editor';
+    jump.addEventListener('click', () => {
+      // Going to fix one broken file is not a choice to stop reading JSON as a tree.
+      const key = this._jsonPreviewKey();
+      const saved = key ? localStorage.getItem(key) : null;
+      this.goToLocation(parsed.line, parsed.column);
+      if (key) {
+        if (saved === null) localStorage.removeItem(key);
+        else localStorage.setItem(key, saved);
+      }
+    });
+    error.appendChild(message);
+    error.appendChild(jump);
+    this.previewEl.appendChild(error);
   }
 
   _clearPreview() {
@@ -400,6 +443,7 @@ class ViewerPanel {
     this._clearPreview();
     this.filePath = '';
     this.previewMode = false;
+    this._jsonState = { open: null };
   }
 
   _destroyEditor() {
@@ -458,6 +502,22 @@ class ViewerPanel {
     if (!filePath) return this.opts.language === 'markdown';
     const ext = filePath.split('.').pop()?.toLowerCase();
     return ext === 'md' || ext === 'mdx';
+  }
+
+  _isJson(filePath) {
+    return !!filePath && /\.jsonc?$/i.test(filePath);
+  }
+
+  // Remembered apart from markdown's, so switching one does not switch the other.
+  _jsonPreviewKey() {
+    return this.opts.storageKey ? `${this.opts.storageKey}:json` : null;
+  }
+
+  _previewLabel() {
+    if (this.previewMode) return 'Back to editor';
+    if (this.previewType === 'html') return 'Preview HTML';
+    if (this._isJson(this.filePath)) return 'Read JSON as a tree';
+    return 'Toggle markdown preview';
   }
 }
 

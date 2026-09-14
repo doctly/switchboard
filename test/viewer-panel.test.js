@@ -24,12 +24,13 @@ function setup() {
     document: { createElement: element }, localStorage: { getItem() { return null; } },
     Uint8Array, Blob, atob, setTimeout,
     URL: { createObjectURL: () => `blob:${++nextUrl}`, revokeObjectURL: url => revoked.push(url) },
-    window: { api, createViewerToolbar: () => toolbar, createEditableViewer: (_el, content) => ({
+    window: { api, JsoncParser: require('jsonc-parser'), createViewerToolbar: () => toolbar, createEditableViewer: (_el, content) => ({
       state: { doc: { toString: () => content, length: content.length } },
       dispatch({ changes }) { if (changes) { content = changes.insert; this.state.doc.length = content.length; } },
       destroy() { this.destroyed = true; },
     }) },
   });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/json-reader.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/viewer-panel.js'), 'utf8'), context);
   const panel = new context.window.ViewerPanel(element(), { language: 'auto', onSave: async () => { saved++; return { ok: true }; } });
   const media = { previewType: 'image', mimeType: 'image/png', base64: 'AAEC' };
@@ -182,4 +183,55 @@ test('a delayed PowerPoint frame load is ignored after switching files', () => {
   panel.open('Text', '/notes.txt', 'Keep this');
   frame.load();
   assert.equal(panel.getContent(), 'Keep this');
+});
+
+test('JSON opens as a tree that keeps what the user closed across a reload, and can go back to editing', async () => {
+  const { panel, toolbar, api } = setup();
+  panel.open('Config', '/config.json', '{"name": "app", "scripts": {"build": "x"}, "empty": []}');
+  assert.equal(toolbar.previewBtn.style.display, '');
+  assert.equal(panel.previewMode, true);
+  assert.equal(panel.previewEl.className, 'json-reader');
+  assert.equal(panel.editorEl.style.display, 'none');
+  const tree = panel.previewEl.children[0];
+  assert.equal(tree.open, true);
+  const rows = tree.children[1].children;
+  assert.deepEqual(rows[0].children.map(c => c.textContent), ['"name"', ': ', '"app"']);
+  const scripts = rows[1];
+  assert.equal(scripts.open, true, 'a small top level opens its containers');
+  assert.equal(scripts.children[0].children.at(-1).textContent, '1 key');
+  assert.deepEqual(rows[2].children.map(c => c.textContent), ['"empty"', ': ', '[]']);
+
+  scripts.open = false;
+  scripts.toggle();
+  api.readFileForPanel = async () => ({ ok: true, content: '{"name": "app", "scripts": {"build": "y", "test": "z"}, "empty": []}' });
+  await panel._reloadFromDisk();
+  const reloaded = panel.previewEl.children[0].children[1].children[1];
+  assert.equal(reloaded.open, false, 'a node the user closed stays closed');
+  assert.equal(reloaded.children[1].children.length, 0, 'closed nodes build no rows');
+  assert.equal(reloaded.children[0].children.at(-1).textContent, '2 keys');
+
+  panel._togglePreview();
+  assert.equal(panel.previewMode, false);
+  assert.equal(panel.editorEl.style.display, '');
+  assert.equal(panel.previewEl.children.length, 0);
+  panel.open('Text', '/notes.txt', 'plain');
+  assert.equal(toolbar.previewBtn.style.display, 'none');
+});
+
+test('a broken JSON file says where it breaks, and its button jumps there in the editor', () => {
+  const { panel } = setup();
+  panel.open('Broken', '/bad.json', '{\n  "a": }');
+  const error = panel.previewEl.children[0];
+  assert.equal(error.className, 'json-reader-error');
+  assert.match(error.children[0].textContent, /line 2, column 8/);
+  const moves = [];
+  panel.goToLocation = (line, column) => moves.push([line, column]);
+  error.children[1].click();
+  assert.deepEqual(moves, [[2, 8]]);
+});
+
+test('a .jsonc file with comments and a trailing comma reads as a tree, not an error', () => {
+  const { panel } = setup();
+  panel.open('Settings', '/settings.jsonc', '// editor settings\n{"tabSize": 2,}');
+  assert.equal(panel.previewEl.children[0].className, 'json-reader-node');
 });

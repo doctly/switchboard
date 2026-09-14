@@ -73,6 +73,41 @@ test('scheduled launches use current folder defaults with only the selected CLI 
   assert.deepEqual(folders, ['/first', '/moved']);
 });
 
+test('model and effort are per-CLI settings that default to unset', () => {
+  const claude = SessionConfig.resolveOptions('claude', {}, {});
+  assert.equal(claude.model, '');
+  assert.equal(claude.effort, '');
+  assert.equal(SessionConfig.resolveOptions('codex', {}, {}).codexEffort, '');
+  assert.deepEqual(SessionConfig.normalizeOverrides('claude', { model: ' opus ', effort: 'max' }), { model: 'opus', effort: 'max' });
+  assert.throws(() => SessionConfig.normalizeOverrides('claude', { effort: 'ultra' }), /Invalid Effort/);
+  assert.equal(SessionConfig.normalizeOverrides('codex', { codexEffort: 'ultra' }).codexEffort, 'ultra');
+  assert.throws(() => SessionConfig.normalizeOverrides('codex', { effort: 'high' }), /Unsupported/);
+  assert.throws(() => SessionConfig.normalizeOverrides('claude', { codexEffort: 'high' }), /Unsupported/);
+});
+
+test("a schedule's model and effort reach the argv of the CLI it runs on", async () => {
+  const launches = [];
+  const context = vm.createContext({ SessionConfig, window: { api: {
+    getEffectiveSettings: async () => ({ model: 'folder-model', effort: 'low', codexModel: '', codexEffort: 'low' }),
+  } }, launchNewSession: async (target, options) => { launches.push(options); } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/schedules.js'), 'utf8'), context);
+  const schedule = { id: 'schedule', prompt: 'Do it', sessionConfig: {
+    claude: { model: 'opus', effort: 'high' }, codex: { codexModel: 'gpt-5.5', codexEffort: 'xhigh' },
+  } };
+  await context.launchScheduledSession({ schedule, target: { projectPath: '/p' }, runtime: 'claude' });
+  await context.launchScheduledSession({ schedule, target: { projectPath: '/p' }, runtime: 'codex' });
+  const claudeArgs = require('../harnesses/claude').buildLaunchArgs({ sessionId: 's', isNew: true, options: launches[0] });
+  assert.equal(claudeArgs[claudeArgs.indexOf('--model') + 1], 'opus');
+  assert.equal(claudeArgs[claudeArgs.indexOf('--effort') + 1], 'high');
+  const codexArgs = require('../harnesses/codex').buildLaunchArgs({ sessionId: 's', isNew: true, options: launches[1] });
+  assert.equal(codexArgs[codexArgs.indexOf('--model') + 1], 'gpt-5.5');
+  assert.ok(codexArgs.includes('model_reasoning_effort="xhigh"'));
+  assert.ok(!codexArgs.includes('--effort'), 'the Claude flag never reaches codex');
+  // Nothing set anywhere: no flag, so each CLI keeps its own default.
+  await context.launchScheduledSession({ schedule: { ...schedule, sessionConfig: { claude: { model: '', effort: '' } } }, target: { projectPath: '/p' }, runtime: 'claude' });
+  const bare = require('../harnesses/claude').buildLaunchArgs({ sessionId: 's', isNew: true, options: launches[2] });
+  assert.ok(!bare.includes('--model') && !bare.includes('--effort'));
+});
 
 test('additional Claude instructions preserve multiline text through settings and launch', () => {
   const appendSystemPrompt = 'First line.\n  Indented instructions.\n';

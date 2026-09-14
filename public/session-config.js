@@ -20,10 +20,20 @@
     { value: 'on-request', label: 'On Request', desc: 'Codex decides when to ask' },
     { value: 'never', label: 'Never', desc: 'Never ask; failures go back to the model' },
   ];
+  // Effort levels. Claude's are the ones `claude --help` lists. Codex's are
+  // the union over its model catalog; each model supports a subset, and the
+  // form narrows the choice to what the chosen model accepts.
+  const CLAUDE_EFFORTS = [
+    { value: '', label: 'Default' }, { value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' },
+    { value: 'high', label: 'High' }, { value: 'xhigh', label: 'Extra High' }, { value: 'max', label: 'Max' },
+  ];
+  const CODEX_EFFORTS = [...CLAUDE_EFFORTS, { value: 'ultra', label: 'Ultra' }];
   const FIELDS = {
     claude: [
       { key: 'permissionMode', label: 'Permission Mode', type: 'permission', default: null, choices: PERMISSION_MODES },
       { key: 'dangerouslySkipPermissions', type: 'boolean', default: false, hidden: true },
+      { key: 'model', label: 'Model', type: 'text', default: '', placeholder: 'default', suggestions: ['fable', 'opus', 'sonnet'], description: "Blank uses Claude's default. An alias or a full model name" },
+      { key: 'effort', label: 'Effort', type: 'select', default: '', choices: CLAUDE_EFFORTS, description: "Default uses Claude's own setting" },
       { key: 'allowedTools', label: 'Allowed Tools', type: 'text', default: '', wide: true, description: 'Tools allowed without a permission prompt (comma-separated)' },
       { key: 'appendSystemPrompt', label: 'Additional System Prompt', type: 'textarea', default: '', wide: true, description: 'Instructions appended to Claude’s system prompt' },
       { key: 'worktree', label: 'Worktree', type: 'boolean', default: false, description: 'Run each new session in an isolated git worktree' },
@@ -34,7 +44,8 @@
     codex: [
       { key: 'codexSandbox', label: 'Sandbox', type: 'select', default: '', choices: CODEX_SANDBOX_MODES, description: 'What Codex is allowed to touch' },
       { key: 'codexApproval', label: 'Approval', type: 'select', default: '', choices: CODEX_APPROVAL_POLICIES, description: 'When Codex asks before running a command' },
-      { key: 'codexModel', label: 'Model', type: 'text', default: '', placeholder: 'default', description: "Blank uses Codex's default" },
+      { key: 'codexModel', label: 'Model', type: 'text', default: '', placeholder: 'default', catalog: 'codex', description: "Blank uses Codex's default" },
+      { key: 'codexEffort', label: 'Reasoning Effort', type: 'select', default: '', choices: CODEX_EFFORTS, modelField: 'codexModel', description: "Default uses Codex's own setting" },
       { key: 'dangerouslySkipPermissions', label: 'Bypass Approvals and Sandbox', type: 'boolean', default: false, description: 'Disables permission prompts and sandbox restrictions' },
     ],
   };
@@ -92,7 +103,7 @@
     return normalizeOverrides(runtime, out);
   }
 
-  const api = { PERMISSION_MODES, CODEX_SANDBOX_MODES, CODEX_APPROVAL_POLICIES, FIELDS, COMMON_FIELDS,
+  const api = { PERMISSION_MODES, CODEX_SANDBOX_MODES, CODEX_APPROVAL_POLICIES, CLAUDE_EFFORTS, CODEX_EFFORTS, FIELDS, COMMON_FIELDS,
     fieldsFor, normalizeOverrides, normalizeByCli, resolveOptions, own };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.SessionConfig = api;

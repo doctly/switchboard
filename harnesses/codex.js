@@ -538,6 +538,40 @@ function classifyNotification(message) {
 
 const SANDBOX_MODES = new Set(['read-only', 'workspace-write', 'danger-full-access']);
 const APPROVAL_POLICIES = new Set(['on-request', 'never']);
+// Reasoning efforts across codex's model catalog. Codex has no --effort flag:
+// it is the model_reasoning_effort config key, passed as a -c override. The
+// value is parsed as TOML, so only these exact words are ever written into it.
+const REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+
+/**
+ * Codex's model list, from the cache its own model picker reads
+ * ($CODEX_HOME/models_cache.json). Each model names the reasoning efforts it
+ * supports, which the settings form uses to keep an effort the model rejects
+ * out of a launch. Read rather than running `codex debug models`: the main
+ * process does not have the login shell's PATH (see available()). Empty when
+ * codex has never fetched it or the file is not the shape expected.
+ */
+function readModelCatalog() {
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(path.join(codexHome(), 'models_cache.json'), 'utf8'));
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const m of Array.isArray(data?.models) ? data.models : []) {
+    if (!m || typeof m.slug !== 'string' || !m.slug) continue;
+    const levels = Array.isArray(m.supported_reasoning_levels) ? m.supported_reasoning_levels : [];
+    out.push({
+      slug: m.slug,
+      label: typeof m.display_name === 'string' && m.display_name ? m.display_name : m.slug,
+      efforts: levels.map(l => (typeof l === 'string' ? l : l?.effort)).filter(e => typeof e === 'string' && e),
+      defaultEffort: typeof m.default_reasoning_level === 'string' ? m.default_reasoning_level : null,
+      visible: m.visibility !== 'hide',
+    });
+  }
+  return out;
+}
 
 /**
  * Argv for the codex binary.
@@ -589,6 +623,9 @@ function buildLaunchArgs({ sessionId, isNew, options }) {
     if (options.codexModel) {
       args.push('--model', String(options.codexModel));
     }
+    if (REASONING_EFFORTS.has(options.codexEffort)) {
+      args.push('-c', `model_reasoning_effort="${options.codexEffort}"`);
+    }
     // --add-dir names extra writable roots, and codex refuses to start when
     // the sandbox cannot grant them ("effective permissions do not allow
     // additional writable roots"). Read-only, the default, can already read
@@ -618,6 +655,7 @@ module.exports = {
   titleIndexPath, readSessionTitles,
   parseTitleState, classifyNotification,
   buildLaunchArgs, launchEnv, originatorTag, readLaunchSignals, matchesLaunch, needsIdDetection,
+  readModelCatalog,
   available, codexHome, sessionsRoot, listFolders, folderPath, folderForProject,
   listTranscripts, sessionIdFromPath, transcriptPath, isSubagentMeta,
   deriveProjectPath,

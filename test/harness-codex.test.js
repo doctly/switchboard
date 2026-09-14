@@ -264,6 +264,40 @@ test('every flag codex is launched with is one the CLI declares', () => {
   }
 });
 
+test('reasoning effort goes through -c, since codex has no flag for it; anything else is dropped', () => {
+  assert.deepEqual(
+    argsWithoutForcedConfig({ sessionId: ID, isNew: true, options: { codexModel: 'gpt-5.5', codexEffort: 'high' } }),
+    ['--model', 'gpt-5.5', '-c', 'model_reasoning_effort="high"']
+  );
+  // The value is parsed as TOML: a stored value must never add its own keys.
+  assert.deepEqual(argsWithoutForcedConfig({ sessionId: ID, isNew: true, options: { codexEffort: 'high" model="x' } }), []);
+  assert.deepEqual(argsWithoutForcedConfig({ sessionId: ID, isNew: true, options: { codexEffort: '' } }), []);
+});
+
+test("the model catalog is read from codex's own cache, and is empty when that is missing or unreadable", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-home-'));
+  const previous = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  try {
+    assert.deepEqual(codex.readModelCatalog(), []);
+    fs.writeFileSync(path.join(home, 'models_cache.json'), '{not json');
+    assert.deepEqual(codex.readModelCatalog(), []);
+    fs.writeFileSync(path.join(home, 'models_cache.json'), JSON.stringify({ models: [
+      { slug: 'gpt-5.5', display_name: 'GPT-5.5', visibility: 'list', default_reasoning_level: 'medium',
+        supported_reasoning_levels: [{ effort: 'low', description: 'Fast' }, { effort: 'xhigh' }] },
+      { slug: 'hidden-one', visibility: 'hide', supported_reasoning_levels: ['high'] },
+      { display_name: 'No slug' },
+    ] }));
+    assert.deepEqual(codex.readModelCatalog(), [
+      { slug: 'gpt-5.5', label: 'GPT-5.5', efforts: ['low', 'xhigh'], defaultEffort: 'medium', visible: true },
+      { slug: 'hidden-one', label: 'hidden-one', efforts: ['high'], defaultEffort: null, visible: false },
+    ]);
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previous;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 // --- sub-agent threads ---
 //
 // codex records sub-agent threads as ordinary rollouts, but refuses to resume

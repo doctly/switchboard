@@ -480,6 +480,7 @@ ipcMain.handle('list-env-files', guarded((folderPath) => ({
 ipcMain.handle('save-project-brief', guarded((id, content) => projects.saveBrief(id, content)));
 ipcMain.handle('create-project-file', guarded((id, name, content) => projects.createProjectFile(id, name, content)));
 ipcMain.handle('add-project-files', guarded((id, sourcePaths) => projects.addProjectFiles(id, sourcePaths)));
+ipcMain.handle('list-recent-project-files', guarded((id) => projects.listRecentProjectFiles(id)));
 ipcMain.handle('get-project-plan', guarded((id) => projects.readProjectPlan(id)));
 ipcMain.handle('set-plan-item', guarded((id, kind, line, done) => projects.setPlanItem(id, kind, line, done)));
 ipcMain.handle('append-plan-item', guarded((id, kind, text) => projects.appendPlanItem(id, kind, text)));
@@ -1023,6 +1024,9 @@ const SETTING_DEFAULTS = {
   chrome: false,
   preLaunchCmd: '',
   addDirs: '',
+  // Claude's model and effort. Empty leaves the choice to claude.
+  model: '',
+  effort: '',
   visibleSessionCount: 5,
   sidebarWidth: 340,
   terminalTheme: 'switchboard',
@@ -1036,6 +1040,7 @@ const SETTING_DEFAULTS = {
   codexSandbox: 'workspace-write',
   codexApproval: '',
   codexModel: '',
+  codexEffort: '',
 };
 
 // --- Harness enablement ---
@@ -1060,6 +1065,10 @@ ipcMain.handle('get-harnesses', () => {
     .filter(h => h.buildLaunchArgs)
     .map(h => ({ id: h.id, label: h.label, enabled: !disabled.has(h.id) }));
 });
+
+// Codex's model catalog, for model suggestions and the per-model reasoning
+// efforts in session and schedule settings.
+ipcMain.handle('get-codex-models', () => getHarness('codex')?.readModelCatalog?.() || []);
 
 ipcMain.handle('get-shell-profiles', () => {
   _shellProfiles = null; // refresh on each request

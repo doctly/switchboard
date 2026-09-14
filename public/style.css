@@ -3771,6 +3771,7 @@ body { display: flex; flex-direction: column; }
 .session-config-inheritance { margin-top: 4px; color: #8a8aa0; font-size: 11px; }
 .session-config-reset { padding: 0; border: 0; background: none; color: #a8b9f0; font: inherit; cursor: pointer; }
 .session-config-reset:hover { text-decoration: underline; }
+.session-config-note { margin-top: 4px; color: #e8b04a; font-size: 11px; }
 .session-config-error { color: #e36a78; font-size: 12px; margin-top: 12px; }
 
 .new-session-dialog h3 {
@@ -4643,16 +4644,17 @@ body { display: flex; flex-direction: column; }
 .proj-task-indicator {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  /* Sized and spaced like the session count beside it. 4px here reads as the
+     dot's 5px: the play triangle leaves ~1px of its box empty on the right. */
+  gap: 4px;
   color: #7a7a90;
-  font-size: 10px;
-  line-height: 1;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
 .proj-task-indicator svg {
-  width: 9px;
-  height: 9px;
+  width: 10px;
+  height: 10px;
   color: #6f9477;
 }
 
@@ -5162,6 +5164,14 @@ body { display: flex; flex-direction: column; }
 .ws-frow:hover .ws-ghost { opacity: 1; }
 
 .ws-added-files-card { padding-bottom: 8px; }
+
+/* Recent Files on the Overview: a whole row opens the file in the Files tab. */
+.ws-recent-files-card { padding-bottom: 6px; }
+.ws-recent-file { width: 100%; border: 0; background: none; text-align: left; font-family: inherit; cursor: pointer; }
+.ws-recent-file:hover { background: rgba(255,255,255,0.04); }
+.ws-recent-file-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.ws-recent-file-dir { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #6f6f88; font-size: 11px; }
+.ws-recent-file .ws-card-meta { flex-shrink: 0; }
 
 .ws-added-drop {
   display: flex;
@@ -6154,6 +6164,39 @@ body { display: flex; flex-direction: column; }
 }
 .viewer-preview-frame { display: block; width: 100%; height: 100%; border: 0; background: white; }
 .viewer-preview-error { padding: 24px; text-align: center; color: #b0b0c4; }
+
+/* JSON reader: a collapsible tree over a .json file. Colors follow the editor's Dracula theme. */
+.json-reader {
+  flex: 1;
+  overflow: auto;
+  padding: 14px 18px;
+  color: #f8f8f2;
+  font-family: 'SF Mono', 'Fira Code', Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.08) transparent;
+}
+.json-reader-row { padding: 0 4px; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.json-reader-row:hover { background: rgba(255,255,255,0.04); }
+.json-reader-leaf { padding-left: 18px; }
+.json-reader-node > summary { list-style: none; cursor: pointer; }
+.json-reader-node > summary::-webkit-details-marker { display: none; }
+.json-reader-node > summary::before { content: '\25B8'; display: inline-block; width: 14px; color: #6a6a80; transition: transform 0.1s; }
+.json-reader-node[open] > summary::before { transform: rotate(90deg); }
+.json-reader-children { margin-left: 11px; padding-left: 6px; border-left: 1px solid rgba(255,255,255,0.06); }
+.json-reader-key { color: #8be9fd; }
+.json-reader-index { color: #6a6a80; }
+.json-reader-dup { text-decoration: underline wavy #e8b04a; }
+.json-reader-colon, .json-reader-brace { color: #6a6a80; }
+.json-reader-string { color: #f1fa8c; }
+.json-reader-number { color: #bd93f9; }
+.json-reader-boolean { color: #ff79c6; }
+.json-reader-null { color: #ff79c6; font-style: italic; }
+.json-reader-count { margin-left: 8px; color: #6a6a80; font-size: 11px; }
+.json-reader-error { padding: 24px; color: #b0b0c4; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; }
+.json-reader-jump { margin-top: 12px; padding: 5px 12px; border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; background: rgba(255,255,255,0.05); color: #d0d0e8; font: inherit; cursor: pointer; }
+.json-reader-jump:hover { background: rgba(255,255,255,0.1); }
 
 .ws-files-list {
   flex: 1;

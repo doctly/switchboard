@@ -60,6 +60,22 @@ test('addDirs splits on commas and trims, skipping empties', () => {
   assert.deepEqual(args, ['--session-id', 'a', '--add-dir', '/one', '--add-dir', '/two']);
 });
 
+test('model and effort pass through; empty and unknown levels are left to claude', () => {
+  assert.deepEqual(
+    claude.buildLaunchArgs({ sessionId: 'a', isNew: true, options: { model: 'opus', effort: 'xhigh' } }),
+    ['--session-id', 'a', '--model', 'opus', '--effort', 'xhigh']
+  );
+  assert.deepEqual(
+    claude.buildLaunchArgs({ sessionId: 'a', isNew: true, options: { model: '', effort: '' } }),
+    ['--session-id', 'a']
+  );
+  assert.deepEqual(
+    claude.buildLaunchArgs({ sessionId: 'a', isNew: true, options: { effort: 'ultra' } }),
+    ['--session-id', 'a'],
+    'claude has no ultra level'
+  );
+});
+
 test('appendSystemPrompt goes last', () => {
   const args = claude.buildLaunchArgs({
     sessionId: 'a', isNew: true, options: { chrome: true, appendSystemPrompt: 'hi' },

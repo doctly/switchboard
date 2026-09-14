@@ -401,6 +401,11 @@ function classifyNotification(message) {
 
 // --- Launch ---
 
+// The levels `claude --effort` accepts. Checked rather than passed blind: a
+// stored setting can outlive the claude version that understood it, and an
+// unknown level fails the launch.
+const EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+
 /**
  * Argv for the claude binary. Returned as an array so the caller can quote it
  * for the target shell rather than building a command string here.
@@ -423,6 +428,13 @@ function buildLaunchArgs({ sessionId, isNew, options }) {
       args.push('--dangerously-skip-permissions');
     } else if (options.permissionMode) {
       args.push('--permission-mode', String(options.permissionMode));
+    }
+    // Empty leaves the choice to claude's own default.
+    if (options.model) {
+      args.push('--model', String(options.model));
+    }
+    if (EFFORT_LEVELS.has(options.effort)) {
+      args.push('--effort', options.effort);
     }
     // --worktree only applies when STARTING a session — it creates a fresh
     // isolated git worktree. Resuming (isNew === false) must reuse the

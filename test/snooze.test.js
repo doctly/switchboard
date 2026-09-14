@@ -56,12 +56,15 @@ test('presets: tomorrow and next week land at 9:00 on the right calendar days', 
   assert.deepEqual([byId['next-week'].getDay(), byId['next-week'].getDate(), byId['next-week'].getHours()], [1, 14, 9]);
 });
 
-test('presets: on a Sunday "Tomorrow" and "Next week" are the same Monday, so only one is offered', () => {
+test('presets: on a Sunday "Next week" is the Monday after tomorrow, not a copy of "Tomorrow"', () => {
   const sunday = new Date(2026, 8, 13, 9, 0, 0);
   assert.equal(sunday.getDay(), 0);
-  const ids = resolveSnoozePresets(sunday).map(p => p.id);
-  assert.ok(ids.includes('tomorrow'));
-  assert.ok(!ids.includes('next-week'));
+  const byId = Object.fromEntries(resolveSnoozePresets(sunday).map(p => [p.id, p]));
+  const tomorrow = new Date(byId.tomorrow.snoozedUntil);
+  const nextWeek = new Date(byId['next-week'].snoozedUntil);
+  assert.deepEqual([tomorrow.getDay(), tomorrow.getDate()], [1, 14]);
+  assert.deepEqual([nextWeek.getDay(), nextWeek.getDate(), nextWeek.getHours()], [1, 21, 9]);
+  assert.match(byId['next-week'].whenLabel, /^Sep 21, 9:00/, 'the date keeps it apart from Tomorrow');
 });
 
 test('presets: every wake time is ahead of now', () => {

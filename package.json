@@ -19,8 +19,9 @@
     "build:linux": "npm run bundle && electron-builder --linux",
     "release": "npm run bundle && electron-builder --publish always",
     "postinstall": "node scripts/postinstall.js",
-    "bundle": "npm run bundle:codemirror && npm run bundle:pptx",
-    "bundle:pptx": "esbuild public/pptx-preview.js --bundle --outfile=public/pptx-preview-bundle.js --format=iife --platform=browser --minify"
+    "bundle": "npm run bundle:codemirror && npm run bundle:pptx && npm run bundle:jsonc",
+    "bundle:pptx": "esbuild public/pptx-preview.js --bundle --outfile=public/pptx-preview-bundle.js --format=iife --platform=browser --minify",
+    "bundle:jsonc": "esbuild node_modules/jsonc-parser/lib/esm/main.js --bundle --outfile=public/jsonc-parser-bundle.js --format=iife --global-name=JsoncParser --platform=browser --minify"
   },
   "dependencies": {
     "@aiden0z/pptx-renderer": "1.2.4",

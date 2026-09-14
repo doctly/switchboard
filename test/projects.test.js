@@ -663,6 +663,39 @@ test('addProjectFiles copies dropped files into added-files and preserves duplic
   }
 });
 
+test('listRecentProjectFiles: newest added first, without the briefs, repos, hidden, dependency or too-deep folders', async () => {
+  const t = setup();
+  try {
+    const { project } = await projects.createProject({ name: 'Recent' });
+    assert.equal(projects.listRecentProjectFiles('missing').error, 'Project not found');
+    assert.deepEqual(projects.listRecentProjectFiles(project.id).files, [], 'a new project has only its briefs');
+    const root = project.root;
+    const write = async (rel) => {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), rel);
+      await new Promise(resolve => setTimeout(resolve, 15));
+    };
+    // Oldest to newest. Everything after five.md is newer and must still not show.
+    for (const rel of ['one.md', 'notes/two.md', 'added-files/three.pdf', 'four.md', 'notes/five.md',
+      'repos/app/src/index.js', '.hidden/secret.md', '.env', 'node_modules/pkg/index.js', 'deep/a/b/c/d/e/f/too-deep.md']) {
+      await write(rel);
+    }
+    fs.symlinkSync(path.join(root, 'notes'), path.join(root, 'linked-notes'));
+    fs.rmSync(path.join(root, 'CLAUDE.md'));
+    await write('CLAUDE.md');
+    await write('six.md');
+
+    const recent = projects.listRecentProjectFiles(project.id);
+    assert.equal(recent.ok, true);
+    assert.deepEqual(recent.files.map(f => f.relativePath),
+      ['six.md', path.join('notes', 'five.md'), 'four.md', path.join('added-files', 'three.pdf'), path.join('notes', 'two.md')]);
+    assert.equal(recent.files[1].name, 'five.md');
+    assert.ok(Date.parse(recent.files[0].added) >= Date.parse(recent.files[1].added));
+    assert.equal(projects.listRecentProjectFiles(project.id, 2).files.length, 2);
+    assert.ok(!projects.listRecentProjectFiles(project.id, 50).files.some(f => /^(linked-notes|repos|node_modules|\.)|too-deep|CLAUDE\.md$/.test(f.relativePath)));
+  } finally { t.cleanup(); }
+});
+
 test('readProjectPlan, setPlanItem, appendPlanItem and links work on the tracker and todos', async () => {
   const t = setup();
   try {
@@ -1263,17 +1296,20 @@ Do the task.`);
     assert.equal(saved.allowedTools, 'Read,Bash(git status:*)');
     assert.equal(saved.appendSystemPrompt, meta.cli['append-system-prompt']);
     assert.equal(saved.addDirs, '/one, /two');
-    assert.equal(saved.model, undefined, 'model is deliberately omitted');
+    assert.equal(saved.model, 'old-model', 'the old runner passed --model, so the model carries over');
+    assert.equal(saved.effort, '', 'effort did not exist before, so it is pinned unset');
     assert.equal(saved.maxBudgetUsd, undefined, 'budget is deliberately omitted');
     const options = config.resolveOptions('claude', {
       permissionMode: 'bypassPermissions', dangerouslySkipPermissions: true,
       worktree: true, worktreeName: 'new-default', chrome: true, mcpEmulation: true,
       preLaunchCmd: 'other-prefix', addDirs: '/other',
       allowedTools: 'Bash', appendSystemPrompt: 'other instructions',
+      model: 'folder-model', effort: 'max',
     }, saved);
     assert.deepEqual(options, saved, 'all previous launch defaults are explicitly pinned');
     const args = claude.buildLaunchArgs({ sessionId: 'imported', isNew: true, options: { ...options, initialPrompt: row.prompt, scheduleId: row.id } });
-    assert.ok(!args.includes('--model'));
+    assert.equal(args[args.indexOf('--model') + 1], 'old-model');
+    assert.ok(!args.includes('--effort'), 'a folder effort does not reach an imported schedule');
     assert.ok(!args.includes('--print'));
     assert.ok(!args.includes('--max-budget-usd'));
     assert.ok(!args.includes('--worktree'));

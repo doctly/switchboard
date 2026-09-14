@@ -81,8 +81,8 @@
 
   /**
    * The menu's choices. "This evening" appears only while it is more than an
-   * hour away. On a Sunday "Tomorrow" and "Next week" are the same Monday
-   * morning, so only "Tomorrow" is offered.
+   * hour away. "Next week" is the coming Monday, or on a Sunday the Monday
+   * after, so it never repeats "Tomorrow".
    */
   function resolveSnoozePresets(now = new Date()) {
     const inAnHour = new Date(now.getTime() + HOUR_MS);
@@ -97,11 +97,13 @@
     }
     const tomorrow = atHour(addDays(now, 1), MORNING_HOUR);
     presets.push({ id: 'tomorrow', label: 'Tomorrow', whenLabel: timeOfDay(tomorrow), snoozedUntil: tomorrow.toISOString() });
-    const daysUntilMonday = (1 - now.getDay() + 7) % 7 || 7;
+    // The coming Monday. On a Sunday that is tomorrow, which "Tomorrow"
+    // already offers, so "Next week" moves to the Monday after instead of
+    // repeating it; the date in its label keeps the two apart.
+    let daysUntilMonday = (1 - now.getDay() + 7) % 7 || 7;
+    if (daysUntilMonday === 1) daysUntilMonday += 7;
     const nextWeek = atHour(addDays(now, daysUntilMonday), MORNING_HOUR);
-    if (nextWeek.getTime() !== tomorrow.getTime()) {
-      presets.push({ id: 'next-week', label: 'Next week', whenLabel: `${weekday(nextWeek)} ${timeOfDay(nextWeek)}`, snoozedUntil: nextWeek.toISOString() });
-    }
+    presets.push({ id: 'next-week', label: 'Next week', whenLabel: snoozeWakeDescription(nextWeek.toISOString(), now), snoozedUntil: nextWeek.toISOString() });
     return presets;
   }
 
