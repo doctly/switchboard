@@ -621,7 +621,7 @@ const GROUP_STATE_LABEL = { running: 'Working', ready: 'Finished, not read yet',
 const PROJECT_DOT_STATES = [...GROUP_STATE_ORDER, 'woke'];
 
 /**
- * The dot on a project row. A project back from snooze shows yellow ahead of
+ * The dot on a project row. A project back from snooze shows violet ahead of
  * everything else: opening it clears the marker at once, and the session
  * state shows from then on. The marker comes from the stored wake time, so
  * it survives a restart.
@@ -701,7 +701,7 @@ function projectSortTime(project) {
   for (const s of projectSessionsAll(project)) best = Math.max(best, sessionEventTime(s));
   // Coming back from a snooze is an event. Without this a woken project
   // returns to a spot buried under everything that moved while it was away,
-  // leaving the yellow dot to carry the whole signal. The wake time is a real
+  // leaving the violet dot to carry the whole signal. The wake time is a real
   // timestamp, so it decays like any other event, and opening the project
   // clears it back to its natural position along with the dot.
   const woke = projectWokeAt(project, Date.now());
@@ -867,7 +867,7 @@ function selectProject(id, { tab } = {}) {
     opened.snoozedUntil = null;
     opened.snoozedAt = null;
     window.api.updateProject(id, { snoozedUntil: null }).catch(() => {});
-    updateProjectStatusDots(); // the yellow dot goes as soon as the project is opened
+    updateProjectStatusDots(); // the violet dot goes as soon as the project is opened
   }
   if (tab) {
     setProjectTab(id, tab);

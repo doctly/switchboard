@@ -4708,10 +4708,12 @@ body { display: flex; flex-direction: column; }
   box-shadow: 0 0 6px rgba(79,195,247,0.6);
 }
 
-/* Back from a snooze and not opened yet: yellow, until the project is opened. */
+/* Back from a snooze and not opened yet: violet, until the project is opened.
+   Violet stays clear of needs-input orange, unread blue and idle green, and
+   matches the Snoozed chip and the app accent. */
 .proj-dot.woke {
-  background: #f5d442;
-  box-shadow: 0 0 6px rgba(245,212,66,0.55);
+  background: #b48cff;
+  box-shadow: 0 0 6px rgba(180,140,255,0.5);
 }
 
 /* A live session doing none of those: green, but quiet. */
