@@ -3,7 +3,7 @@
 // The Projects tab is not another session tree. The sidebar lists projects,
 // nothing else. Selecting one opens its workspace in the main area:
 //
-//   Overview  — header, then tracks as cards beside the brief, plan, todos
+//   Overview  — header, then tracks as cards beside the plan, todos
 //               and folders. Settings is a second tab of the same page.
 //   Working   — opening one of its sessions keeps you in the project: a slim
 //               strip on top, then tracks | sessions | terminal side by side.
@@ -1441,7 +1441,7 @@ function openTrackInPanes(project, key) {
   if (sessions.length) openSession(sessions[0]);
 }
 
-// --- Side cards: brief, plan, todos, folders ---
+// --- Side cards: plan, todos, recent files, folders ---
 
 function fileKey(project, name) { return `${project.id}:${name}`; }
 function fileContent(project, name) { return projectsUi.files.get(fileKey(project, name))?.content ?? null; }
@@ -1458,25 +1458,6 @@ async function loadProjectFiles(project, { force = false } = {}) {
   }));
 }
 
-/**
- * The brief's own words: whatever the user wrote outside Switchboard's managed
- * block. The block holds the title, the project folder, the working rules and
- * the attached folders, none of which is worth showing back to them.
- */
-function briefSummary(content) {
-  if (!content) return { text: '', placeholder: true };
-  const outside = content.replace(/<!--\s*switchboard:managed\s*-->[\s\S]*?<!--\s*\/switchboard:managed\s*-->/g, '');
-  const para = [];
-  for (const raw of outside.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (line.startsWith('<!--')) continue;
-    if (!line) { if (para.length) break; continue; }
-    if (/^#/.test(line)) { if (para.length) break; continue; }
-    para.push(line);
-  }
-  const text = para.join(' ');
-  return { text, placeholder: !text };
-}
 
 // parsePlan and parseTodos come from plan-parser.js, shared with main so the
 // page, the file watcher and the tests read a tracker the same way. Ticks and
@@ -2275,7 +2256,6 @@ function bindRecentFilesCard(project, side) {
 }
 
 function renderSideCards(project, side) {
-  const brief = briefSummary(fileContent(project, 'CLAUDE.md'));
   const plan = parsePlan(fileContent(project, 'plan-tracker.md'));
   const planWritten = hasPlanText(fileContent(project, 'plan.md'));
   const todos = parseTodos(fileContent(project, 'todos.md'));
@@ -2285,10 +2265,6 @@ function renderSideCards(project, side) {
   const addedFiles = project.addedFiles || [];
 
   side.innerHTML = `
-    <div class="ws-card">
-      <div class="ws-card-h"><span class="ws-card-title">Brief</span><span class="ws-flex"></span><button type="button" class="ws-ghost ws-ghost--sm" id="ws-brief-edit">${brief.placeholder ? 'Write it' : 'Edit'}</button></div>
-      <div class="ws-card-text ${brief.placeholder ? 'muted' : ''}">${brief.placeholder ? 'One line about the goal goes at the top of CLAUDE.md. Every session in this project reads it.' : escapeHtml(brief.text)}</div>
-    </div>
     <div class="ws-card">
       <div class="ws-card-h"><span class="ws-card-title">Plan</span><span class="ws-card-meta">${plan.phases.length ? `${plan.done} of ${plan.phases.length} phases` : ''}</span><span class="ws-flex"></span><button type="button" class="ws-ghost ws-ghost--sm" id="ws-plan-tracker" title="plan-tracker.md: the phases Switchboard reads">Tracker</button><button type="button" class="ws-ghost ws-ghost--sm" id="ws-plan-open" title="plan.md: the plan as written">Open</button></div>
       ${plan.phases.length ? `
@@ -2327,7 +2303,6 @@ function renderSideCards(project, side) {
         </div>`).join('')}</div>` : ''}
     </div>`;
 
-  side.querySelector('#ws-brief-edit').onclick = () => openProjectFileInEditor(project, 'CLAUDE.md');
   side.querySelector('#ws-plan-open').onclick = () => openProjectFileInEditor(project, 'plan.md');
   side.querySelector('#ws-plan-tracker').onclick = () => openProjectFileInEditor(project, 'plan-tracker.md');
   side.querySelector('#ws-folders-add').onclick = () => attachFolderAsk(project);

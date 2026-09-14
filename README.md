@@ -158,7 +158,7 @@ The two CLIs handle this differently:
 
 ### Overview and working mode
 
-The Projects tab lists projects only. Selecting one opens its **Overview**: the brief, the plan's progress, open todos, attached folders, and one card per track with its latest sessions.
+The Projects tab lists projects only. Selecting one opens its **Overview**: the plan's progress, open todos, attached folders, and one card per track with its latest sessions.
 
 Opening a session from there switches to working mode: a slim project strip on top, a session list beside the terminal, and the plan and todo counts at the foot of the list.
 
