@@ -59,10 +59,11 @@ Turn either CLI off under **CLI Agents** in Settings. A switched-off CLI is not 
 - **Built-in terminal** — Connect to running sessions or launch new ones without leaving the app.
 - **Status notifications** — In-app alerts when a session is waiting for permission approval or user input.
 - **Session grid** — Live terminals for all open sessions on one screen.
-- **Per-CLI launch options** — Permission mode, worktree, sandbox, approval policy, and model, set per session, per project, or globally.
+- **Per-CLI launch options** — Permission mode, worktree, sandbox, approval policy, model, and effort, set per session, per project, or globally.
 - **IDE emulation** (Claude only) — Review and edit Claude's proposed diffs in a side panel before they land.
 - **Projects** — Group work by what it is, not where it lives: a folder on disk, a brief the agent reads, a plan, a todo list, and the sessions filed under it.
 - **Project tasks and server logs** — Run `.vscode/tasks.json` commands and keep their logs beside your sessions.
+- **Scheduled tasks** — Start a session with a prompt on a timer, in a project, a track, or any folder.
 - **Plans and memory** (Claude only) — Browse and edit plan files and `CLAUDE.md` in one place.
 - **Activity stats** — Heatmap of your coding activity across all projects.
 
@@ -76,14 +77,20 @@ Each CLI exposes its own options when you start or resume a session:
 
 | CLI | Options |
 |---|---|
-| Claude Code | Permission mode, worktree, Chrome |
-| Codex | Sandbox policy, approval policy, model |
+| Claude Code | Permission mode, worktree, Chrome, model, effort |
+| Codex | Sandbox policy, approval policy, model, reasoning effort |
 
-Set them per session, per project, or globally in Settings.
+Set them per session, per project, or globally in Settings. Model and effort are chosen per session or per schedule (Codex's model can also be set in Settings); left blank, each CLI uses its own default.
+
+The optional settings (model, effort, allowed tools, additional system prompt, pre-launch command, and additional directories) sit under **More options**, and show on their own once they have a value. Codex's reasoning effort is limited to what the chosen model supports, read from Codex's own model list: choosing a model that does not support the current effort sets it back to Default.
+
+### Scheduled tasks
+
+A scheduled task starts a session with a prompt on a timer: every 15 or 30 minutes, every hour, every day, on weekdays, or every week. Create one with **New scheduled task…** from a project's right-click menu, the **Schedules** button on a project's page, or the clock on a folder in the Sessions tab. Each task's menu shows when it runs next and can edit it, run it now, turn it off, or delete it. Sessions a schedule started are marked with a clock.
 
 Schedules use the same CLI-specific configuration form as **New Session → Configure**. Choose **Use folder defaults** to follow the current settings at each run, or **Customize** to save individual overrides. Each customized field can be reset to its folder default, and Claude and Codex choices are kept separately when switching CLIs.
 
-Legacy schedule imports keep permission mode, allowed tools, additional directories, and appended system instructions, with the old runner's defaults saved explicitly. Model and budget are intentionally omitted. Successfully imported schedules are left alone on later scans.
+Legacy schedule imports keep permission mode, allowed tools, additional directories, appended system instructions, and the model, with the old runner's defaults saved explicitly. Budget is intentionally omitted, and effort is left unset. Successfully imported schedules are left alone on later scans.
 
 For Project View schedules, defaults come from the track's starting folder, then the project's default starting folder, then the Switchboard project folder. The schedule dialog shows the resolved folder. Attached project folders are supplied automatically; additional directories in the form are optional extras.
 
@@ -117,7 +124,7 @@ Switchboard can act as an IDE for Claude Code. It speaks Claude CLI's own IDE pr
 - **Diff review** — A proposed change shows up as a diff. Accept or reject it in place.
 - **Inline and side-by-side** — Toggle between unified and side-by-side views. The choice is remembered.
 - **Partial acceptance** — In inline mode, accept or reject individual chunks, then submit the result.
-- **File viewer** — Clickable file links in terminal output (OSC 8 hyperlinks) open in the side panel with syntax highlighting.
+- **File viewer** — Clickable file links in terminal output (OSC 8 hyperlinks) open in the side panel. Code gets syntax highlighting; images, PDFs, and PowerPoint decks open as previews; HTML opens in a sandboxed preview; and JSON and JSONC files open as a collapsible tree that keeps key order, exact numbers, and duplicate keys, with a jump to the line where a broken file goes wrong.
 
 To let Claude use VS Code, Cursor, or another editor instead, uncheck **IDE Emulation** in **Global Settings**. Switchboard then stops registering as an IDE and Claude CLI discovers your real editor. The change applies to new sessions only.
 
@@ -158,7 +165,7 @@ The two CLIs handle this differently:
 
 ### Overview and working mode
 
-The Projects tab lists projects only. Selecting one opens its **Overview**: the plan's progress, open todos, attached folders, and one card per track with its latest sessions.
+The Projects tab lists projects only. Selecting one opens its **Overview**: the plan's progress, open todos, the newest files in the project folder, attached folders, files you've dropped in, and one card per track with its latest sessions. A file opens in the **Files** tab, which browses the whole project folder in the same viewer.
 
 Opening a session from there switches to working mode: a slim project strip on top, a session list beside the terminal, and the plan and todo counts at the foot of the list.
 
@@ -179,6 +186,9 @@ The project's **Settings** tab is a list of rows: the name, the start folder, fo
 - **Tracks** — Optional lines of work inside a project, each with its own sessions, start folder, and CLI. A track card's "Resume latest" reopens its most recent session. "New" starts one there.
 - **Move to project** — Any session row has a move action. Nothing is filed until you launch it from a project or move it there.
 - **Mark as done** — Done projects drop to the bottom, collapsed. Removing a project only forgets it. The folder and the sessions stay on disk.
+- **Snooze** — Right-click a project and choose **Snooze**: in 1 hour, in 3 hours, this evening, tomorrow, next week, or a time you pick. It moves to a collapsed **Snoozed** section below Active, and its sessions keep running. It comes back at that time, or sooner if a session needs your input, marked with a violet dot until you open it. **Wake now** brings it back early. A project waiting on your input can't be snoozed.
+
+![Project View snooze](build/project-view-snooze.png)
 
 ### Plan tab
 

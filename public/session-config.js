@@ -32,10 +32,10 @@
     claude: [
       { key: 'permissionMode', label: 'Permission Mode', type: 'permission', default: null, choices: PERMISSION_MODES },
       { key: 'dangerouslySkipPermissions', type: 'boolean', default: false, hidden: true },
-      { key: 'model', label: 'Model', type: 'text', default: '', placeholder: 'default', suggestions: ['fable', 'opus', 'sonnet'], description: "Blank uses Claude's default. An alias or a full model name" },
-      { key: 'effort', label: 'Effort', type: 'select', default: '', choices: CLAUDE_EFFORTS, description: "Default uses Claude's own setting" },
-      { key: 'allowedTools', label: 'Allowed Tools', type: 'text', default: '', wide: true, description: 'Tools allowed without a permission prompt (comma-separated)' },
-      { key: 'appendSystemPrompt', label: 'Additional System Prompt', type: 'textarea', default: '', wide: true, description: 'Instructions appended to Claude’s system prompt' },
+      { key: 'model', label: 'Model', type: 'text', default: '', more: true, placeholder: 'default', suggestions: ['fable', 'opus', 'sonnet'], description: "Blank uses Claude's default. An alias or a full model name" },
+      { key: 'effort', label: 'Effort', type: 'select', default: '', more: true, choices: CLAUDE_EFFORTS, description: "Default uses Claude's own setting" },
+      { key: 'allowedTools', label: 'Allowed Tools', type: 'text', default: '', more: true, wide: true, description: 'Tools allowed without a permission prompt (comma-separated)' },
+      { key: 'appendSystemPrompt', label: 'Additional System Prompt', type: 'textarea', default: '', more: true, wide: true, description: 'Instructions appended to Claude’s system prompt' },
       { key: 'worktree', label: 'Worktree', type: 'boolean', default: false, description: 'Run each new session in an isolated git worktree' },
       { key: 'worktreeName', label: 'Worktree Name', type: 'text', default: '', placeholder: 'name (optional)' },
       { key: 'chrome', label: 'Chrome', type: 'boolean', default: false, description: 'Enable Chrome browser automation' },
@@ -44,18 +44,28 @@
     codex: [
       { key: 'codexSandbox', label: 'Sandbox', type: 'select', default: '', choices: CODEX_SANDBOX_MODES, description: 'What Codex is allowed to touch' },
       { key: 'codexApproval', label: 'Approval', type: 'select', default: '', choices: CODEX_APPROVAL_POLICIES, description: 'When Codex asks before running a command' },
-      { key: 'codexModel', label: 'Model', type: 'text', default: '', placeholder: 'default', catalog: 'codex', description: "Blank uses Codex's default" },
-      { key: 'codexEffort', label: 'Reasoning Effort', type: 'select', default: '', choices: CODEX_EFFORTS, modelField: 'codexModel', description: "Default uses Codex's own setting" },
+      { key: 'codexModel', label: 'Model', type: 'text', default: '', more: true, placeholder: 'default', catalog: 'codex', description: "Blank uses Codex's default" },
+      { key: 'codexEffort', label: 'Reasoning Effort', type: 'select', default: '', more: true, choices: CODEX_EFFORTS, modelField: 'codexModel', description: "Default uses Codex's own setting" },
       { key: 'dangerouslySkipPermissions', label: 'Bypass Approvals and Sandbox', type: 'boolean', default: false, description: 'Disables permission prompts and sandbox restrictions' },
     ],
   };
   const COMMON_FIELDS = [
-    { key: 'preLaunchCmd', label: 'Pre-launch Command', type: 'text', default: '', wide: true, placeholder: 'e.g. aws-vault exec profile --', description: 'Prepended to the CLI command' },
-    { key: 'addDirs', label: 'Additional Directories', type: 'text', default: '', wide: true, placeholder: '/path/to/dir1, /path/to/dir2', description: 'Extra directories (comma-separated). Project attachments are included automatically.' },
+    { key: 'preLaunchCmd', label: 'Pre-launch Command', type: 'text', default: '', more: true, wide: true, placeholder: 'e.g. aws-vault exec profile --', description: 'Prepended to the CLI command' },
+    { key: 'addDirs', label: 'Additional Directories', type: 'text', default: '', more: true, wide: true, placeholder: '/path/to/dir1, /path/to/dir2', description: 'Extra directories (comma-separated). Project attachments are included automatically.' },
   ];
   const own = (o, key) => Object.prototype.hasOwnProperty.call(o || {}, key);
   const isObject = value => !!value && typeof value === 'object' && !Array.isArray(value);
   function fieldsFor(runtime) { return [...(FIELDS[runtime] || []), ...COMMON_FIELDS]; }
+
+  /**
+   * Keys of the optional fields (more: true) that wait behind "More options":
+   * those without a value. A value from saved overrides or folder defaults
+   * keeps its field in view, so nothing already set is ever tucked away.
+   */
+  function fieldsBehindMore(runtime, values = {}) {
+    const hasValue = (field, value) => field.type === 'boolean' ? value === true : value !== undefined && value !== null && value !== '';
+    return fieldsFor(runtime).filter(f => f.more && !f.hidden && !hasValue(f, values[f.key])).map(f => f.key);
+  }
 
   function normalizeOverrides(runtime, input = {}) {
     if (!isObject(input)) throw new Error('Session settings must be an object');
@@ -104,7 +114,7 @@
   }
 
   const api = { PERMISSION_MODES, CODEX_SANDBOX_MODES, CODEX_APPROVAL_POLICIES, CLAUDE_EFFORTS, CODEX_EFFORTS, FIELDS, COMMON_FIELDS,
-    fieldsFor, normalizeOverrides, normalizeByCli, resolveOptions, own };
+    fieldsFor, fieldsBehindMore, normalizeOverrides, normalizeByCli, resolveOptions, own };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.SessionConfig = api;
 })(typeof window !== 'undefined' ? window : globalThis);

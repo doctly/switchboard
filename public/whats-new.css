@@ -90,37 +90,40 @@
   user-select: none;
 }
 
+/* Previous, Next and Dismiss sit together at the right of the footer. The
+   arrows stretch to Dismiss's height and stay neutral, so Dismiss leads. */
+.whats-new-actions {
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  gap: 8px;
+}
+
 .whats-new-arrow {
-  position: absolute;
-  top: 50%;
   display: grid;
   place-items: center;
-  width: 42px;
-  height: 58px;
+  width: 36px;
+  padding: 0 0 2px;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 10px;
-  background: rgba(14, 14, 22, 0.86);
-  color: #f0f0ff;
-  font-size: 34px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #d8d8f0;
+  font: inherit;
+  font-size: 22px;
   line-height: 1;
   cursor: pointer;
-  transform: translateY(-50%);
-  opacity: 0.82;
-  transition: opacity 120ms ease, background 120ms ease, transform 120ms ease;
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
 }
 
 .whats-new-arrow:hover,
 .whats-new-arrow:focus-visible {
-  background: rgba(35, 35, 55, 0.96);
-  opacity: 1;
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.2);
 }
 
 .whats-new-arrow:active {
-  transform: translateY(-50%) scale(0.96);
+  transform: scale(0.96);
 }
-
-.whats-new-arrow--previous { left: 14px; }
-.whats-new-arrow--next { right: 14px; }
 
 .whats-new-footer {
   display: flex;
@@ -192,6 +195,17 @@
 .whats-new-dismiss:focus-visible {
   outline: 2px solid #9298ff;
   outline-offset: 2px;
+}
+
+/* The footer buttons are 8px apart; drawn inside, their ring stays in its button. */
+.whats-new-arrow:focus-visible,
+.whats-new-dismiss:focus-visible {
+  outline-offset: -2px;
+}
+
+/* The dialog takes focus when it opens so no button starts out ringed. */
+.whats-new-dialog:focus {
+  outline: none;
 }
 
 @media (max-width: 760px), (max-height: 650px) {

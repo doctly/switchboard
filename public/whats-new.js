@@ -21,6 +21,11 @@
       alt: 'Project View plan with phases, linked sessions, and open todos',
       caption: 'See phase progress, linked sessions, and open todos at a glance.',
     },
+    {
+      src: 'project-view/snooze.png',
+      alt: 'Project list with the Snooze menu open on a project, a project back from snooze marked with a violet dot, and a Snoozed shelf',
+      caption: 'Snooze a project until later. It comes back on time, or sooner if a session needs you.',
+    },
   ];
 
   function shouldShowAnnouncement(storage) {
@@ -44,7 +49,7 @@
     const overlay = document.createElement('div');
     overlay.className = 'whats-new-overlay modal-overlay';
     overlay.innerHTML = `
-      <section class="whats-new-dialog" role="dialog" aria-modal="true" aria-labelledby="whats-new-title" aria-describedby="whats-new-description">
+      <section class="whats-new-dialog" role="dialog" aria-modal="true" aria-labelledby="whats-new-title" aria-describedby="whats-new-description" tabindex="-1">
         <button type="button" class="whats-new-close" aria-label="Dismiss New Project View">&times;</button>
         <header class="whats-new-header">
           <div class="whats-new-kicker">What's new</div>
@@ -53,15 +58,17 @@
         </header>
         <div class="whats-new-stage">
           <img class="whats-new-image" draggable="false">
-          <button type="button" class="whats-new-arrow whats-new-arrow--previous" aria-label="Previous screenshot">&#8249;</button>
-          <button type="button" class="whats-new-arrow whats-new-arrow--next" aria-label="Next screenshot">&#8250;</button>
         </div>
         <footer class="whats-new-footer">
           <div class="whats-new-slide-copy">
             <div class="whats-new-caption" aria-live="polite"></div>
             <div class="whats-new-dots" role="group" aria-label="Choose a screenshot"></div>
           </div>
-          <button type="button" class="whats-new-dismiss">Dismiss</button>
+          <div class="whats-new-actions">
+            <button type="button" class="whats-new-arrow whats-new-arrow--previous" aria-label="Previous screenshot">&#8249;</button>
+            <button type="button" class="whats-new-arrow whats-new-arrow--next" aria-label="Next screenshot">&#8250;</button>
+            <button type="button" class="whats-new-dismiss">Dismiss</button>
+          </div>
         </footer>
       </section>`;
 
@@ -118,7 +125,10 @@
     document.addEventListener('keydown', onKeyDown);
     document.body.appendChild(overlay);
     renderSlide(0);
-    overlay.querySelector('.whats-new-dismiss').focus();
+    // Focus the dialog, not Dismiss: nothing has been clicked yet, so a
+    // focused button would open with its keyboard focus ring showing.
+    // Escape and the arrow keys work from here, and Tab enters the dialog.
+    overlay.querySelector('.whats-new-dialog').focus();
     return overlay;
   }
 

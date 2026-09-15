@@ -24,9 +24,22 @@
       return `<input type="text" class="settings-input" data-config-input aria-label="${esc(field.label)}" placeholder="${esc(field.placeholder || '')}" value="${esc(value)}"${suggest ? ` list="${listId(field)}"` : ''}>` +
         (suggest ? `<datalist id="${listId(field)}">${(field.suggestions || []).map(name => `<option value="${esc(name)}"></option>`).join('')}</datalist>` : '');
     }
-    container.innerHTML = fields.map(field => `<div class="settings-field${field.wide || field.type === 'permission' ? ' settings-field-wide' : ''}" data-config-field="${field.key}">
+    const fieldRow = field => `<div class="settings-field${field.wide || field.type === 'permission' ? ' settings-field-wide' : ''}" data-config-field="${field.key}">
       <div class="settings-field-info"><span class="settings-label">${esc(field.label)}</span>${field.description ? `<div class="settings-description">${esc(field.description)}</div>` : ''}${inherit ? '<div class="session-config-inheritance"></div>' : ''}${field.modelField ? '<div class="session-config-note" hidden></div>' : ''}</div>
-      <div class="settings-field-control">${control(field)}</div></div>`).join('');
+      <div class="settings-field-control">${control(field)}</div></div>`;
+    // Optional settings without a value wait behind "More options". Revealing
+    // them is one-way, so a field typed into can never be tucked away again.
+    const behindMore = new Set(SessionConfig.fieldsBehindMore(runtime, values));
+    const tucked = fields.filter(f => behindMore.has(f.key));
+    container.innerHTML = fields.filter(f => !behindMore.has(f.key)).map(fieldRow).join('') + (tucked.length
+      ? `<button type="button" class="session-config-more-toggle"><span class="session-config-more-label">More options</span><span class="session-config-more-names">${esc(tucked.map(f => f.label).join(', '))}</span></button>` +
+        `<div class="session-config-more" hidden>${tucked.map(fieldRow).join('')}</div>`
+      : '');
+    const moreToggle = container.querySelector('.session-config-more-toggle');
+    if (moreToggle) moreToggle.onclick = () => {
+      container.querySelector('.session-config-more').hidden = false;
+      moreToggle.remove();
+    };
     function inheritance(row, field) {
       if (!inherit) return;
       const custom = keys(field).some(key => SessionConfig.own(saved, key));

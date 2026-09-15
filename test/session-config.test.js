@@ -73,6 +73,16 @@ test('scheduled launches use current folder defaults with only the selected CLI 
   assert.deepEqual(folders, ['/first', '/moved']);
 });
 
+test('optional settings wait behind More options until they hold a value', () => {
+  const empty = SessionConfig.resolveOptions('claude', {}, {});
+  assert.deepEqual(SessionConfig.fieldsBehindMore('claude', empty), ['model', 'effort', 'allowedTools', 'appendSystemPrompt', 'preLaunchCmd', 'addDirs']);
+  const filled = SessionConfig.resolveOptions('claude', { preLaunchCmd: 'aws-vault exec prod --' }, { model: 'opus' });
+  assert.deepEqual(SessionConfig.fieldsBehindMore('claude', filled), ['effort', 'allowedTools', 'appendSystemPrompt', 'addDirs'],
+    'a saved model and a folder pre-launch command stay in view');
+  assert.deepEqual(SessionConfig.fieldsBehindMore('codex', SessionConfig.resolveOptions('codex', {}, {})), ['codexModel', 'codexEffort', 'preLaunchCmd', 'addDirs']);
+  assert.ok(!SessionConfig.fieldsBehindMore('claude', empty).includes('permissionMode'), 'the main settings are never tucked away');
+});
+
 test('model and effort are per-CLI settings that default to unset', () => {
   const claude = SessionConfig.resolveOptions('claude', {}, {});
   assert.equal(claude.model, '');

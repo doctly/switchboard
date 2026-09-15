@@ -3779,6 +3779,12 @@ body { display: flex; flex-direction: column; }
 .session-config-reset { padding: 0; border: 0; background: none; color: #a8b9f0; font: inherit; cursor: pointer; }
 .session-config-reset:hover { text-decoration: underline; }
 .session-config-note { margin-top: 4px; color: #e8b04a; font-size: 11px; }
+/* "More options": a row in the form's own style that reveals the optional settings. */
+.session-config-more[hidden] { display: none !important; }
+.session-config-more-toggle { display: flex; align-items: baseline; gap: 10px; width: 100%; min-width: 0; padding: 13px 18px; border: 0; border-bottom: 1px solid rgba(255,255,255,0.035); background: rgba(255,255,255,0.02); color: #a8b9f0; font: inherit; font-size: 13px; font-weight: 600; text-align: left; cursor: pointer; }
+.session-config-more-toggle:hover { background: rgba(255,255,255,0.045); }
+.session-config-more-label { flex-shrink: 0; white-space: nowrap; }
+.session-config-more-names { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #6f6f88; font-size: 11.5px; font-weight: 400; }
 .session-config-error { color: #e36a78; font-size: 12px; margin-top: 12px; }
 
 .new-session-dialog h3 {

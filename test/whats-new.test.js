@@ -26,8 +26,8 @@ test('Project View announcement shows until it is dismissed', () => {
 });
 
 test('screenshot navigation wraps in both directions', () => {
-  assert.equal(SLIDES.length, 4);
-  assert.equal(wrappedSlideIndex(0, -1), 3);
-  assert.equal(wrappedSlideIndex(3, 1), 0);
+  assert.equal(SLIDES.length, 5);
+  assert.equal(wrappedSlideIndex(0, -1), 4);
+  assert.equal(wrappedSlideIndex(4, 1), 0);
   assert.equal(wrappedSlideIndex(1, 1), 2);
 });
