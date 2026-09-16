@@ -607,15 +607,14 @@ function sessionState(session) {
 function sessionActivity(session) {
   const id = session.sessionId;
   const alive = isSessionRunning(id);
-  // Same order as the roll-up: a session that is both unread and waiting on
-  // you reports needs-you, so the project above it does too.
+  // Unread is a reminder, so it must not hide live work or a request for input.
   if (attentionSessions.has(id)) return 'attention';
-  if (responseReadySessions.has(id)) return 'ready';
   if (alive && sessionBusyState.get(id) === true) return 'running';
+  if (responseReadySessions.has(id)) return 'ready';
   return alive ? 'idle' : '';
 }
 
-const GROUP_STATE_ORDER = ['attention', 'ready', 'running', 'idle'];
+const GROUP_STATE_ORDER = ['attention', 'running', 'ready', 'idle'];
 const GROUP_STATE_LABEL = { running: 'Working', ready: 'Finished, not read yet', attention: 'Needs you', idle: 'Open', woke: 'Back from snooze' };
 // Every class a project dot can carry: the session states plus the woke marker.
 const PROJECT_DOT_STATES = [...GROUP_STATE_ORDER, 'woke'];
@@ -631,7 +630,7 @@ function projectDotState(project) {
   return groupState(projectSessionsAll(project));
 }
 
-/** The strongest state among these sessions: needs-you beats finished beats working. */
+/** The strongest state among these sessions: needs-you beats working beats unread. */
 function groupState(sessions) {
   let best = '';
   for (const s of sessions) {
@@ -647,18 +646,38 @@ function stateDot(state, extraClass = '') {
   return `<span class="proj-dot ${state} ${extraClass}"${label ? ` title="${label}"` : ''}></span>`;
 }
 
+function applyProjectDotState(dot, state) {
+  for (const name of PROJECT_DOT_STATES) dot.classList.toggle(name, state === name);
+  if (GROUP_STATE_LABEL[state]) dot.title = GROUP_STATE_LABEL[state]; else dot.removeAttribute('title');
+}
+
+function updateProjectHeaderStatus(project) {
+  const titleLine = projectViewer?.querySelector('.ws-title-line');
+  if (!titleLine) return;
+  const state = groupState(projectSessionsAll(project));
+  const dot = titleLine.querySelector('.proj-dot--lg');
+  if (!state) dot?.remove();
+  else if (dot) applyProjectDotState(dot, state);
+  else titleLine.insertAdjacentHTML('beforeend', stateDot(state, 'proj-dot--lg'));
+}
+
 /** Roll running / attention up onto every project row, card and session row. */
 function updateProjectStatusDots() {
   const applyState = (el, state) => {
     const dot = el.querySelector(':scope > .proj-dot, :scope > .proj-status > .proj-dot, :scope > .tcard-h > .proj-dot');
     if (!dot) return;
-    for (const name of PROJECT_DOT_STATES) dot.classList.toggle(name, state === name);
-    if (GROUP_STATE_LABEL[state]) dot.title = GROUP_STATE_LABEL[state]; else dot.removeAttribute('title');
+    applyProjectDotState(dot, state);
   };
+  const project = selectedProject();
+  if (project) updateProjectHeaderStatus(project);
   const apply = (el, sessions) => applyState(el, groupState(sessions));
   document.querySelectorAll('.proj-row[data-project-id]').forEach(row => {
     const project = findTreeProject(row.dataset.projectId);
-    if (project) applyState(row, projectDotState(project));
+    if (!project) return;
+    applyState(row, projectDotState(project));
+    const subline = row.querySelector('.proj-sub');
+    const text = projectSubline(project);
+    if (subline && subline.textContent !== text) subline.textContent = text;
   });
   document.querySelectorAll('.tcard[data-track-key]').forEach(el => {
     const project = findTreeProject(el.dataset.projectId);
@@ -1035,16 +1054,7 @@ function cardSessionKey(sessions) {
  */
 function applySessionStatus(project) {
   if (!projectViewer) return;
-  const sessions = projectSessionsAll(project);
-
-  // The header dot only exists once the project has sessions.
-  const state = groupState(sessions);
-  const titleLine = projectViewer.querySelector('.ws-title-line');
-  if (titleLine) {
-    const dot = titleLine.querySelector('.proj-dot--lg');
-    if (state && !dot) titleLine.insertAdjacentHTML('beforeend', stateDot(state, 'proj-dot--lg'));
-    else if (!state && dot) dot.remove();
-  }
+  updateProjectHeaderStatus(project);
 
   const running = runningTasksFor(project);
   const badge = projectViewer.querySelector('#ws-tasks .project-task-count');

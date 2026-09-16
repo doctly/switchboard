@@ -1481,7 +1481,7 @@ body { display: flex; flex-direction: column; }
   position: absolute;
   inset: -5px 20px 0 0;
   display: none;
-  padding: 8px 0 8px 8px;
+  padding: 0;
   overflow: hidden;
 }
 
@@ -4475,15 +4475,21 @@ body { display: flex; flex-direction: column; }
   background: rgba(120,130,255,0.1);
 }
 
-/* Popovers built on .task-popover: move, project settings */
+/* Folder headings divide the combined task list into distinct sections. */
 .task-popover-group {
-  padding: 8px 8px 3px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
+  margin: 12px 0 4px;
+  padding: 8px;
+  border-top: 1px solid rgba(160,166,255,0.3);
+  background: rgba(128,136,255,0.08);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #6a6a80;
+  overflow-wrap: anywhere;
+  color: #bfc3f0;
 }
+
+.task-popover-header + .task-popover-group { margin-top: 2px; }
 
 .new-project-label {
   display: block;
@@ -6773,8 +6779,8 @@ body { display: flex; flex-direction: column; }
   -webkit-text-fill-color: transparent;
   animation: shimmer-text 3s linear infinite;
 }
-.pane-session.response-ready:not(.needs-attention) .pane-dot { display: block; background: #4fc3f7; box-shadow: 0 0 8px rgba(79,195,247,0.7); }
-.pane-session.response-ready:not(.needs-attention) .pane-title { color: #4fc3f7; font-weight: 600; }
+.pane-session.response-ready:not(.needs-attention):not(.cli-busy) .pane-dot { display: block; background: #4fc3f7; box-shadow: 0 0 8px rgba(79,195,247,0.7); }
+.pane-session.response-ready:not(.needs-attention):not(.cli-busy) .pane-title { color: #4fc3f7; font-weight: 600; }
 .pane-session.needs-attention .pane-dot { display: block; position: relative; background: #f0a050; box-shadow: none; }
 .pane-session.needs-attention .pane-dot::before,
 .pane-session.needs-attention .pane-dot::after {

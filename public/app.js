@@ -209,20 +209,13 @@ function forEachSessionItem(sessionId, fn) {
 
 // Central activity dispatcher
 function setActivity(sessionId, active) {
-  // response-ready normally stays latched until the user looks at the session.
-  // A fresh busy signal is stronger evidence, though: OSC progress clear can
-  // briefly report idle between progress runs, and the next title frame or
-  // progress start must be able to put the session straight back into running.
-  if (active && responseReadySessions.has(sessionId)) {
-    responseReadySessions.delete(sessionId);
-    forEachSessionItem(sessionId, item => item.classList.remove('response-ready'));
-  }
-
-  if (responseReadySessions.has(sessionId)) {
-    return;
-  }
-
   const wasActive = sessionBusyState.get(sessionId) || false;
+  // A new turn clears the previous unread response. Repeated busy signals
+  // during that turn preserve a manual "Mark as unread" reminder.
+  if (active && !wasActive && responseReadySessions.has(sessionId)) {
+    responseReadySessions.delete(sessionId);
+  }
+
   sessionBusyState.set(sessionId, active);
   if (active && typeof hideSessionHoverPreview === 'function') hideSessionHoverPreview(sessionId);
   // A turn is starting: pin the row where it is until the turn ends.
@@ -236,17 +229,14 @@ function setActivity(sessionId, active) {
     // Activity ended → response-ready if user isn't looking at this session
     if (sessionId !== activeSessionId) {
       responseReadySessions.add(sessionId);
-      forEachSessionItem(sessionId, item => {
-        item.classList.remove('cli-busy');
-        item.classList.add('response-ready');
-      });
     }
   }
 
-  // Sync cli-busy class (only if not response-ready)
-  if (!responseReadySessions.has(sessionId)) {
-    forEachSessionItem(sessionId, item => item.classList.toggle('cli-busy', active));
-  }
+  // Activity and unread are independent: a reminder must not stop the spinner.
+  forEachSessionItem(sessionId, item => {
+    item.classList.toggle('cli-busy', active);
+    item.classList.toggle('response-ready', responseReadySessions.has(sessionId));
+  });
   // The Projects tab rolls working / finished / needs-you up onto its rows.
   if (typeof updateProjectStatusDots === 'function') updateProjectStatusDots();
   saveSessionNotices();
@@ -259,17 +249,11 @@ function clearUnread(sessionId) {
   saveSessionNotices();
 }
 
-// User-initiated: put a session back into the response-ready state, as if
-// Claude had just finished a turn the user hasn't looked at yet. Mirrors the
-// busy→idle transition in setActivity so the sidebar re-renders consistently.
+// User-initiated reminder; it does not change what the process is doing.
 function markUnread(sessionId) {
   if (responseReadySessions.has(sessionId)) return;
   responseReadySessions.add(sessionId);
-  sessionBusyState.set(sessionId, false);
-  forEachSessionItem(sessionId, item => {
-    item.classList.remove('cli-busy');
-    item.classList.add('response-ready');
-  });
+  forEachSessionItem(sessionId, item => item.classList.add('response-ready'));
   if (typeof updateProjectStatusDots === 'function') updateProjectStatusDots();
   saveSessionNotices();
 }
@@ -482,8 +466,8 @@ window.api.onTerminalNotification((sessionId, message, kind) => {
     // A completion notification is authoritative even if a quick turn never
     // produced a busy frame, or its busy state arrived under a temporary ID.
     // Active sessions are already being viewed, so they only need to go idle.
-    if (sessionId === activeSessionId) setActivity(sessionId, false);
-    else markUnread(sessionId);
+    setActivity(sessionId, false);
+    if (sessionId !== activeSessionId) markUnread(sessionId);
   }
 
   // Show in header if active
