@@ -3317,6 +3317,28 @@ body { display: flex; flex-direction: column; }
   font-size: 10px;
 }
 
+.task-row-detail.task-row-error {
+  color: #e58a94;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+.task-row-log {
+  align-self: flex-start;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: #aeb4ff;
+  font: inherit;
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.task-row-log:hover { color: #d2d5ff; }
+.task-row-log:focus-visible { outline: 2px solid #8088ff; outline-offset: 2px; border-radius: 2px; }
+
 .task-row-state {
   flex: 0 0 auto;
   color: #77778d;
@@ -4490,6 +4512,15 @@ body { display: flex; flex-direction: column; }
 }
 
 .task-popover-header + .task-popover-group { margin-top: 2px; }
+
+.task-popover-inherited {
+  margin-top: 3px;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  color: #969ab8;
+}
 
 .new-project-label {
   display: block;

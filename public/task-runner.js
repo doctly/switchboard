@@ -156,12 +156,20 @@ function renderTaskPopover(project, popover) {
   for (const task of project.tasks || []) {
     // A project's menu combines several folders; each task remembers its own.
     const taskPath = task.projectPath || project.projectPath;
-    if (task.groupLabel && task.groupLabel !== lastGroup) {
+    const source = task.taskSource;
+    if ((task.groupLabel || source?.inherited) && taskPath !== lastGroup) {
       const group = document.createElement('div');
       group.className = 'task-popover-group';
-      group.textContent = task.groupLabel;
+      group.textContent = task.groupLabel || pathBasename(taskPath);
+      if (source?.inherited) {
+        const inherited = document.createElement('div');
+        inherited.className = 'task-popover-inherited';
+        inherited.textContent = `Inherited from ${pathBasename(source.parentPath)}`;
+        inherited.title = source.filePath;
+        group.appendChild(inherited);
+      }
       popover.appendChild(group);
-      lastGroup = task.groupLabel;
+      lastGroup = taskPath;
     }
     const row = document.createElement('div');
     row.className = 'task-popover-row';
@@ -176,16 +184,32 @@ function renderTaskPopover(project, popover) {
     name.className = 'task-row-name';
     name.textContent = task.label;
     const detail = document.createElement('span');
-    detail.className = 'task-row-detail';
-    detail.textContent = task.error || task.detail || (task.type === 'compound' ? 'Compound task' : task.type);
+    const failed = task.run?.state === 'failed';
+    detail.className = 'task-row-detail' + (failed ? ' task-row-error' : '');
+    detail.textContent = failed
+      ? (task.run.error || (task.run.exitCode != null ? `Task exited with code ${task.run.exitCode}.` : 'Task failed.'))
+      : (task.error || task.detail || (task.type === 'compound' ? 'Compound task' : task.type));
     copy.append(name, detail);
+    if (failed) {
+      const viewLog = document.createElement('button');
+      viewLog.type = 'button';
+      viewLog.className = 'task-row-log';
+      viewLog.textContent = 'View log';
+      viewLog.setAttribute('aria-label', `View log for ${task.label}`);
+      viewLog.addEventListener('click', async event => {
+        event.stopPropagation();
+        closeTaskPopover();
+        await showTaskLog(taskPath, task.label);
+      });
+      copy.appendChild(viewLog);
+    }
 
     const state = document.createElement('span');
     state.className = `task-row-state ${task.run?.state || ''}`;
     state.textContent = taskStateText(task.run);
     const action = document.createElement('button');
     action.className = `task-row-action${task.run?.running ? ' stop' : ''}`;
-    action.title = task.run?.running ? `Stop ${task.label}` : `Run ${task.label}`;
+    action.title = task.run?.running ? `Stop ${task.label}` : `${failed ? 'Retry' : 'Run'} ${task.label}`;
     action.innerHTML = task.run?.running
       ? '<svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>'
       : '<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.8a1 1 0 0 1 1.52-.85l8 5.2a1 1 0 0 1 0 1.7l-8 5.2A1 1 0 0 1 4 13.2V2.8Z"/></svg>';
