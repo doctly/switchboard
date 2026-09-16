@@ -1606,9 +1606,8 @@ function startItemRows(project, track, prompt, planItem) {
     options.planItem = planItem;
     launchNewSession(target, options);
   };
-  const where = track ? track.name : (project.defaultCwd ? pathBasename(project.defaultCwd) : 'project folder');
   return [
-    { label: 'Claude', icon: ICONS.claude(14), hint: `in ${where}`, onClick: () => launch('claude') },
+    { label: 'Claude', icon: ICONS.claude(14), onClick: () => launch('claude') },
     { label: 'Codex', icon: ICONS.codex(14, 'codex-icon'), onClick: () => launch('codex') },
   ];
 }
@@ -3001,15 +3000,10 @@ function terminalLaunchItems(project, target) {
     .filter((path, index, all) => path && all.indexOf(path) === index);
 
   return paths.map(projectPath => {
-    let where = 'project folder';
-    if (projectPath !== project.root) {
-      const attached = (project.folders || []).find(f => f.path === projectPath);
-      where = attached ? shortProjectPath(attached.path) : shortProjectPath(projectPath);
-    }
     return {
       label: 'Terminal',
       icon: ICONS.terminal(14),
-      hint: `in ${where}`,
+      hint: projectPath === project.root ? '' : `in ${shortProjectPath(projectPath)}`,
       onClick: () => launchTerminalSession({ ...target, projectPath }),
     };
   });
@@ -3017,9 +3011,8 @@ function terminalLaunchItems(project, target) {
 
 function newSessionItems(project, track) {
   const target = launchTargetFor(project, track);
-  const where = track ? track.name : (project.defaultCwd ? pathBasename(project.defaultCwd) : 'project folder');
   return [
-    { label: 'Claude', icon: ICONS.claude(14), hint: `in ${where}`, onClick: async () => { const o = await resolveDefaultSessionOptions(target); o.runtime = 'claude'; launchNewSession(target, o); } },
+    { label: 'Claude', icon: ICONS.claude(14), onClick: async () => { const o = await resolveDefaultSessionOptions(target); o.runtime = 'claude'; launchNewSession(target, o); } },
     { label: 'Codex', icon: ICONS.codex(14, 'codex-icon'), onClick: async () => { const o = await resolveDefaultSessionOptions(target); o.runtime = 'codex'; launchNewSession(target, o); } },
     ...terminalLaunchItems(project, target),
     { sep: true },
@@ -3074,6 +3067,22 @@ function askRepoMode(folderPath, info) {
   });
 }
 
+/** "Stop all", with what it would stop, shown only when something is running. */
+function stopAllMenuItems(project) {
+  const running = runningWorkInProject(project);
+  if (!anyRunningWork(running)) return [];
+  const parts = [];
+  if (running.sessions.length) parts.push(`${running.sessions.length} session${running.sessions.length === 1 ? '' : 's'}`);
+  if (running.tasks.length) parts.push(`${running.tasks.length} task${running.tasks.length === 1 ? '' : 's'}`);
+  if (running.busy.length) parts.push(`${running.busy.length} working`);
+  return [{
+    label: 'Stop all',
+    icon: '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>',
+    hint: parts.join(', '),
+    onClick: () => stopAllInProject(project),
+  }];
+}
+
 function projectMenuItems(project, { fromPage = false } = {}) {
   const isDone = project.status === 'done';
   return [
@@ -3088,6 +3097,7 @@ function projectMenuItems(project, { fromPage = false } = {}) {
     { label: 'Open project folder', icon: PICONS.open(14), onClick: () => window.api.openPath(project.root) },
     { sep: true },
     ...snoozeMenuItems(project),
+    ...stopAllMenuItems(project),
     { label: isDone ? 'Reopen project' : 'Mark as done', icon: PICONS.check(14), onClick: () => toggleProjectDone(project) },
     { label: 'Remove project…', icon: PICONS.trash(14), danger: true, onClick: () => removeProjectFlow(project) },
   ].filter(Boolean);
@@ -3188,10 +3198,10 @@ function sessionMenuItems(session) {
     ? { ...launchTargetFor(info.project, (info.project.tracks || []).find(t => t.id === session.trackId) || null), projectPath: session.projectPath }
     : folder;
   const sessionActions = [
+    session.type !== 'terminal' && !running ? { label: 'Resume with config…', icon: ICONS.launchConfig(14), onClick: () => showResumeSessionDialog(session) } : null,
     session.type !== 'terminal' ? { label: 'Fork', icon: PICONS.fork(14), onClick: () => forkSession(session, forkTarget) } : null,
     session.type !== 'terminal' ? { label: unread ? 'Mark as read' : 'Mark as unread', icon: unread ? ICONS.markRead(14) : ICONS.markUnread(14), onClick: () => { if (unread) clearUnread(session.sessionId); else markUnread(session.sessionId); refreshSidebar(); } } : null,
     session.type !== 'terminal' ? { label: 'View messages', icon: PICONS.messages(14), onClick: () => showJsonlViewer(session) } : null,
-    session.type !== 'terminal' && !running ? { label: 'Resume with config…', icon: ICONS.launchConfig(14), onClick: () => showResumeSessionDialog(session) } : null,
   ].filter(Boolean);
   const stateActions = [
     { label: 'Copy session ID', onClick: () => window.api.writeClipboard(session.sessionId) },
@@ -3360,28 +3370,58 @@ function runningWorkInProject(project) {
   const sessions = projectSessionsAll(project).filter(s => isSessionRunning(s.sessionId));
   const pseudo = typeof taskPseudoProject === 'function' ? taskPseudoProject(project) : null;
   const tasks = (pseudo?.tasks || []).filter(t => t.run?.running);
-  return { sessions, tasks };
+  // Mid-turn sessions are the ones where stopping interrupts real work, so
+  // they are called out separately from ones merely sitting at a prompt.
+  const busy = sessions.filter(s => typeof sessionBusyState !== 'undefined' && sessionBusyState.get(s.sessionId) === true);
+  return { sessions, tasks, busy };
+}
+
+function anyRunningWork(running) {
+  return running.sessions.length > 0 || running.tasks.length > 0;
+}
+
+/** Stop every running session and task in one project. */
+async function stopRunningWork(running) {
+  for (const session of running.sessions) {
+    try { await window.api.stopSession(session.sessionId); } catch {}
+    activePtyIds.delete(session.sessionId);
+  }
+  for (const task of running.tasks) {
+    try { await window.api.stopTask(task.projectPath, task.label); } catch {}
+  }
+  pollActiveSessions();
 }
 
 /**
- * Warn before marking a project done while work is still running: going ahead
- * stops all of it. Resolves true to proceed, false to leave the project active.
+ * Warn before stopping a project's running work, either on its own ("Stop
+ * all") or as part of marking the project done. Mid-turn sessions are called
+ * out, since stopping those interrupts work in progress. Resolves true to go
+ * ahead, false to leave everything as it is.
  */
-function confirmProjectDone(project, running, schedules = []) {
+function confirmStopWork(project, running, { schedules = [], markDone = false } = {}) {
   const parts = [];
   if (running.sessions.length) parts.push(`${running.sessions.length} running session${running.sessions.length === 1 ? '' : 's'}`);
   if (running.tasks.length) parts.push(`${running.tasks.length} running task${running.tasks.length === 1 ? '' : 's'}`);
   const stopping = parts.length > 0;
+  const busyIds = new Set((running.busy || []).map(s => s.sessionId));
   const all = [
-    ...running.sessions.map(s => sessionTitle(s)),
+    ...running.sessions.map(s => busyIds.has(s.sessionId) ? `${sessionTitle(s)}  · working` : sessionTitle(s)),
     ...running.tasks.map(t => t.label),
     ...schedules.map(s => `${s.name} (scheduled, will pause)`),
   ];
+  const busyNote = busyIds.size
+    ? ` ${busyIds.size} session${busyIds.size === 1 ? ' is' : 's are'} mid-turn; stopping interrupts work in progress.`
+    : '';
   const scheduleNote = schedules.length
     ? ` ${schedules.length} scheduled task${schedules.length === 1 ? '' : 's'} will pause until the project is reopened.`
     : '';
+  const lead = markDone ? 'Marking the project done stops all of it.' : '';
   const names = all.slice(0, 8);
   const more = all.length - names.length;
+  const title = stopping
+    ? `Stop ${parts.join(' and ')} in ${project.name}?`
+    : `Mark ${project.name} as done?`;
+  const confirmLabel = markDone ? (stopping ? 'Stop and mark as done' : 'Mark as done') : 'Stop all';
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     overlay.className = 'add-project-overlay';
@@ -3391,12 +3431,12 @@ function confirmProjectDone(project, running, schedules = []) {
     dialog.setAttribute('aria-modal', 'true');
     dialog.setAttribute('aria-labelledby', 'done-running-title');
     dialog.innerHTML = `
-      <h3 id="done-running-title">${stopping ? `Stop ${escapeHtml(parts.join(' and '))} in ${escapeHtml(project.name)}?` : `Mark ${escapeHtml(project.name)} as done?`}</h3>
-      <div class="add-project-hint">${stopping ? 'Marking the project done stops all of it.' : ''}${escapeHtml(scheduleNote)}</div>
+      <h3 id="done-running-title">${escapeHtml(title)}</h3>
+      <div class="add-project-hint">${escapeHtml(lead + busyNote + scheduleNote)}</div>
       <div class="np-tree mono done-running-list">${names.map(n => `<span class="np-tree-item">${escapeHtml(n)}</span>`).join('')}${more > 0 ? `<span class="np-tree-item"><em>+ ${more} more</em></span>` : ''}</div>
       <div class="add-project-actions">
         <button class="add-project-cancel-btn" type="button">Cancel</button>
-        <button class="add-project-add-btn" type="button">${stopping ? 'Stop and mark as done' : 'Mark as done'}</button>
+        <button class="add-project-add-btn" type="button">${escapeHtml(confirmLabel)}</button>
       </div>`;
     const finish = value => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(value); };
     const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); finish(false); } };
@@ -3429,21 +3469,23 @@ async function toggleProjectDone(project) {
     // Schedules do not need stopping — a done project simply stops firing
     // them — but the user should hear that before it happens.
     const schedules = schedulesForProject(project).filter(s => s.enabled);
-    if (running.sessions.length || running.tasks.length || schedules.length) {
-      if (!await confirmProjectDone(project, running, schedules)) return;
-      for (const session of running.sessions) {
-        try { await window.api.stopSession(session.sessionId); } catch {}
-        activePtyIds.delete(session.sessionId);
-      }
-      for (const task of running.tasks) {
-        try { await window.api.stopTask(task.projectPath, task.label); } catch {}
-      }
-      pollActiveSessions();
+    if (anyRunningWork(running) || schedules.length) {
+      if (!await confirmStopWork(project, running, { schedules, markDone: true })) return;
+      await stopRunningWork(running);
     }
   }
   const result = await window.api.updateProject(project.id, { status: isDone ? 'active' : 'done' });
   if (result?.error) { alert(result.error); return; }
   if (!isDone && result.worktrees?.length) await offerWorktreeRemoval(project, result.worktrees);
+  loadProjects();
+}
+
+/** Stop every running session and task in a project, after confirming. */
+async function stopAllInProject(project) {
+  const running = runningWorkInProject(project);
+  if (!anyRunningWork(running)) return;
+  if (!await confirmStopWork(project, running)) return;
+  await stopRunningWork(running);
   loadProjects();
 }
 

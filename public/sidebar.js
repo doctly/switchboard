@@ -718,8 +718,8 @@ function bindSessionListEvents(container) {
             { label: 'View messages', onClick: () => showJsonlViewer(session) },
             { label: 'Move to project…', onClick: () => showMovePopover(session, moreBtn) },
           );
-          if (!activePtyIds.has(session.sessionId)) {
-            menuItems.push({ label: 'Resume with config…', onClick: () => showResumeSessionDialog(session) });
+          if (!isSessionRunning(session.sessionId)) {
+            menuItems.unshift({ label: 'Resume with config…', onClick: () => showResumeSessionDialog(session) });
           }
         }
         if (isDismissibleSession(session.sessionId)) {
