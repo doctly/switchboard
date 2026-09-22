@@ -1391,6 +1391,16 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       let claudeCmd = harness.binary;
       if (cliArgs.length) claudeCmd += ' ' + quoteArgvForShell(shell, cliArgs);
 
+      // customArgs is raw shell too, like preLaunchCmd below: the user's shell
+      // does the quoting, e.g. --settings '{"outputStyle": "Learning"}'
+      if (sessionOptions?.customArgs) {
+        const custom = String(sessionOptions.customArgs);
+        if (/[\r\n]/.test(custom)) {
+          return { ok: false, error: 'customArgs must not contain newlines' };
+        }
+        claudeCmd += ' ' + custom;
+      }
+
       // preLaunchCmd is raw shell by design (e.g. "aws-vault exec profile --") — block newlines only
       if (sessionOptions?.preLaunchCmd) {
         const pre = String(sessionOptions.preLaunchCmd);

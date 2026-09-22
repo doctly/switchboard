@@ -1347,7 +1347,7 @@ function legacyScheduleConfig(cli = {}) {
     addDirs: cli['add-dirs'] || '',
     dangerouslySkipPermissions: false,
     worktree: false, worktreeName: '', chrome: false, mcpEmulation: false,
-    preLaunchCmd: '',
+    preLaunchCmd: '', customArgs: '',
     // The old runner passed --model. Effort did not exist, so it is pinned
     // unset rather than picking up a folder default the old run never had.
     model: cli.model || '',
