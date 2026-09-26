@@ -5520,6 +5520,32 @@ body { display: flex; flex-direction: column; }
   text-transform: none;
 }
 
+.git-heading-right { display: flex; align-items: center; gap: 10px; }
+
+/* List/tree switch for the Changes section, styled like .pane-seg. */
+.git-view-toggle {
+  display: inline-flex;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.git-view-btn {
+  width: 22px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #7a7a90;
+  cursor: pointer;
+}
+
+.git-view-btn:hover { color: #b0b0c4; }
+.git-view-btn.on { background: rgba(120,130,255,0.16); color: #a6abff; }
+
 .git-changes {
   display: grid;
   grid-template-columns: minmax(230px, 34%) minmax(0, 1fr);
@@ -5557,6 +5583,35 @@ body { display: flex; flex-direction: column; }
 
 .git-file-row:hover { background: rgba(255,255,255,0.035); }
 .git-file-row.selected { background: rgba(122,132,255,0.11); }
+
+/* Tree mode: compact single-line file rows and folder rows, both indented by depth. */
+.git-file-row.tree {
+  align-items: center;
+  padding: 5px 10px 5px calc(10px + var(--depth, 0) * 14px);
+}
+
+.git-file-row.tree .git-file-path { flex: 1; min-width: 0; }
+
+.git-folder-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  padding: 6px 10px 6px calc(10px + var(--depth, 0) * 14px);
+  background: transparent;
+  color: #9a9ab0;
+  font-family: inherit;
+  font-size: 10.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.git-folder-row:hover { background: rgba(255,255,255,0.035); }
+.git-folder-chevron { display: inline-flex; flex-shrink: 0; color: #6f6f84; }
+.git-folder-icon { display: inline-flex; flex-shrink: 0; color: #7d8dc9; }
+.git-folder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-folder-count { flex-shrink: 0; color: #5c5c70; font-size: 9.5px; }
 
 .git-file-code {
   width: 17px;

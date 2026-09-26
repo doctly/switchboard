@@ -3,6 +3,19 @@
 
 const projectGitTabState = new Map();
 
+// 'list' or 'tree'; one preference for every project, like DIFF_MODE_KEY.
+const GIT_CHANGES_VIEW_KEY = 'gitChangesView';
+
+function gitChangesViewMode() {
+  let stored = null;
+  try { stored = localStorage.getItem(GIT_CHANGES_VIEW_KEY); } catch {}
+  return stored === 'tree' ? 'tree' : 'list';
+}
+
+function setGitChangesViewMode(mode) {
+  try { localStorage.setItem(GIT_CHANGES_VIEW_KEY, mode); } catch {}
+}
+
 function gitTabState(projectId) {
   if (!projectGitTabState.has(projectId)) {
     projectGitTabState.set(projectId, {
@@ -10,11 +23,17 @@ function gitTabState(projectId) {
       selectedRepo: null,
       selectedFiles: new Map(),
       diffs: new Map(),
+      collapsedFolders: new Map(), // repo path -> Set of collapsed tree folder keys
       request: 0,
       error: '',
     });
   }
   return projectGitTabState.get(projectId);
+}
+
+function gitCollapsedSet(state, repoPath) {
+  if (!state.collapsedFolders.has(repoPath)) state.collapsedFolders.set(repoPath, new Set());
+  return state.collapsedFolders.get(repoPath);
 }
 
 function gitRepoName(repo) {
@@ -136,7 +155,116 @@ function paintGitDiff(project, state, repo, body, change) {
     : `<div class="git-diff-title mono">${escapeHtml(change.path)}</div><div class="git-diff-empty">No textual diff is available.</div>`;
 }
 
-function paintGitChanges(project, state, repo, body) {
+function gitNaturalCompare(a, b) {
+  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+}
+
+// Folders before files; a folder whose only child is a folder is merged into
+// one row ("src/app"), like VS Code's compact folders.
+function gitSortTreeLevel(nodes) {
+  const sorted = nodes.map((node) => {
+    if (node.kind !== 'folder') return node;
+    let name = node.name;
+    let children = gitSortTreeLevel(node.children);
+    while (children.length === 1 && children[0].kind === 'folder') {
+      name = `${name}/${children[0].name}`;
+      children = children[0].children;
+    }
+    return { kind: 'folder', name, children };
+  });
+  sorted.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
+    return gitNaturalCompare(a.name, b.name);
+  });
+  return sorted;
+}
+
+// Git reports paths with '/' on every platform; renames sit at their new path.
+function buildGitChangeTree(changes) {
+  const root = new Map();
+  for (const change of changes) {
+    const parts = String(change.path || '').split('/').filter(Boolean);
+    let level = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const part = parts[i];
+      let node = level.get(part);
+      if (!node || node.kind !== 'folder') {
+        node = { kind: 'folder', name: part, children: new Map() };
+        level.set(part, node);
+      }
+      level = node.children;
+    }
+    const fileName = parts[parts.length - 1] || change.path;
+    level.set(`\0${fileName}`, { kind: 'file', name: fileName, change });
+  }
+  const toArray = (map) => [...map.values()].map(node => node.kind === 'folder' ? { ...node, children: toArray(node.children) } : node);
+  return gitSortTreeLevel(toArray(root));
+}
+
+function gitTreeFileCount(node) {
+  let count = 0;
+  for (const child of node.children) count += child.kind === 'file' ? 1 : gitTreeFileCount(child);
+  return count;
+}
+
+// Visible rows in display order; collapsed folders keep their own row only.
+function gitTreeRows(tree, collapsedSet, keyPrefix, depth = 0) {
+  const rows = [];
+  for (const node of tree) {
+    const key = keyPrefix ? `${keyPrefix}/${node.name}` : node.name;
+    if (node.kind === 'folder') {
+      const collapsed = collapsedSet.has(key);
+      rows.push({ kind: 'folder', depth, name: node.name, key, count: gitTreeFileCount(node), collapsed });
+      if (!collapsed) rows.push(...gitTreeRows(node.children, collapsedSet, key, depth + 1));
+    } else {
+      rows.push({ kind: 'file', depth, name: node.name, key, change: node.change });
+    }
+  }
+  return rows;
+}
+
+function createGitFileRow(project, state, repo, body, list, change, isSelected, opts) {
+  const tree = !!(opts && opts.tree);
+  const row = document.createElement('button');
+  row.type = 'button';
+  row.className = 'git-file-row' + (tree ? ' tree' : '') + (isSelected ? ' selected' : '');
+  if (tree) row.style.setProperty('--depth', String(opts.depth || 0));
+  const renamed = change.oldPath ? `${change.oldPath} → ${change.path}` : change.path;
+  row.title = tree ? `${renamed}\n${gitChangeMeta(change)}` : renamed;
+  row.innerHTML = tree
+    ? `<span class="git-file-code ${escapeHtml(change.status)}">${gitChangeCode(change)}</span><span class="git-file-path mono">${escapeHtml(pathBasename(change.path) || change.path)}</span>`
+    : `<span class="git-file-code ${escapeHtml(change.status)}">${gitChangeCode(change)}</span>
+        <span class="git-file-text"><span class="git-file-path mono">${escapeHtml(change.path)}</span><span class="git-file-meta">${escapeHtml(gitChangeMeta(change))}</span></span>`;
+  row.onclick = () => {
+    state.selectedFiles.set(repo.path, change.path);
+    list.querySelectorAll('.git-file-row').forEach(el => el.classList.toggle('selected', el === row));
+    paintGitDiff(project, state, repo, body, change);
+  };
+  return row;
+}
+
+function createGitFolderRow(project, state, repo, body, collapsedSet, row) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'git-folder-row';
+  button.dataset.key = row.key;
+  button.style.setProperty('--depth', String(row.depth));
+  button.setAttribute('aria-expanded', row.collapsed ? 'false' : 'true');
+  button.innerHTML = `
+    <span class="git-folder-chevron">${row.collapsed ? PICONS.chevronRight(11) : PICONS.chevronDown(11)}</span>
+    <span class="git-folder-icon">${PICONS.folder(13)}</span>
+    <span class="git-folder-name mono">${escapeHtml(row.name)}</span>
+    ${row.count ? `<span class="git-folder-count">${row.count}</span>` : ''}`;
+  button.onclick = () => {
+    if (collapsedSet.has(row.key)) collapsedSet.delete(row.key); else collapsedSet.add(row.key);
+    paintGitChanges(project, state, repo, body, { repaintDiff: false });
+    // The list was rebuilt, so put keyboard focus back on the new copy of this row.
+    [...body.querySelectorAll('.git-folder-row')].find(el => el.dataset.key === row.key)?.focus();
+  };
+  return button;
+}
+
+function paintGitChanges(project, state, repo, body, { repaintDiff = true } = {}) {
   const list = body.querySelector('#git-file-list');
   if (!list) return;
   const groupOrder = ['conflicted', 'modified', 'added', 'deleted', 'renamed', 'untracked'];
@@ -148,6 +276,9 @@ function paintGitChanges(project, state, repo, body) {
   let selected = repo.changes.find(change => change.path === selectedPath) || repo.changes[0] || null;
   if (selected) state.selectedFiles.set(repo.path, selected.path);
 
+  const tree = gitChangesViewMode() === 'tree';
+  const collapsedSet = gitCollapsedSet(state, repo.path);
+
   list.replaceChildren();
   for (const kind of groupOrder) {
     const changes = repo.changes.filter(change => change.status === kind);
@@ -156,24 +287,27 @@ function paintGitChanges(project, state, repo, body) {
     label.className = 'git-file-group';
     label.textContent = groupLabels[kind];
     list.appendChild(label);
-    for (const change of changes) {
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'git-file-row' + (selected?.path === change.path ? ' selected' : '');
-      row.title = change.oldPath ? `${change.oldPath} → ${change.path}` : change.path;
-      row.innerHTML = `
-        <span class="git-file-code ${escapeHtml(change.status)}">${gitChangeCode(change)}</span>
-        <span class="git-file-text"><span class="git-file-path mono">${escapeHtml(change.path)}</span><span class="git-file-meta">${escapeHtml(gitChangeMeta(change))}</span></span>`;
-      row.onclick = () => {
-        selected = change;
-        state.selectedFiles.set(repo.path, change.path);
-        list.querySelectorAll('.git-file-row').forEach(el => el.classList.toggle('selected', el === row));
-        paintGitDiff(project, state, repo, body, change);
-      };
-      list.appendChild(row);
+
+    if (!tree) {
+      for (const change of changes) {
+        list.appendChild(createGitFileRow(project, state, repo, body, list, change, selected?.path === change.path, { tree: false }));
+      }
+      continue;
+    }
+    for (const row of gitTreeRows(buildGitChangeTree(changes), collapsedSet, kind)) {
+      if (row.kind === 'folder') list.appendChild(createGitFolderRow(project, state, repo, body, collapsedSet, row));
+      else list.appendChild(createGitFileRow(project, state, repo, body, list, row.change, selected?.path === row.change.path, { tree: true, depth: row.depth }));
     }
   }
-  paintGitDiff(project, state, repo, body, selected);
+  if (repaintDiff) paintGitDiff(project, state, repo, body, selected);
+}
+
+function gitViewToggleHtml(mode) {
+  const btn = (view, label, icon) => `<button type="button" class="git-view-btn${mode === view ? ' on' : ''}" data-view="${view}" title="${label}" aria-label="${label}" aria-pressed="${mode === view}">${icon}</button>`;
+  return `<span class="git-view-toggle" role="group" aria-label="Changes view">
+    ${btn('list', 'View as list', PICONS.list(13))}
+    ${btn('tree', 'View as tree', PICONS.tree(13))}
+  </span>`;
 }
 
 function gitCommitsHtml(repo) {
@@ -216,7 +350,7 @@ function paintGitRepository(project, state, body) {
         ${picker}
         ${gitOverviewHtml(repo)}
         <section class="git-section">
-          <div class="git-section-heading"><span>Changes</span><span class="git-section-meta">${changed ? `${changed} file${changed === 1 ? '' : 's'}` : 'Working tree clean'}</span></div>
+          <div class="git-section-heading"><span>Changes</span><span class="git-heading-right">${changed ? gitViewToggleHtml(gitChangesViewMode()) : ''}<span class="git-section-meta">${changed ? `${changed} file${changed === 1 ? '' : 's'}` : 'Working tree clean'}</span></span></div>
           ${changed ? '<div class="git-changes"><div class="git-file-list" id="git-file-list"></div><div class="git-diff-pane" id="git-diff-pane"></div></div>' : '<div class="git-empty-row">There are no staged, unstaged, or untracked files.</div>'}
         </section>
         <section class="git-section">
@@ -234,6 +368,20 @@ function paintGitRepository(project, state, body) {
     button.onclick = () => {
       state.selectedRepo = item.path;
       paintGitRepository(project, state, body);
+    };
+  });
+
+  body.querySelectorAll('.git-view-btn').forEach(button => {
+    button.onclick = () => {
+      setGitChangesViewMode(button.dataset.view);
+      // Read back what was stored so the buttons match what gets rendered.
+      const effective = gitChangesViewMode();
+      body.querySelectorAll('.git-view-btn').forEach(btn => {
+        const on = btn.dataset.view === effective;
+        btn.classList.toggle('on', on);
+        btn.setAttribute('aria-pressed', String(on));
+      });
+      paintGitChanges(project, state, repo, body, { repaintDiff: false });
     };
   });
 }
