@@ -21,6 +21,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const git = require('./git');
+const gitGraphService = require('./git-graph-service');
 const planParser = require('./public/plan-parser');
 const sessionConfig = require('./public/session-config');
 
@@ -1785,11 +1786,55 @@ async function projectGitDiff(projectId, folderPath, filePath) {
   return { ok: true, ...(await git.fileDiff(folder.path, filePath)) };
 }
 
+// --- Git Graph tab (read-only): every function re-checks the exact same
+// attached-folder boundary as projectGitDiff above before doing anything
+// with folderPath. Payload assembly lives one layer down in
+// git-graph-service.js; this section stays a thin boundary. ---
+
+/** Throws the same way projectGitDiff does when folderPath is not attached to projectId. */
+function requireAttachedFolder(projectId, folderPath) {
+  if (!db.getProject(projectId)) throw new Error('Project not found');
+  const folder = db.listProjectFolders(projectId).find(item => item.path === folderPath);
+  if (!folder) throw new Error('Repository is not attached to this project');
+  return folder;
+}
+
+/** Commits+refs+stashes+uncommitted for the Git Graph tab, paged. */
+async function projectGitGraph(projectId, folderPath, opts) {
+  const folder = requireAttachedFolder(projectId, folderPath);
+  gitGraphService.ensureRepoWatch(folder.path).catch(() => {});
+  return gitGraphService.getProjectGitGraph(folder.path, opts || {});
+}
+
+/** Full detail (body, file list) for one commit. */
+async function projectGitGraphCommitDetail(projectId, folderPath, hash) {
+  const folder = requireAttachedFolder(projectId, folderPath);
+  return gitGraphService.getGitGraphCommitDetail(folder.path, hash);
+}
+
+/** File list for the Comparison view between two revisions (or the working tree). */
+async function projectGitGraphCompareDetail(projectId, folderPath, fromHash, toHash) {
+  const folder = requireAttachedFolder(projectId, folderPath);
+  return gitGraphService.getGitGraphCompareDetail(folder.path, fromHash, toHash);
+}
+
+async function projectGitGraphFileAtRevision(projectId, folderPath, rev, filePath) {
+  const folder = requireAttachedFolder(projectId, folderPath);
+  return gitGraphService.getGitGraphFileAtRevision(folder.path, rev, filePath);
+}
+
+async function projectGitGraphFileDiffBetween(projectId, folderPath, fromRev, toRevOrNull, filePath) {
+  const folder = requireAttachedFolder(projectId, folderPath);
+  return gitGraphService.getGitGraphFileDiffBetween(folder.path, fromRev, toRevOrNull, filePath);
+}
+
 module.exports = {
   init,
   projectsRoot, slugify, uniqueSlug, defaultBrief,
   createProject, updateProject, deleteProject, attachFolder, detachFolder,
   folderGitStatus, folderGitInfo, projectGitInfo, projectGitDiff,
+  projectGitGraph, projectGitGraphCommitDetail, projectGitGraphCompareDetail,
+  projectGitGraphFileAtRevision, projectGitGraphFileDiffBetween,
   syncProjectBrief, syncAllProjectBriefs, saveBrief, createProjectFile, addProjectFiles, listAddedFiles, listRecentProjectFiles,
   launchContext, mergeAddDirs, worktreeParentFor,
   PROJECT_FILES, ADDED_FILES_DIR,

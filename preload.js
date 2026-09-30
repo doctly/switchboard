@@ -60,6 +60,16 @@ contextBridge.exposeInMainWorld('api', {
   getProjectGitInfo: (id) => ipcRenderer.invoke('get-project-git-info', id),
   getProjectGitDiff: (id, folderPath, filePath) => ipcRenderer.invoke('get-project-git-diff', id, folderPath, filePath),
   getFolderGitStatus: (folderPath) => ipcRenderer.invoke('get-folder-git-status', folderPath),
+
+  // Git Graph tab (read-only)
+  getProjectGitGraph: (id, folderPath, opts) => ipcRenderer.invoke('get-project-git-graph', id, folderPath, opts),
+  getGitGraphCommitDetail: (id, folderPath, hash) => ipcRenderer.invoke('get-git-graph-commit-detail', id, folderPath, hash),
+  getGitGraphCompareDetail: (id, folderPath, fromHash, toHash) => ipcRenderer.invoke('get-git-graph-compare-detail', id, folderPath, fromHash, toHash),
+  getGitGraphFileAtRevision: (id, folderPath, rev, filePath) => ipcRenderer.invoke('get-git-graph-file-at-revision', id, folderPath, rev, filePath),
+  getGitGraphFileDiffBetween: (id, folderPath, fromRev, toRevOrNull, filePath) => ipcRenderer.invoke('get-git-graph-file-diff-between', id, folderPath, fromRev, toRevOrNull, filePath),
+  onGitGraphRepoChanged: (callback) => {
+    ipcRenderer.on('git-graph-repo-changed', (_event, folderPath) => callback(folderPath));
+  },
   listEnvFiles: (folderPath) => ipcRenderer.invoke('list-env-files', folderPath),
   saveProjectBrief: (id, content) => ipcRenderer.invoke('save-project-brief', id, content),
   createProjectFile: (id, name, content) => ipcRenderer.invoke('create-project-file', id, name, content),
