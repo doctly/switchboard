@@ -20,7 +20,7 @@ function loadContext(localStorageImpl) {
     }) },
     window: { api: {} },
     escapeHtml: (str) => String(str),
-    pathBasename: (p) => String(p).split('/').filter(Boolean).pop() || '',
+    pathBasename: (p) => String(p).split(/[\\/]/).filter(Boolean).pop() || '',
     formatDate: () => 'just now',
     PICONS: {
       branch: () => '<svg data-icon="branch"></svg>',
@@ -157,11 +157,11 @@ test('a collapsed folder hides its descendants but keeps its own row', () => {
   assert.equal(bRow.count, 2);
 });
 
-test('gitChangesViewMode reads the stored mode and falls back to "list" for missing, invalid, or throwing storage', () => {
-  assert.equal(loadContext({ getItem() { return null; }, setItem() {} }).gitChangesViewMode(), 'list');
-  assert.equal(loadContext({ getItem() { return 'nonsense'; }, setItem() {} }).gitChangesViewMode(), 'list');
-  assert.equal(loadContext({ getItem() { throw new Error('blocked'); }, setItem() {} }).gitChangesViewMode(), 'list');
-  assert.equal(loadContext({ getItem() { return 'tree'; }, setItem() {} }).gitChangesViewMode(), 'tree');
+test('gitChangesViewMode reads the stored mode and falls back to "tree" for missing, invalid, or throwing storage', () => {
+  assert.equal(loadContext({ getItem() { return null; }, setItem() {} }).gitChangesViewMode(), 'tree');
+  assert.equal(loadContext({ getItem() { return 'nonsense'; }, setItem() {} }).gitChangesViewMode(), 'tree');
+  assert.equal(loadContext({ getItem() { throw new Error('blocked'); }, setItem() {} }).gitChangesViewMode(), 'tree');
+  assert.equal(loadContext({ getItem() { return 'list'; }, setItem() {} }).gitChangesViewMode(), 'list');
 });
 
 test('setGitChangesViewMode swallows a throwing localStorage', () => {
@@ -196,7 +196,7 @@ function fakeBody(list, diffPane) {
       return null;
     },
     querySelectorAll(selector) {
-      return selector === '.git-folder-row' ? list.children.filter(el => el.className === 'git-folder-row') : [];
+      return selector === '.git-folder-row' ? list.children.filter(el => String(el.className).split(' ').includes('git-folder-row')) : [];
     },
   };
 }
@@ -253,9 +253,34 @@ test("a folder row's onclick toggles its collapsed state and repaints only the l
   folderRowA.onclick();
 
   assert.equal(diffPane.innerHTML, paintedDiff);
-  assert.deepEqual(list.children.map(c => c.className), ['git-file-group', 'git-folder-row']);
+  // The selected file (a/c.js) is now hidden, so its folder is highlighted instead.
+  assert.deepEqual(list.children.map(c => c.className), ['git-file-group', 'git-folder-row selected']);
   // The rebuilt row for the same folder gets keyboard focus back.
   assert.notEqual(ctx.focused, folderRowA);
   assert.equal(ctx.focused, list.children[1]);
   assert.equal(ctx.focused.dataset.key, folderRowA.dataset.key);
+});
+
+test('tree rows show the tree node name (backslashes included) and keep the staged state visible', () => {
+  const ctx = loadContext({ getItem() { return 'tree'; }, setItem() {} });
+  const repo = { path: '/repo', changes: [change('docs/a\\b.md', { indexStatus: 'M', worktreeStatus: ' ' }), change('docs/other.md', { indexStatus: ' ', worktreeStatus: 'M' })] };
+  const list = fakeList();
+  ctx.paintGitChanges({ id: 'p' }, ctx.gitTabState('p'), repo, fakeBody(list));
+  const rows = list.children.filter(c => typeof c.className === 'string' && c.className.includes('git-file-row'));
+  const backslash = rows.find(r => r.innerHTML.includes('a\\b.md'));
+  assert.ok(backslash, 'the full node name is shown, not what follows the backslash');
+  assert.match(backslash.innerHTML, /git-file-meta">Staged</);
+  assert.ok(rows.some(r => /git-file-meta">Unstaged</.test(r.innerHTML)));
+});
+
+test('a collapsed folder that hides the selected file is highlighted in its place', () => {
+  const ctx = loadContext({ getItem() { return 'tree'; }, setItem() {} });
+  const repo = { path: '/repo', changes: [change('src/a.js'), change('src/b.js'), change('top.js')] };
+  const state = ctx.gitTabState('p');
+  state.selectedFiles.set(repo.path, 'src/b.js');
+  ctx.gitCollapsedSet(state, repo.path).add('modified/src');
+  const list = fakeList();
+  ctx.paintGitChanges({ id: 'p' }, state, repo, fakeBody(list), { repaintDiff: false });
+  const folder = list.children.find(c => typeof c.className === 'string' && c.className.startsWith('git-folder-row'));
+  assert.equal(folder.className, 'git-folder-row selected');
 });
