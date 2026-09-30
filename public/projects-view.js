@@ -169,7 +169,7 @@ function saveProjectsUi() {
   sessionStorage.setItem('projects.archivedOpen', JSON.stringify(projectsUi.archivedOpen));
 }
 
-const PROJECT_WORKSPACE_TABS = new Set(['overview', 'plan', 'files', 'git', 'settings']);
+const PROJECT_WORKSPACE_TABS = new Set(['overview', 'plan', 'files', 'git', 'gitgraph', 'settings']);
 
 function projectTab(projectOrId = projectsUi.selectedProjectId) {
   const projectId = typeof projectOrId === 'string' ? projectOrId : projectOrId?.id;
@@ -253,6 +253,7 @@ const PICONS = {
   terminal: (s = 14) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg>`,
   search: (s = 13) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>`,
   x: (s = 12) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`,
+  tag: (s = 12) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.6 2.6a2 2 0 0 0-1.4-.6H4a2 2 0 0 0-2 2v7.2c0 .5.2 1 .6 1.4l8.7 8.7a2.4 2.4 0 0 0 3.4 0l6.6-6.6a2.4 2.4 0 0 0 0-3.4Z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>`,
 };
 
 function cliIcon(session, size = 14) {
@@ -1300,6 +1301,7 @@ function renderOverview() {
         <button type="button" class="ws-tab ${tabName === 'plan' ? 'active' : ''}" data-tab="plan" title="Phases from plan-tracker.md and the todos, with the sessions that worked on them">Plan <span class="ws-tab-meta" id="ws-tab-plan-meta"></span></button>
         <button type="button" class="ws-tab ${tabName === 'files' ? 'active' : ''}" data-tab="files" title="The project folder: brief, plan, todos and anything else the project keeps">Files</button>
         <button type="button" class="ws-tab ${tabName === 'git' ? 'active' : ''}" data-tab="git" title="Branches, working changes and recent commits in attached repositories">Git</button>
+        <button type="button" class="ws-tab ${tabName === 'gitgraph' ? 'active' : ''}" data-tab="gitgraph" title="Commit graph of attached repositories, with commit details and diffs">Git Graph</button>
         <button type="button" class="ws-tab ${tabName === 'settings' ? 'active' : ''}" data-tab="settings">Settings</button>
       </div>
     </div>
@@ -1310,6 +1312,7 @@ function renderOverview() {
   else if (tabName === 'files') renderFilesTab(project, body);
   else if (tabName === 'plan') renderPlanTab(project, body);
   else if (tabName === 'git') renderProjectGitTab(project, body);
+  else if (tabName === 'gitgraph') renderProjectGitGraphTab(project, body);
   else renderOverviewBody(project, body);
 
   projectViewer.querySelectorAll('.ws-tab:not([disabled])').forEach(tab => {
