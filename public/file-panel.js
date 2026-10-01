@@ -172,6 +172,7 @@ function handleClose() {
     }
     if (tab.type === 'file') {
       fpViewerPanel.destroy();
+      fpShownTab = null;
       state.selectedPath = '';
     }
     state.currentTab = null;
@@ -343,6 +344,29 @@ function openFileTab(sessionId, data) {
   }
 }
 
+// Every session's file tab shares fpViewerPanel. This is the tab whose buffer
+// it holds. Showing another tab first copies the buffer (unsaved edits and the
+// cursor) back onto this one, and repainting this tab leaves the buffer alone,
+// so switching sessions or toggling the explorer never drops typed text.
+let fpShownTab = null;
+
+function stashViewerBuffer() {
+  if (!fpShownTab || !fpViewerPanel.editorView) return;
+  fpShownTab.content = fpViewerPanel.getContent();
+  fpShownTab.cursor = fpViewerPanel.editorView.state.selection.main.head;
+}
+
+function showFileTab(tab) {
+  if (fpShownTab === tab && fpViewerPanel.filePath === tab.filePath) return;
+  stashViewerBuffer();
+  fpViewerPanel.open(tab.label, tab.filePath, tab.content, tab.preview);
+  fpShownTab = tab;
+  const view = fpViewerPanel.editorView;
+  if (view && Number.isSafeInteger(tab.cursor)) {
+    view.dispatch({ selection: { anchor: Math.min(tab.cursor, view.state.doc.length) }, scrollIntoView: true });
+  }
+}
+
 function destroyCurrentTab(state) {
   const tab = state.currentTab;
   if (!tab) return;
@@ -355,8 +379,11 @@ function destroyCurrentTab(state) {
       delete diffBodyEl._cmGotoLine;
     }
   }
-  if (tab.type === 'file') {
+  // A background session's tab is not in the viewer; the one shown may be
+  // another session's file, which must not be wiped.
+  if (tab.type === 'file' && fpShownTab === tab) {
     fpViewerPanel.destroy();
+    fpShownTab = null;
   }
 }
 
@@ -528,7 +555,7 @@ function renderTabContent(sessionId, tab) {
     // Use ViewerPanel
     diffContainer.style.display = 'none';
     vpContainer.style.display = 'flex';
-    fpViewerPanel.open(tab.label, tab.filePath, tab.content, tab.preview);
+    showFileTab(tab);
   } else {
     // Diff mode
     vpContainer.style.display = 'none';

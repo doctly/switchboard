@@ -296,14 +296,24 @@ function toggleGridView() {
 
 // --- Session navigation (Cmd+Shift+[/], Cmd+Arrow) ---
 
-// Returns ordered list of open (non-closed) session IDs matching sidebar order.
+// The session rows in the order the user sees them. In the Projects tab that
+// is the project's own list; following the Sessions sidebar from there jumped
+// between projects in an order nobody could see.
+function sessionNavRows() {
+  if (activeTab === 'projects' && !gridViewActive) {
+    const list = projectsUi.working ? projectPanes : projectViewer;
+    return list.querySelectorAll('.pane-session[data-session-id], .tcard-session[data-session-id]');
+  }
+  return sidebarContent.querySelectorAll('.session-item[data-session-id]');
+}
+
+// Returns ordered list of open (non-closed) session IDs matching the visible list.
 function getOrderedOpenSessionIds() {
-  const items = sidebarContent.querySelectorAll('.session-item[data-session-id]');
   const ids = [];
-  for (const item of items) {
+  for (const item of sessionNavRows()) {
     const sid = item.dataset.sessionId;
     const entry = openSessions.get(sid);
-    if (entry && !entry.closed) ids.push(sid);
+    if (entry && !entry.closed && !ids.includes(sid)) ids.push(sid);
   }
   return ids;
 }
@@ -376,6 +386,19 @@ function navigateGrid(direction) {
   for (const [sid, card] of gridCards) {
     if (card === best) { focusGridCard(sid); return; }
   }
+}
+
+// Cmd+Left/Right (Ctrl+Left/Right off the Mac) moves the cursor to the line
+// start or end, or by word, in text fields, editors and terminals.
+function isLineJumpKey(e) {
+  const mod = isMac ? e.metaKey : e.ctrlKey;
+  return mod && !e.altKey && !e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight');
+}
+
+// Text fields and editors (CodeMirror is contenteditable) keep Cmd+Arrow for
+// moving the cursor, so session navigation leaves those keys to them.
+function isTextEditingTarget(el) {
+  return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
 }
 
 // Returns true if the key combo is a session nav shortcut (used by xterm to block without acting)

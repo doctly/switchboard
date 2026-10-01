@@ -67,7 +67,17 @@ function setupTerminalKeyBindings(terminal, container, getSessionId, { onFind } 
       return false;
     }
 
-    // Session navigation: Cmd+Shift+[/], Cmd+Arrow
+    // Cmd+Left/Right go to the start or end of the line, as in other Mac
+    // terminals (Ctrl+A / Ctrl+E). Off the Mac, Ctrl+Left/Right stays xterm's
+    // word jump. Only the grid keeps them for moving between cards.
+    if (isLineJumpKey(e) && !gridViewActive) {
+      e._handled = true;
+      if (!isMac) return true;
+      if (e.type === 'keydown') window.api.sendInput(getSessionId(), e.key === 'ArrowLeft' ? '\x01' : '\x05');
+      return false;
+    }
+
+    // Session navigation: Cmd+Shift+[/], Cmd+Up/Down (and Cmd+Arrow in the grid)
     if (isSessionNavKey(e)) {
       if (e.type === 'keydown') { e._handled = true; handleSessionNavKey(e); }
       return false;

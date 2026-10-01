@@ -1368,7 +1368,9 @@ initGridObservers();
       toggleGridView();
       return;
     }
-    // Session navigation: Cmd+Shift+[/], Cmd+Arrow
+    // Session navigation: Cmd+Shift+[/], Cmd+Arrow. Arrows typed into a text
+    // field or editor move its cursor instead.
+    if (isTextEditingTarget(e.target) && isSessionNavKey(e) && !e.shiftKey) return;
     handleSessionNavKey(e);
   });
 }
