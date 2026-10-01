@@ -35,6 +35,7 @@
       { key: 'model', label: 'Model', type: 'text', default: '', more: true, placeholder: 'default', suggestions: ['fable', 'opus', 'sonnet'], description: "Blank uses Claude's default. An alias or a full model name" },
       { key: 'effort', label: 'Effort', type: 'select', default: '', more: true, choices: CLAUDE_EFFORTS, description: "Default uses Claude's own setting" },
       { key: 'allowedTools', label: 'Allowed Tools', type: 'text', default: '', more: true, wide: true, description: 'Tools allowed without a permission prompt (comma-separated)' },
+      { key: 'customArgs', label: 'Custom Arguments', type: 'text', default: '', more: true, wide: true, placeholder: `e.g. --settings '{"outputStyle": "Learning"}'`, description: 'Appended to the CLI command, as shell' },
       { key: 'appendSystemPrompt', label: 'Additional System Prompt', type: 'textarea', default: '', more: true, wide: true, description: 'Instructions appended to Claude’s system prompt' },
       { key: 'worktree', label: 'Worktree', type: 'boolean', default: false, description: 'Run each new session in an isolated git worktree' },
       { key: 'worktreeName', label: 'Worktree Name', type: 'text', default: '', placeholder: 'name (optional)' },
