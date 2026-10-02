@@ -283,8 +283,162 @@ async function fileDiff(dir, filePath) {
   return { path: relative, diff, truncated };
 }
 
+// --- Git Graph read functions ---------------------------------------------
+// Everything below is read-only. Every call adds --no-optional-locks (never
+// contend with a write in flight elsewhere) and, for anything that formats
+// human-readable output, --no-color/--no-show-signature, so a user's own
+// color.ui=always can never leak into text this code goes on to parse.
+// Multi-field records use NUL between fields and, for git-log output, \x1e
+// between records, the same convention parseCommits() already uses above.
+
+/** Normalize a path for use inside a git argv element (git wants '/' even on Windows). */
+function toGitPath(relPath) {
+  return String(relPath).split(path.sep).join('/').split('\\').join('/');
+}
+
+// Node's execFile refuses any argv string containing an actual NUL byte
+// ("must be a string without null bytes") — so the *format strings* below
+// use git's own textual escape for one (`%x00` for git-log's pretty-format
+// engine, `%00` for for-each-ref's own, different, format language), and
+// only the *parsed output* (which genuinely does contain raw NUL/RS bytes,
+// written by git itself, safe for Node to read back) is split on the real
+// characters.
+const GG_FIELD_SEP = '\x00';
+const GG_RECORD_SEP = '\x1e';
+const LOG_FIELD_ESCAPE = '%x00';
+const LOG_RECORD_ESCAPE = '%x1e';
+const FOR_EACH_REF_FIELD_ESCAPE = '%00';
+
+const LOG_ORDER_FLAGS = { date: '--date-order', 'author-date': '--author-date-order', topo: '--topo-order' };
+
+// A revspec entry starting with '-' is only ever accepted from this fixed
+// list (or one of the prefixes below) — anything else risks being read as
+// a flag rather than a ref/branch-glob.
+const REVSPEC_FLAGS = new Set(['--all', '--branches', '--tags', '--remotes', '--first-parent', '--reflog']);
+const REVSPEC_FLAG_PREFIXES = ['--glob=', '--branches=', '--tags=', '--remotes=', '--exclude='];
+
+function assertSafeRevspecEntry(entry) {
+  if (typeof entry !== 'string' || !entry || entry.includes('\0')) throw new Error('Invalid revision specifier');
+  if (!entry.startsWith('-')) return entry;
+  if (REVSPEC_FLAGS.has(entry) || REVSPEC_FLAG_PREFIXES.some(prefix => entry.startsWith(prefix))) return entry;
+  throw new Error(`Revision specifier '${entry}' is not on the allowed flag list`);
+}
+
+function logPrettyFormat() {
+  return ['%H', '%h', '%P', '%an', '%ae', '%aI', '%cn', '%ce', '%cI', '%s'].join(LOG_FIELD_ESCAPE) + LOG_RECORD_ESCAPE;
+}
+
+function parseLogWithParents(output) {
+  return String(output || '')
+    .split(GG_RECORD_SEP)
+    .map(record => record.replace(/^\n+|\n+$/g, ''))
+    .filter(Boolean)
+    .map((record) => {
+      const [hash, shortHash, parentField, authorName, authorEmail, authorDate,
+        committerName, committerEmail, commitDate, subject] = record.split(GG_FIELD_SEP);
+      return {
+        hash, shortHash,
+        parents: parentField ? parentField.split(' ').filter(Boolean) : [],
+        authorName, authorEmail, authorDate,
+        committerName, committerEmail, commitDate,
+        subject: subject || '',
+      };
+    });
+}
+
+/**
+ * Commit list with parent hashes, for graph layout. `order` selects
+ * `--date-order` (default) / `--author-date-order` / `--topo-order`.
+ * `revspec` is a ref/hash or array of them (default `['HEAD']`); a leading
+ * '-' entry must be on the fixed allow-list above. Degrades to `[]` on an
+ * unborn HEAD rather than throwing.
+ */
+async function logWithParents(dir, { revspec, order = 'date', skip, limit } = {}) {
+  const orderFlag = LOG_ORDER_FLAGS[order] || LOG_ORDER_FLAGS.date;
+  const revArgs = [].concat(revspec == null ? ['HEAD'] : revspec).map(assertSafeRevspecEntry);
+  const args = ['--no-optional-locks', 'log', '--no-color', '--no-show-signature', orderFlag];
+  if (Number(skip) > 0) args.push(`--skip=${Math.floor(Number(skip))}`);
+  if (Number(limit) > 0) args.push(`--max-count=${Math.floor(Number(limit))}`);
+  args.push(`--pretty=format:${logPrettyFormat()}`, ...revArgs);
+  return parseLogWithParents(await runOr(args, dir, ''));
+}
+
+const FOR_EACH_REF_FORMAT = ['%(HEAD)', '%(refname)', '%(objectname)', '%(*objectname)', '%(objecttype)', '%(upstream)'].join(FOR_EACH_REF_FIELD_ESCAPE);
+
+/**
+ * Local branches, remote-tracking branches, and tags, via `for-each-ref`.
+ * Each head carries `isHead` (which head is HEAD — not the same as which
+ * commit HEAD points at while detached). Degrades to empty arrays on a
+ * repo with no refs at all rather than throwing.
+ */
+async function forEachRef(dir) {
+  const output = await runOr(['--no-optional-locks', 'for-each-ref', '--no-color', `--format=${FOR_EACH_REF_FORMAT}`,
+    'refs/heads', 'refs/remotes', 'refs/tags'], dir, '');
+  const heads = [];
+  const remotes = [];
+  const tags = [];
+  for (const line of String(output).split('\n')) {
+    if (!line) continue;
+    const [headMarker, refname, objectName, peeledObjectName, objectType, upstream] = line.split(GG_FIELD_SEP);
+    if (refname.startsWith('refs/heads/')) {
+      heads.push({
+        name: refname.slice('refs/heads/'.length),
+        hash: objectName,
+        isHead: headMarker === '*',
+        upstream: upstream ? upstream.replace(/^refs\/remotes\//, '') : null,
+      });
+    } else if (refname.startsWith('refs/remotes/')) {
+      const rest = refname.slice('refs/remotes/'.length);
+      const slash = rest.indexOf('/');
+      if (slash === -1) continue;
+      const name = rest.slice(slash + 1);
+      if (name === 'HEAD') continue; // the remote's own default-branch pointer, not a real branch
+      remotes.push({ remote: rest.slice(0, slash), name, hash: objectName });
+    } else if (refname.startsWith('refs/tags/')) {
+      const annotated = objectType === 'tag';
+      tags.push({ name: refname.slice('refs/tags/'.length), hash: annotated ? (peeledObjectName || objectName) : objectName, annotated });
+    }
+  }
+  return { heads, remotes, tags };
+}
+
+const STASH_FORMAT = ['%H', '%gd', '%gs', '%aI'].join(LOG_FIELD_ESCAPE);
+const STASH_MESSAGE_BRANCH_RE = /^(?:WIP on|On) (.+):/;
+
+/**
+ * Stashes, each with `baseCommitHash` — the commit it was taken from,
+ * resolved as `<stashHash>^1` (its own first parent) so a stash can be laid
+ * into the graph as a pseudo-commit attached to that commit.
+ */
+async function stashList(dir) {
+  const output = await runOr(['--no-optional-locks', 'stash', 'list', '--no-color', `--format=${STASH_FORMAT}`], dir, '');
+  const entries = String(output).split('\n').filter(Boolean).map((line) => {
+    const [hash, gd, message, date] = line.split(GG_FIELD_SEP);
+    const indexMatch = /stash@\{(\d+)\}/.exec(gd || '');
+    const branchMatch = STASH_MESSAGE_BRANCH_RE.exec(message || '');
+    return { hash, index: indexMatch ? Number(indexMatch[1]) : null, branch: branchMatch ? branchMatch[1] : null, message: message || '', date };
+  });
+  const bases = await Promise.all(entries.map(entry => runOr(['--no-optional-locks', 'rev-parse', `${entry.hash}^1`], dir, '')));
+  return entries.map((entry, i) => ({ ...entry, baseCommitHash: bases[i].trim() || null }));
+}
+
+/**
+ * File content at a revision (a blob, via `git show <rev>:<path>`), for the
+ * diff viewer. `--no-textconv` so a repo's own .gitattributes filter can't
+ * substitute different bytes than what's actually stored. `relPath` goes
+ * through the same containment check as fileDiff(), then is normalized to
+ * '/'-separated (git's pathspec syntax wants that even on Windows).
+ */
+async function blobAtRevision(dir, rev, relPath) {
+  if (typeof rev !== 'string' || !rev || rev.includes('\0') || rev.startsWith('-')) throw new Error('Invalid revision');
+  const { relative } = safeRelativePath(dir, relPath);
+  return runRaw(['--no-optional-locks', 'show', '--no-color', '--no-textconv', `${rev}:${toGitPath(relative)}`], dir);
+}
+
 module.exports = {
   run, version, isGitRepo, repoRoot, branchExists,
   worktreeAdd, worktreeRemove, isDirtyWorktreeError, gitCommonDir, status,
   parsePorcelain, snapshot, fileDiff,
+  toGitPath, safeRelativePath,
+  logWithParents, forEachRef, stashList, blobAtRevision,
 };
