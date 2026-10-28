@@ -1,7 +1,7 @@
 // --- Terminal themes ---
 const TERMINAL_THEMES = {
   switchboard: {
-    label: 'Switchboard',
+    label: 'Switchboard (follows appearance)',
     background: '#1a1a2e', foreground: '#e0e0e0', cursor: '#e94560', selectionBackground: '#3a3a5e',
     black: '#1a1a2e', red: '#e94560', green: '#0dff00', yellow: '#f5a623', blue: '#7b68ee', magenta: '#c678dd', cyan: '#56b6c2', white: '#c5c8c6',
     brightBlack: '#555568', brightRed: '#ff6b81', brightGreen: '#69ff69', brightYellow: '#ffd93d', brightBlue: '#8fa8ff', brightMagenta: '#d19afc', brightCyan: '#7ee8e8', brightWhite: '#eaeaea',
@@ -42,10 +42,34 @@ const TERMINAL_THEMES = {
     black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900', blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
     brightBlack: '#002b36', brightRed: '#cb4b16', brightGreen: '#586e75', brightYellow: '#657b83', brightBlue: '#839496', brightMagenta: '#6c71c4', brightCyan: '#93a1a1', brightWhite: '#fdf6e3',
   },
+  solarizedLight: {
+    label: 'Solarized Light',
+    background: '#fdf6e3', foreground: '#657b83', cursor: '#586e75', selectionBackground: '#eee8d5',
+    black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900', blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
+    brightBlack: '#002b36', brightRed: '#cb4b16', brightGreen: '#586e75', brightYellow: '#657b83', brightBlue: '#839496', brightMagenta: '#6c71c4', brightCyan: '#93a1a1', brightWhite: '#fdf6e3',
+  },
+  githubLight: {
+    label: 'GitHub Light',
+    background: '#ffffff', foreground: '#1f2328', cursor: '#044289', selectionBackground: '#b6e3ff',
+    black: '#24292f', red: '#cf222e', green: '#116329', yellow: '#4d2d00', blue: '#0969da', magenta: '#8250df', cyan: '#1b7c83', white: '#6e7781',
+    brightBlack: '#57606a', brightRed: '#a40e26', brightGreen: '#1a7f37', brightYellow: '#633c01', brightBlue: '#218bff', brightMagenta: '#a475f9', brightCyan: '#3192aa', brightWhite: '#8c959f',
+  },
+};
+
+// The default "Switchboard" theme follows the app's light/dark appearance.
+const SWITCHBOARD_LIGHT_TERMINAL_THEME = {
+  label: 'Switchboard',
+  background: '#fafafc', foreground: '#1d1d26', cursor: '#d6304f', selectionBackground: '#c9cdf5',
+  black: '#1d1d26', red: '#c4314b', green: '#1a8a2e', yellow: '#9a6a00', blue: '#4a52d6', magenta: '#9b3fb5', cyan: '#1f8191', white: '#6b6b80',
+  brightBlack: '#8a8aa0', brightRed: '#e0455f', brightGreen: '#22a83a', brightYellow: '#b88500', brightBlue: '#5f68e8', brightMagenta: '#b05acb', brightCyan: '#2a9caf', brightWhite: '#9a9aae',
 };
 
 let currentThemeName = 'switchboard';
 function getTerminalTheme() {
-  return TERMINAL_THEMES[currentThemeName] || TERMINAL_THEMES.switchboard;
+  if (currentThemeName === 'switchboard' || !TERMINAL_THEMES[currentThemeName]) {
+    const light = typeof window.getAppTheme === 'function' && window.getAppTheme() === 'light';
+    return light ? SWITCHBOARD_LIGHT_TERMINAL_THEME : TERMINAL_THEMES.switchboard;
+  }
+  return TERMINAL_THEMES[currentThemeName];
 }
 let TERMINAL_THEME = getTerminalTheme();

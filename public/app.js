@@ -117,6 +117,10 @@ window._applyTerminalTheme = (themeName) => {
     entry.element.style.backgroundColor = TERMINAL_THEME.background;
   }
 };
+document.addEventListener('app-theme-change', () => {
+  window._applyTerminalTheme(currentThemeName);
+  refreshSidebar(); // project and track colors are computed per theme
+});
 let searchMatchIds = null; // null = no search active; Set<string> = matched session IDs
 let searchMatchProjectPaths = null; // Set<string> of project paths matched by name
 
@@ -1406,6 +1410,10 @@ setTimeout(() => {
     if (global.terminalTheme && TERMINAL_THEMES[global.terminalTheme]) {
       currentThemeName = global.terminalTheme;
       TERMINAL_THEME = getTerminalTheme();
+    }
+    // The settings store is the source of truth; app-theme.js only caches it.
+    if (global.appTheme && global.appTheme !== window.getAppThemePreference()) {
+      window.setAppThemePreference(global.appTheme);
     }
   }
 })();

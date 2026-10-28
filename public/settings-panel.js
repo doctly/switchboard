@@ -97,6 +97,7 @@
     const visCountValue = fieldValue('visibleSessionCount', 10);
     const maxAgeValue = fieldValue('sessionMaxAgeDays', 3);
     const themeValue = fieldValue('terminalTheme', 'switchboard');
+    const appThemeValue = fieldValue('appTheme', 'dark');
     const mcpEmulationValue = fieldValue('mcpEmulation', true);
     // Global-only: where new projects get their folder (projects.js). Empty
     // means the default, ~/Switchboard.
@@ -253,6 +254,20 @@
 
       ${!isProject ? `<div class="settings-section">
         <div class="settings-section-title">Application</div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <span class="settings-label">Appearance</span>
+            <div class="settings-description">Light or dark interface. System follows your OS setting.</div>
+          </div>
+          <div class="settings-field-control">
+            <select class="settings-select" id="sv-app-theme">
+              ${[['dark', 'Dark'], ['light', 'Light'], ['system', 'System']].map(([key, label]) =>
+                `<option value="${key}" ${appThemeValue === key ? 'selected' : ''}>${label}</option>`
+              ).join('')}
+            </select>
+          </div>
+        </div>
 
         <div class="settings-field">
           <div class="settings-field-info">
@@ -453,6 +468,7 @@
         settings.visibleSessionCount = parseInt(settingsViewerBody.querySelector('#sv-visible-count').value) || 10;
         settings.sessionMaxAgeDays = parseInt(settingsViewerBody.querySelector('#sv-max-age').value) || 3;
         settings.terminalTheme = settingsViewerBody.querySelector('#sv-terminal-theme').value || 'switchboard';
+        settings.appTheme = settingsViewerBody.querySelector('#sv-app-theme').value || 'dark';
         settings.mcpEmulation = settingsViewerBody.querySelector('#sv-mcp-emulation').checked;
         settings.shellProfile = settingsViewerBody.querySelector('#sv-shell-profile').value || 'auto';
         settings.projectsRoot = settingsViewerBody.querySelector('#sv-projects-root').value.trim();
@@ -476,6 +492,9 @@
         }
         if (settings.terminalTheme && typeof window._applyTerminalTheme === 'function') {
           window._applyTerminalTheme(settings.terminalTheme);
+        }
+        if (typeof window.setAppThemePreference === 'function') {
+          window.setAppThemePreference(settings.appTheme);
         }
         if (typeof refreshSidebar === 'function') refreshSidebar();
       }

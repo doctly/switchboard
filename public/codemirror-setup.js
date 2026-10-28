@@ -6,6 +6,7 @@ import { languages } from '@codemirror/language-data';
 import { syntaxHighlighting, HighlightStyle, indentOnInput, bracketMatching, foldGutter, foldKeymap } from '@codemirror/language';
 import { highlightSelectionMatches } from '@codemirror/search';
 import { dracula } from '@ddietr/codemirror-themes/theme/dracula';
+import { githubLight } from '@ddietr/codemirror-themes/theme/github-light';
 import { tags } from '@lezer/highlight';
 import { MergeView, unifiedMergeView } from '@codemirror/merge';
 import { javascript } from '@codemirror/lang-javascript';
@@ -34,6 +35,46 @@ const appThemePatch = EditorView.theme({
     scrollbarColor: 'rgba(255,255,255,0.08) transparent',
   },
 }, { dark: true });
+
+const markdownExtrasLight = HighlightStyle.define([
+  { tag: tags.monospace, color: '#0a6e8a' },
+]);
+
+const appThemePatchLight = EditorView.theme({
+  '&': { height: '100%', fontSize: '12.5px' },
+  '.cm-content': { padding: '20px 8px' },
+  '.cm-scroller': {
+    scrollbarWidth: 'thin',
+    scrollbarColor: 'rgba(0,0,0,0.15) transparent',
+  },
+}, { dark: false });
+
+// ── Light/dark editor theme ──────────────────────────────────────────
+// Every editor puts its theme in one shared compartment and registers
+// itself while mounted, so an app theme change can restyle open editors.
+
+const themeCompartment = new Compartment();
+const liveViews = new Set();
+const trackView = ViewPlugin.define(view => {
+  liveViews.add(view);
+  return { destroy() { liveViews.delete(view); } };
+});
+
+function themeExtensions() {
+  const light = typeof window.getAppTheme === 'function' && window.getAppTheme() === 'light';
+  return light
+    ? [githubLight, syntaxHighlighting(markdownExtrasLight), appThemePatchLight]
+    : [dracula, syntaxHighlighting(markdownExtras), appThemePatch];
+}
+
+function editorTheme() {
+  return [trackView, themeCompartment.of(themeExtensions())];
+}
+
+document.addEventListener('app-theme-change', () => {
+  const effects = themeCompartment.reconfigure(themeExtensions());
+  for (const view of liveViews) view.dispatch({ effects });
+});
 
 // ── Custom floating search bar (matches xterm search bar style) ──────
 
@@ -68,9 +109,14 @@ const searchHighlighter = ViewPlugin.fromClass(class {
   }
 }, { decorations: v => v.decorations });
 
-const cmSearchTheme = EditorView.theme({
-  '.cm-find-match': { backgroundColor: '#515C6A', borderRadius: '2px' },
-  '.cm-find-match-active': { backgroundColor: '#EAA549', borderRadius: '2px' },
+// A base theme, so &dark/&light can follow the active editor theme.
+const cmSearchTheme = EditorView.baseTheme({
+  '.cm-find-match': { borderRadius: '2px' },
+  '.cm-find-match-active': { borderRadius: '2px' },
+  '&dark .cm-find-match': { backgroundColor: '#515C6A' },
+  '&dark .cm-find-match-active': { backgroundColor: '#EAA549' },
+  '&light .cm-find-match': { backgroundColor: '#fff0a8' },
+  '&light .cm-find-match-active': { backgroundColor: '#f5b13d' },
 });
 
 function cmFloatingSearch() {
@@ -335,9 +381,7 @@ function createPlanEditor(parent) {
       cmSaveKeymap,
       cmFloatingSearch(),
       markdown({ base: markdownLanguage, codeLanguages: languages }),
-      dracula,
-      syntaxHighlighting(markdownExtras),
-      appThemePatch,
+      editorTheme(),
       wrapCompartment.of(EditorView.lineWrapping),
     ],
   });
@@ -406,9 +450,7 @@ function createReadOnlyViewer(parent, content, filename) {
       cmSaveDomHandler,
       cmFloatingSearch(),
       langExt,
-      dracula,
-      syntaxHighlighting(markdownExtras),
-      appThemePatch,
+      editorTheme(),
     ],
   });
   return new EditorView({ state, parent });
@@ -444,9 +486,7 @@ function createEditableViewer(parent, content, filename, { wrap = false } = {}) 
       cmSaveKeymap,
       cmFloatingSearch(),
       langExt,
-      dracula,
-      syntaxHighlighting(markdownExtras),
-      appThemePatch,
+      editorTheme(),
       wrapCompartment.of(wrap ? EditorView.lineWrapping : []),
     ],
   });
@@ -471,9 +511,7 @@ function createMergeViewer(parent, originalContent, modifiedContent, filename) {
     cmFindDomHandler,
     cmFloatingSearch(),
     langExt,
-    dracula,
-    syntaxHighlighting(markdownExtras),
-    appThemePatch,
+    editorTheme(),
   ];
 
   return new MergeView({
@@ -513,9 +551,7 @@ function createUnifiedMergeViewer(parent, originalContent, modifiedContent, file
       cmSaveDomHandler,
       cmFloatingSearch(),
       langExt,
-      dracula,
-      syntaxHighlighting(markdownExtras),
-      appThemePatch,
+      editorTheme(),
       unifiedMergeView({
         original: originalContent,
         gutter: true,

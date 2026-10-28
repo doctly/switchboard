@@ -500,10 +500,14 @@ function projectInitials(name) {
   return (words[0][0] + words[1][0]).toUpperCase();
 }
 
+// Pastel text on a dark tint reads on the dark theme; the light theme needs
+// the same hue darker.
+const hueFg = (h, s) => window.getAppTheme() === 'light' ? `hsl(${h},${s - 15}%,36%)` : `hsl(${h},${s}%,72%)`;
+
 function markHtml(project, size = 28, extraClass = '') {
   const h = projectHue(project.id);
   const fontSize = Math.round(size * 0.4);
-  return `<span class="proj-mark ${extraClass}" style="width:${size}px;height:${size}px;font-size:${fontSize}px;background:hsla(${h},70%,60%,0.18);color:hsl(${h},80%,72%);">${escapeHtml(projectInitials(project.name))}</span>`;
+  return `<span class="proj-mark ${extraClass}" style="width:${size}px;height:${size}px;font-size:${fontSize}px;background:hsla(${h},70%,60%,0.18);color:${hueFg(h, 80)};">${escapeHtml(projectInitials(project.name))}</span>`;
 }
 
 /**
@@ -511,10 +515,12 @@ function markHtml(project, size = 28, extraClass = '') {
  * two tracks in a project never share one. General is grey.
  */
 function trackColors(project, track) {
-  if (!track) return { fg: '#9090a8', bg: 'rgba(255,255,255,0.08)' };
+  if (!track) return window.getAppTheme() === 'light'
+    ? { fg: '#5d5d73', bg: 'rgba(20,20,40,0.07)' }
+    : { fg: '#9090a8', bg: 'rgba(255,255,255,0.08)' };
   const index = Math.max(0, (project.tracks || []).findIndex(t => t.id === track.id));
   const h = Math.round((projectHue(project.id) + 40 + index * 137.5) % 360);
-  return { fg: `hsl(${h},78%,72%)`, bg: `hsla(${h},70%,60%,0.16)` };
+  return { fg: hueFg(h, 78), bg: `hsla(${h},70%,60%,0.16)` };
 }
 
 function trackTagHtml(project, track) {
