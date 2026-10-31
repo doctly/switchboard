@@ -88,6 +88,7 @@ contextBridge.exposeInMainWorld('api', {
   deleteTrack: (id, options) => ipcRenderer.invoke('delete-track', id, options),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   openPath: (target) => ipcRenderer.invoke('open-path', target),
+  revealFile: (filePath) => ipcRenderer.invoke('reveal-file', filePath),
   writeClipboard: (text) => ipcRenderer.invoke('clipboard-write-text', text),
 
   // Send (fire-and-forget)

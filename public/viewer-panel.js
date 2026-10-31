@@ -10,6 +10,7 @@
  *   - Images, PDFs and PowerPoint: read-only previews with text editing controls hidden
  *   - Wrap: shown for text (defaults on for markdown, off for others)
  *   - Save: shown if onSave is provided
+ *   - Reveal in Finder/Explorer: shown while a file is open
  *   - Close: shown if onClose is provided
  *   - Copy path/content: shown if opted in
  *
@@ -52,6 +53,7 @@ class ViewerPanel {
       wrap: true,
       gotoLine: true,
       save: !!opts.onSave,
+      reveal: true,
       close: !!opts.onClose,
     });
     container.insertBefore(this.toolbar.el, container.firstChild);
@@ -110,6 +112,12 @@ class ViewerPanel {
       toolbar.saveBtn.addEventListener('click', () => this._save());
     }
 
+    if (toolbar.revealBtn) {
+      toolbar.revealBtn.addEventListener('click', () => {
+        if (this.filePath) window.api.revealFile(this.filePath);
+      });
+    }
+
     if (toolbar.closeBtn && opts.onClose) {
       toolbar.closeBtn.addEventListener('click', () => opts.onClose());
     }
@@ -145,6 +153,7 @@ class ViewerPanel {
     this.previewType = preview.previewType || (/\.html?$/i.test(filePath) ? 'html' : 'text');
     this.toolbar.setTitle(title);
     this.toolbar.setPath(filePath);
+    if (this.toolbar.revealBtn) this.toolbar.revealBtn.style.display = filePath ? '' : 'none';
 
     const isMd = this._isMarkdown(filePath);
     const isJson = this._isJson(filePath);

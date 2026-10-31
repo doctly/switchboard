@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { manageProjectEntry } = require('../file-management');
+const { manageProjectEntry, revealFile } = require('../file-management');
 
 function fixture(t) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-file-actions-'));
@@ -108,4 +108,17 @@ test('replacing an item during confirmation cannot trash its replacement', async
   await assert.rejects(run('notes.md', 'trash'), /item changed/);
   assert.deepEqual(calls, []);
   assert.equal(fs.readFileSync(file, 'utf8'), 'replacement');
+});
+
+test('revealFile shows any existing absolute file and never opens it', t => {
+  const { temp, calls, dependencies } = fixture(t);
+  const outside = path.join(temp, 'elsewhere', 'plan.md');
+  fs.mkdirSync(path.dirname(outside));
+  fs.writeFileSync(outside, '# plan');
+  assert.deepEqual(revealFile(path.join(temp, 'elsewhere', '..', 'elsewhere', 'plan.md'), dependencies), { filePath: outside });
+  assert.deepEqual(calls, [['reveal', outside]]);
+  assert.throws(() => revealFile('elsewhere/plan.md', dependencies), /Invalid file path/);
+  assert.throws(() => revealFile(path.join(temp, 'missing.md'), dependencies), /does not exist/);
+  assert.throws(() => revealFile(undefined, dependencies), /Invalid file path/);
+  assert.equal(calls.length, 1);
 });
