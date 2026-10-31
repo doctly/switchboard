@@ -39,7 +39,7 @@ const { scanSchedules } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { resolveEffectiveSettings } = require('./resolve-effective-settings');
 const { listProjectDirectory, readProjectFile, readPreviewFile, openFileExternally } = require('./project-files');
-const { manageProjectEntry } = require('./file-management');
+const { manageProjectEntry, revealFile } = require('./file-management');
 const { resolveTerminalFiles } = require('./terminal-file-links');
 const { PREVIEW_SCHEME, PREVIEW_SCHEMES, handlePreviewAssetRequest } = require('./preview-assets');
 protocol.registerSchemesAsPrivileged(PREVIEW_SCHEMES);
@@ -504,6 +504,15 @@ ipcMain.handle('open-path', async (_event, target) => {
     return err ? { error: err } : { ok: true };
   } catch (err) {
     return { error: err.message };
+  }
+});
+
+// Show a viewer panel's file selected in the OS file manager.
+ipcMain.handle('reveal-file', (_event, filePath) => {
+  try {
+    return { ok: true, ...revealFile(filePath, { shell }) };
+  } catch (err) {
+    return { ok: false, error: err.message };
   }
 });
 

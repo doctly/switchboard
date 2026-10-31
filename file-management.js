@@ -57,4 +57,15 @@ async function manageProjectEntry(projectPath, relativePath, action, newName, { 
   return result;
 }
 
-module.exports = { manageProjectEntry, resolveManagedEntry };
+// The viewer panels also open files outside any project (plans, memory), so
+// this takes an absolute path rather than a project-relative one. It only
+// shows the item in its folder, so a renderer value can never launch a file.
+function revealFile(filePath, { shell }) {
+  if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error('Invalid file path');
+  const resolved = path.resolve(filePath);
+  if (!fs.existsSync(resolved)) throw new Error('File does not exist');
+  shell.showItemInFolder(resolved);
+  return { filePath: resolved };
+}
+
+module.exports = { manageProjectEntry, resolveManagedEntry, revealFile };

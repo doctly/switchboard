@@ -15,11 +15,12 @@ function setup() {
     replaceChildren(...children) { this.children = children; },
   });
   const toolbar = { setTitle(title) { this.titleEl.textContent = title; }, setPath() {}, setWrapMode() {}, setPreviewMode() {} };
-  for (const key of ['el', 'titleEl', 'previewBtn', 'wrapBtn', 'saveBtn', 'gotoLineBtn', 'copyContentBtn']) toolbar[key] = element();
+  for (const key of ['el', 'titleEl', 'previewBtn', 'wrapBtn', 'saveBtn', 'gotoLineBtn', 'copyContentBtn', 'revealBtn']) toolbar[key] = element();
   const revoked = [];
   let nextUrl = 0;
   let saved = 0;
-  const api = { watchFile() {}, unwatchFile() {} };
+  const revealed = [];
+  const api = { watchFile() {}, unwatchFile() {}, revealFile: filePath => revealed.push(filePath) };
   const context = vm.createContext({
     document: { createElement: element }, localStorage: { getItem() { return null; } },
     Uint8Array, Blob, atob, setTimeout,
@@ -34,7 +35,7 @@ function setup() {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/viewer-panel.js'), 'utf8'), context);
   const panel = new context.window.ViewerPanel(element(), { language: 'auto', onSave: async () => { saved++; return { ok: true }; } });
   const media = { previewType: 'image', mimeType: 'image/png', base64: 'AAEC' };
-  return { panel, toolbar, revoked, api, media, saved: () => saved };
+  return { panel, toolbar, revoked, api, media, revealed, saved: () => saved };
 }
 
 test('media previews cannot save binary files and switching files restores editing', async () => {
@@ -234,4 +235,20 @@ test('a .jsonc file with comments and a trailing comma reads as a tree, not an e
   const { panel } = setup();
   panel.open('Settings', '/settings.jsonc', '// editor settings\n{"tabSize": 2,}');
   assert.equal(panel.previewEl.children[0].className, 'json-reader-node');
+});
+
+test('the reveal button shows the open file in the file manager, including media previews', () => {
+  const { panel, toolbar, media, revealed } = setup();
+  panel.open('Plan', '/Users/me/.claude/plans/plan.md', '# plan');
+  assert.equal(toolbar.revealBtn.style.display, '');
+  toolbar.revealBtn.click();
+  panel.open('Image', '/project/image.png', undefined, media);
+  assert.equal(toolbar.revealBtn.style.display, '');
+  toolbar.revealBtn.click();
+  assert.deepEqual(revealed, ['/Users/me/.claude/plans/plan.md', '/project/image.png']);
+  panel.destroy();
+  toolbar.revealBtn.click();
+  panel.open('Untitled', '', '');
+  assert.equal(toolbar.revealBtn.style.display, 'none');
+  assert.equal(revealed.length, 2);
 });
