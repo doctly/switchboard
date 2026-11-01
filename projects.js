@@ -944,6 +944,62 @@ function worktreeParentFor(folderPath) {
   return folder?.sourcePath || null;
 }
 
+/**
+ * Attach a worktree that already exists (made in the Worktrees tab, by Claude,
+ * or by hand) as a worktree folder of the project. Git is not run: the
+ * caller has checked that folderPath is a worktree of sourcePath.
+ */
+async function registerWorktreeFolder(projectId, { path: folderPath, sourcePath, branch } = {}) {
+  const row = db.getProject(projectId);
+  if (!row) return { error: 'Project not found' };
+  const target = typeof folderPath === 'string' ? path.resolve(folderPath) : '';
+  const source = typeof sourcePath === 'string' ? path.resolve(sourcePath) : '';
+  if (!target || !isDirectory(target)) return { error: `Not a directory: ${folderPath}` };
+  if (!source || !isDirectory(source)) return { error: `Not a directory: ${sourcePath}` };
+  const existing = db.listProjectFolders(projectId);
+  if (existing.some(f => realOrResolved(f.path) === realOrResolved(target))) return { error: 'That folder is already attached' };
+  const sortOrder = existing.reduce((max, f) => Math.max(max, f.sortOrder || 0), -1) + 1;
+  const folder = { path: target, mode: 'worktree', sourcePath: source, branch: typeof branch === 'string' ? branch : '' };
+  db.upsertProjectFolder({ projectId, ...folder, sortOrder });
+  db.updateProject(projectId, { modified: new Date().toISOString() });
+  await syncProjectBrief(projectId);
+  notifyRendererProjectsChanged();
+  return { ok: true, project: loadProjectNode(projectId), folder };
+}
+
+/**
+ * A folder of the project moved on disk (git worktree move): carry its row,
+ * and the default and track cwds that pointed inside it, to the new path.
+ * Sessions keep the cwd they ran in; only what starts new sessions moves.
+ */
+async function moveFolderPath(projectId, fromPath, toPath) {
+  const row = db.getProject(projectId);
+  if (!row) return { error: 'Project not found' };
+  const from = path.resolve(String(fromPath || ''));
+  const to = path.resolve(String(toPath || ''));
+  const moveInside = (cwd) => {
+    if (!cwd) return null;
+    const resolved = path.resolve(cwd);
+    if (resolved !== from && !isInside(resolved, from)) return null;
+    return path.join(to, path.relative(from, resolved));
+  };
+  const folder = db.listProjectFolders(projectId).find(f => path.resolve(f.path) === from);
+  if (folder) {
+    db.deleteProjectFolder(projectId, folder.path);
+    db.upsertProjectFolder({ ...folder, projectId, path: to });
+  }
+  const defaultCwd = moveInside(row.defaultCwd);
+  if (defaultCwd) db.updateProject(projectId, { defaultCwd });
+  for (const track of db.listTracks(projectId)) {
+    const cwd = moveInside(track.cwd);
+    if (cwd) db.updateTrack(track.id, { cwd });
+  }
+  db.updateProject(projectId, { modified: new Date().toISOString() });
+  if (folder) await syncProjectBrief(projectId);
+  notifyRendererProjectsChanged();
+  return { ok: true, moved: !!folder, project: loadProjectNode(projectId) };
+}
+
 // --- Launch context ---
 
 /**
@@ -1801,6 +1857,7 @@ module.exports = {
   initPlanWatch, refreshPlanWatchers, stopPlanWatchers,
   listTemplates, templatesRoot, renderTemplateText, editPlanItem,
   listEnvFiles, defaultEnvSelection, copyEnvFiles,
+  registerWorktreeFolder, moveFolderPath, realOrResolved, isInside,
   createTrack, updateTrack, deleteTrack,
   listSchedules, createSchedule, updateSchedule, deleteSchedule, resolveScheduleLaunch, resolveScheduleContext,
   dueSchedules, missedSchedules, recordScheduleRun, importLegacySchedules, schedulePausedReason,

@@ -488,6 +488,30 @@ ipcMain.handle('edit-plan-item', guarded((id, kind, line, text) => projects.edit
 ipcMain.handle('adopt-plan', guarded((id, filename, opts) => projects.adoptPlan(id, filename, opts || {})));
 ipcMain.handle('list-templates', guarded(() => projects.listTemplates()));
 
+// --- IPC: Worktrees tab ---
+// worktrees.js checks every path against the project's repositories itself.
+const worktrees = require('./worktrees');
+worktrees.init({ db: dbModule, log, projects });
+const wtPath = (value) => String(value || '');
+ipcMain.handle('get-project-worktrees', guarded((id) => worktrees.listProjectWorktrees(id)));
+ipcMain.handle('get-worktree-settings', guarded((id) => worktrees.getSettings(id)));
+ipcMain.handle('set-worktree-settings', guarded((id, patch) => worktrees.setSettings(id, patch || {})));
+ipcMain.handle('list-worktree-branches', guarded((id, repoPath) => worktrees.listRepoBranches(id, wtPath(repoPath))));
+ipcMain.handle('suggest-worktree-path', guarded((id, repoPath, ref) => worktrees.suggestWorktreePath(id, wtPath(repoPath), String(ref || ''))));
+ipcMain.handle('worktree-create', guarded((id, spec) => worktrees.createWorktree(id, spec || {})));
+ipcMain.handle('worktree-run-post-create', guarded((id, worktreePath) => worktrees.runPostCreate(id, wtPath(worktreePath))));
+ipcMain.handle('worktree-remove', guarded((id, worktreePath, opts) => worktrees.removeWorktree(id, wtPath(worktreePath), opts || {})));
+ipcMain.handle('worktree-delete-branch', guarded((id, repoPath, branch, opts) => worktrees.deleteBranch(id, wtPath(repoPath), String(branch || ''), opts || {})));
+ipcMain.handle('worktree-merged', guarded((id, repoPath, base) => worktrees.mergedWorktrees(id, wtPath(repoPath), String(base || ''))));
+ipcMain.handle('worktree-lock', guarded((id, worktreePath, reason) => worktrees.lockWorktree(id, wtPath(worktreePath), String(reason || ''))));
+ipcMain.handle('worktree-unlock', guarded((id, worktreePath) => worktrees.unlockWorktree(id, wtPath(worktreePath))));
+ipcMain.handle('worktree-move', guarded((id, worktreePath, newPath) => worktrees.moveWorktree(id, wtPath(worktreePath), wtPath(newPath))));
+ipcMain.handle('worktree-repair', guarded((id, repoPath, paths) => worktrees.repairWorktrees(id, wtPath(repoPath), Array.isArray(paths) ? paths.map(String) : [])));
+ipcMain.handle('worktree-prune-preview', guarded((id, repoPath) => worktrees.prunePreview(id, wtPath(repoPath))));
+ipcMain.handle('worktree-prune', guarded((id, repoPath, opts) => worktrees.pruneWorktrees(id, wtPath(repoPath), opts || {})));
+ipcMain.handle('worktree-attach', guarded((id, worktreePath) => worktrees.attachToProject(id, wtPath(worktreePath))));
+ipcMain.handle('worktree-detach', guarded((id, worktreePath) => worktrees.detachFromProject(id, wtPath(worktreePath))));
+
 // --- IPC: get-projects ---
 ipcMain.handle('open-external', (_event, url) => {
   log.info('[open-external IPC]', url);
