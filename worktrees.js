@@ -47,6 +47,8 @@ const COPY_MAX_ENTRIES = 50000;
 
 const HOOK_TIMEOUT_MS = 15 * 60 * 1000;
 const HOOK_OUTPUT_MAX = 4000;
+const HOOK_KILL_GRACE_MS = 3000;
+const HOOK_PIPE_WAIT_MS = 500;
 const STATUS_CONCURRENCY = 6;
 
 let db, log, projects, commandEnv, codexHome;
@@ -217,7 +219,7 @@ function worktreeKind(worktree, mainPath, project, folder) {
   if (folder?.mode === 'worktree' || inside(path.join(project.root, 'repos'))) return 'switchboard';
   if (/[\\/]\.claude[\\/]worktrees[\\/]/.test(real)) return 'claude';
   if (inside(path.join(codexHome(), 'worktrees'))) return 'codex';
-  if (inside(mainPath + '.worktrees') || /[\\/]\.(worktrees|repos)[\\/]/.test(real)) return 'classic';
+  if (inside(mainPath.replace(/\.git$/i, '') + '.worktrees') || /[\\/]\.(worktrees|repos)[\\/]/.test(real)) return 'classic';
   return 'other';
 }
 
@@ -253,6 +255,10 @@ async function describeWorktree(project, folders, mainPath, worktree) {
     kind: worktreeKind(worktree, mainPath, project, folder),
     attached: !!folder,
     attachedMode: folder?.mode || null,
+    // The path as the project stored it, which can differ from git's real path
+    // (a symlink, /var vs /private/var); the renderer matches folders and
+    // session cwds against both.
+    attachedPath: folder && folder.path !== worktree.path ? folder.path : null,
     dirty: null,
     ahead: null,
     behind: null,
@@ -409,6 +415,10 @@ function ensureParentDirs(target, name) {
   }
 }
 
+function isSymlink(p) {
+  try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; }
+}
+
 function matchesAny(relative, patterns) {
   return patterns.some(pattern => path.posix.matchesGlob(relative, pattern.replace(/\/+$/, '')));
 }
@@ -416,8 +426,8 @@ function matchesAny(relative, patterns) {
 /**
  * Copy what the patterns match from the main worktree into a new one: files
  * git does not check out (.env, local config). A matching directory is copied
- * whole. Nothing that already exists in the new worktree is overwritten, and
- * links are copied as links, never followed.
+ * whole, minus what the ignores match. Nothing that already exists in the new
+ * worktree is overwritten, and links are copied as links, never followed.
  */
 function copyMatchingFiles(source, target, patterns, ignores = []) {
   const copied = [];
@@ -435,14 +445,19 @@ function copyMatchingFiles(source, target, patterns, ignores = []) {
       const relative = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
       if (matchesAny(relative, ignores)) continue;
       const isDir = entry.isDirectory();
-      if (matchesAny(relative, patterns) && (isDir || entry.isFile())) {
+      const isLink = entry.isSymbolicLink();
+      if (matchesAny(relative, patterns) && (isDir || isLink || entry.isFile())) {
         const from = path.join(source, ...relative.split('/'));
         const to = path.join(target, ...relative.split('/'));
-        if (fs.existsSync(to)) { skipped.push(relative); continue; }
+        if (fs.existsSync(to) || isSymlink(to)) { skipped.push(relative); continue; }
         try {
           ensureParentDirs(target, relative);
-          if (isDir) fs.cpSync(from, to, { recursive: true, force: false, errorOnExist: false, verbatimSymlinks: true });
-          else {
+          if (isLink) fs.symlinkSync(fs.readlinkSync(from), to);
+          else if (isDir) {
+            // The ignores apply inside a folder copied whole too.
+            const filter = (src) => !matchesAny(path.relative(source, src).split(path.sep).join('/'), ignores);
+            fs.cpSync(from, to, { recursive: true, force: false, errorOnExist: false, verbatimSymlinks: true, filter });
+          } else {
             fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL);
             fs.chmodSync(to, fs.statSync(from).mode & 0o777);
           }
@@ -559,10 +574,11 @@ function runUserCommand(command, cwd, extraEnv = {}, { timeoutMs = HOOK_TIMEOUT_
     let output = '';
     let timedOut = false;
     let settled = false;
+    const timers = [];
     const finish = (result) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      timers.forEach(clearTimeout);
       resolve({ ...result, timedOut, output: output.trim() });
     };
     let child;
@@ -579,14 +595,26 @@ function runUserCommand(command, cwd, extraEnv = {}, { timeoutMs = HOOK_TIMEOUT_
       resolve({ ok: false, code: null, timedOut: false, output: err.message });
       return;
     }
+    const signal = (name) => {
+      try { if (isWindows) child.kill(); else process.kill(-child.pid, name); } catch {}
+    };
     const keep = (chunk) => { output = (output + chunk.toString()).slice(-HOOK_OUTPUT_MAX); };
     child.stdout.on('data', keep);
     child.stderr.on('data', keep);
-    const timer = setTimeout(() => {
+    timers.push(setTimeout(() => {
       timedOut = true;
-      try { if (isWindows) child.kill(); else process.kill(-child.pid, 'SIGTERM'); } catch {}
-    }, timeoutMs);
+      signal('SIGTERM');
+      // A command that ignores SIGTERM is killed, and the caller is answered
+      // either way: a dialog must never wait on it forever.
+      timers.push(setTimeout(() => signal('SIGKILL'), HOOK_KILL_GRACE_MS));
+      timers.push(setTimeout(() => finish({ ok: false, code: null }), HOOK_KILL_GRACE_MS + HOOK_PIPE_WAIT_MS));
+    }, timeoutMs));
     child.on('error', (err) => { output += `\n${err.message}`; finish({ ok: false, code: null }); });
+    // The shell can exit while something it left in the background still
+    // holds the pipes open: answer shortly after the exit, not when they close.
+    child.on('exit', (code) => {
+      timers.push(setTimeout(() => finish({ ok: code === 0 && !timedOut, code }), HOOK_PIPE_WAIT_MS));
+    });
     child.on('close', (code) => finish({ ok: code === 0 && !timedOut, code }));
   });
 }
@@ -634,8 +662,10 @@ async function removeWorktree(projectId, worktreePath, opts = {}) {
   }
   if (worktree.locked) await git.worktreeUnlock(mainPath, worktree.path);
   try {
-    if (exists) await git.worktreeRemove(mainPath, worktree.path, { force: !!opts.force });
-    else await git.worktreePrune(mainPath);
+    // Only this worktree: a prune would also drop the records of others whose
+    // folder is missing for now (moved by hand, on a drive not mounted).
+    if (exists) await git.worktreeRemove(mainPath, worktree.path, { force: !!opts.force, prune: false });
+    else await removeMissingRecord(context);
   } catch (err) {
     if (worktree.locked) await git.worktreeLock(mainPath, worktree.path, worktree.lockReason).catch(() => {});
     return { error: err.message, dirty: git.isDirtyWorktreeError(err) };
@@ -655,6 +685,30 @@ async function removeWorktree(projectId, worktreePath, opts = {}) {
     }
   }
   return result;
+}
+
+/**
+ * Drop git's record of one worktree whose folder is gone. Newer git does this
+ * with worktree remove; an older one refuses, so the record's own folder under
+ * .git/worktrees (the one whose gitdir file points at this worktree) goes.
+ */
+async function removeMissingRecord(context) {
+  const { mainPath, worktree, group } = context;
+  try {
+    await git.worktreeRemove(mainPath, worktree.path, { force: true, prune: false });
+    return;
+  } catch {}
+  const adminRoot = path.join(group.commonDir, 'worktrees');
+  const expected = path.join(worktree.path, '.git');
+  for (const name of fs.readdirSync(adminRoot)) {
+    const admin = path.join(adminRoot, name);
+    let gitdir = '';
+    try { gitdir = fs.readFileSync(path.join(admin, 'gitdir'), 'utf8').trim(); } catch { continue; }
+    if (!samePath(path.resolve(admin, gitdir), expected)) continue;
+    fs.rmSync(admin, { recursive: true, force: true });
+    return;
+  }
+  throw new Error('Could not find git\'s record of that worktree');
 }
 
 /** Delete a branch no worktree has checked out (after "not fully merged"). */
@@ -687,6 +741,15 @@ async function mergedWorktrees(projectId, repoPath, base) {
   const remote = remotes.find(item => item.name === baseRef);
   const baseLocal = remote ? baseRef.slice(remote.remote.length + 1) : baseRef;
   const candidates = context.list.filter(item => !item.isMain && item.branch && merged.has(item.branch) && item.branch !== baseLocal);
+  // A branch with no commits of its own (its reflog holds only its creation)
+  // is most likely a worktree just made, not finished work: the renderer does
+  // not tick it. Without a reflog, a branch still at the base's tip counts.
+  const baseTip = await git.run(['rev-parse', '--verify', '--quiet', `${baseRef}^{commit}`], context.mainPath).catch(() => '');
+  const isFresh = async (item) => {
+    const log = await git.run(['log', '-g', '--format=%H', `refs/heads/${item.branch}`, '--'], context.mainPath).catch(() => null);
+    if (log) return log.split('\n').filter(Boolean).length <= 1;
+    return !!baseTip && item.head === baseTip;
+  };
   const worktrees = await mapLimit(candidates, STATUS_CONCURRENCY, async (item) => {
     const exists = isDirectory(item.path);
     const status = exists ? await git.status(item.path).catch(() => null) : null;
@@ -695,7 +758,7 @@ async function mergedWorktrees(projectId, repoPath, base) {
     if (!exists) reason = 'Folder missing: prune it instead';
     else if (item.locked) reason = 'Locked';
     else if (dirty) reason = 'Uncommitted changes';
-    return { path: item.path, branch: item.branch, exists, dirty, locked: item.locked, eligible: !reason, reason };
+    return { path: item.path, branch: item.branch, exists, dirty, locked: item.locked, eligible: !reason, reason, fresh: await isFresh(item) };
   });
   return { ok: true, base: baseRef, worktrees };
 }

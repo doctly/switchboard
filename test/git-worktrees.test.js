@@ -223,3 +223,32 @@ test('isValidBranchName and lastCommit', { skip }, async () => {
     cleanup();
   }
 });
+
+test('listBranches splits a remote whose name holds a slash', { skip }, async () => {
+  const { base, repo, cleanup } = await makeRepo();
+  const clone = path.join(base, 'clone');
+  try {
+    await git.run(['clone', '-q', '--origin', 'team/fork', repo, clone], base);
+    const branches = await git.listBranches(clone);
+    const main = branches.remote.find(item => item.name === 'team/fork/main');
+    assert.ok(main, 'listed');
+    assert.equal(main.remote, 'team/fork');
+  } finally {
+    cleanup();
+  }
+});
+
+test('worktreeRemove with prune: false leaves other missing worktrees alone', { skip }, async () => {
+  const { base, repo, cleanup } = await makeRepo();
+  try {
+    const keep = path.join(base, 'app.worktrees', 'keep');
+    const drop = path.join(base, 'app.worktrees', 'drop');
+    await git.worktreeAdd(repo, keep, 'keep');
+    await git.worktreeAdd(repo, drop, 'drop');
+    fs.rmSync(keep, { recursive: true, force: true });
+    await git.worktreeRemove(repo, drop, { prune: false });
+    assert.deepEqual((await git.worktreeList(repo)).map(item => item.path), [repo, keep]);
+  } finally {
+    cleanup();
+  }
+});

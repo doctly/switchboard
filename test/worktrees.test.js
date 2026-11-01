@@ -9,6 +9,7 @@ const { spawnSync } = require('child_process');
 
 const projects = require('../projects');
 const worktrees = require('../worktrees');
+const git = require('../git');
 
 const haveGit = spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0;
 const skip = !haveGit && 'git not installed';
@@ -352,6 +353,7 @@ test('merged worktrees: only clean, unlocked ones whose branch is in the base ca
     assert.deepEqual(Object.keys(rows).sort(), ['dirty', 'done']);
     assert.equal(rows.done.eligible, true);
     assert.equal(rows.done.path, done);
+    assert.equal(rows.done.fresh, true, 'no commits of its own: not ticked for the user');
     assert.equal(rows.dirty.eligible, false);
     assert.equal(rows.dirty.reason, 'Uncommitted changes');
   } finally {
@@ -443,4 +445,90 @@ test('path templates use the extension\'s variables', () => {
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }
+});
+
+test('merged worktrees: a branch merged after real work is not taken for a fresh one', { skip }, async () => {
+  const t = await setup();
+  try {
+    const landed = (await worktrees.createWorktree(t.projectId, { repoPath: t.app, mode: 'new', branch: 'landed' })).worktree.path;
+    commitIn(landed, 'feature.txt', 'feature\n');
+    gitIn(t.app, 'merge', '-q', '--ff-only', 'landed');
+    const result = await worktrees.mergedWorktrees(t.projectId, t.app, 'main');
+    const row = result.worktrees.find(item => item.branch === 'landed');
+    assert.equal(row.eligible, true);
+    assert.equal(row.fresh, false, 'at the tip of main, but with a commit of its own');
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('removing a missing worktree keeps the records of other missing ones', { skip }, async () => {
+  const t = await setup();
+  try {
+    const a = (await worktrees.createWorktree(t.projectId, { repoPath: t.app, mode: 'new', branch: 'gone-a' })).worktree.path;
+    const b = (await worktrees.createWorktree(t.projectId, { repoPath: t.app, mode: 'new', branch: 'away-b' })).worktree.path;
+    fs.rmSync(a, { recursive: true, force: true });
+    const away = path.join(t.base, 'unplugged-drive');
+    fs.renameSync(b, away); // moved by hand: git cannot see it until repaired
+    const removed = await worktrees.removeWorktree(t.projectId, a);
+    assert.equal(removed.ok, true, removed.error);
+    const paths = (await git.worktreeList(t.app)).map(item => item.path);
+    assert.ok(!paths.includes(a), 'its record is gone');
+    assert.ok(paths.includes(b), 'the other missing worktree keeps its record');
+    assert.equal((await worktrees.repairWorktrees(t.projectId, t.app, [away])).ok, true, 'and can still be repaired');
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('a symlinked attached folder is matched to git\'s real path', { skip: (skip || (process.platform === 'win32' && 'symlinks')) }, async () => {
+  const t = await setup();
+  try {
+    const link = path.join(t.base, 'app-link');
+    fs.symlinkSync(t.app, link);
+    const other = await projects.createProject({ name: 'Linked', folders: [{ path: link, mode: 'in-place' }] });
+    const listed = await worktrees.listProjectWorktrees(other.project.id);
+    const main = listed.repositories[0].worktrees[0];
+    assert.equal(main.path, t.app);
+    assert.equal(main.attached, true);
+    assert.equal(main.attachedPath, link);
+    assert.equal((await worktrees.listProjectWorktrees(t.projectId)).repositories[0].worktrees[0].attachedPath, null);
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('copying: ignores apply inside a folder copied whole, and links are copied as links', () => {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-copy-')));
+  try {
+    const source = path.join(base, 'src');
+    const target = path.join(base, 'dst');
+    fs.mkdirSync(path.join(source, 'config'), { recursive: true });
+    fs.mkdirSync(target);
+    fs.writeFileSync(path.join(source, 'config', 'app.json'), '{}');
+    fs.writeFileSync(path.join(source, 'config', 'secret.key'), 'no');
+    fs.writeFileSync(path.join(base, 'shared.env'), 'X=1');
+    fs.symlinkSync(path.join(base, 'shared.env'), path.join(source, '.env'));
+    const result = worktrees.copyMatchingFiles(source, target, ['config', '.env'], ['config/secret.key']);
+    assert.deepEqual(result.copied, ['.env', 'config']);
+    assert.ok(fs.existsSync(path.join(target, 'config', 'app.json')));
+    assert.ok(!fs.existsSync(path.join(target, 'config', 'secret.key')), 'ignored inside the copied folder');
+    assert.equal(fs.readlinkSync(path.join(target, '.env')), path.join(base, 'shared.env'), 'the link itself, not its target');
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('runUserCommand answers even when a command ignores SIGTERM or leaves a process behind', { skip: process.platform === 'win32' && 'POSIX shell' }, async () => {
+  let started = Date.now();
+  const stubborn = await worktrees.runUserCommand("trap '' TERM; sleep 30", os.tmpdir(), {}, { timeoutMs: 200 });
+  assert.equal(stubborn.ok, false);
+  assert.equal(stubborn.timedOut, true);
+  assert.ok(Date.now() - started < 8000, 'killed after the grace period');
+
+  started = Date.now();
+  const background = await worktrees.runUserCommand('(sleep 5 &); echo started', os.tmpdir(), {}, { timeoutMs: 20000 });
+  assert.equal(background.ok, true);
+  assert.equal(background.output, 'started');
+  assert.ok(Date.now() - started < 3000, 'does not wait for the background process');
 });

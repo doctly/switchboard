@@ -155,16 +155,23 @@ function wtVisibleRepositories(repositories, query, order) {
 function wtSessionsByWorktree(repositories) {
   const byPath = new Map();
   if (typeof activePtyIds === 'undefined' || typeof sessionMap === 'undefined') return byPath;
+  // Each worktree under git's path and, when the project stored it another
+  // way (a symlink), under that path too; counts go to git's path.
   const paths = [];
-  for (const repo of repositories || []) for (const wt of repo.worktrees || []) paths.push(wt.path);
-  paths.sort((a, b) => b.length - a.length);
+  for (const repo of repositories || []) {
+    for (const wt of repo.worktrees || []) {
+      paths.push([wt.path, wt.path]);
+      if (wt.attachedPath) paths.push([wt.attachedPath, wt.path]);
+    }
+  }
+  paths.sort((a, b) => b[0].length - a[0].length);
   for (const id of activePtyIds) {
     const session = sessionMap.get(id);
     if (!session?.projectPath) continue;
-    const home = paths.find(p => isPathInside(session.projectPath, p));
+    const home = paths.find(([p]) => isPathInside(session.projectPath, p));
     if (!home) continue;
-    if (!byPath.has(home)) byPath.set(home, []);
-    byPath.get(home).push(session);
+    if (!byPath.has(home[1])) byPath.set(home[1], []);
+    byPath.get(home[1]).push(session);
   }
   return byPath;
 }
@@ -480,7 +487,7 @@ function wtSessionMenuItems(project, wt) {
 }
 
 function wtFolderFor(project, wt) {
-  return (project.folders || []).find(f => f.path === wt.path) || null;
+  return (project.folders || []).find(f => f.path === wt.path || (wt.attachedPath && f.path === wt.attachedPath)) || null;
 }
 
 function wtRowMenuItems(project, repo, wt) {
@@ -654,7 +661,11 @@ function wtFormDialog({ title, html, confirm = 'Save', danger = false, wide = fa
       setError(text) { errorEl.textContent = text || ''; errorEl.hidden = !text; },
       setConfirm(label, enabled = true) { if (label) confirmBtn.textContent = label; confirmBtn.disabled = !enabled; },
     };
-    const onKey = (e) => { if (e.key === 'Escape' && !busy) { e.stopPropagation(); finish(null); } };
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      if (!busy) finish(null);
+    };
     function finish(value) {
       overlay.remove();
       document.removeEventListener('keydown', onKey, true);
@@ -784,6 +795,9 @@ function wtCreateDialog(project, repo) {
   let branches = null;
   let pathEdited = false;
   let suggestTimer = null;
+  // Answers can arrive out of order when the repository or the branch name
+  // changes quickly; only the latest of each kind is used.
+  const latest = { suggest: 0, branches: 0, env: 0 };
   const $ = (ui, sel) => ui.dialog.querySelector(sel);
   const mode = (ui) => $(ui, 'input[name="wt-c-mode"]:checked')?.value || 'new';
   const refFor = (ui) => {
@@ -797,8 +811,9 @@ function wtCreateDialog(project, repo) {
     if (pathEdited) return;
     clearTimeout(suggestTimer);
     suggestTimer = setTimeout(async () => {
+      const mine = ++latest.suggest;
       const result = await wtApi('suggestWorktreePath', project.id, current.mainPath, refFor(ui));
-      if (!result?.ok || pathEdited) return;
+      if (mine !== latest.suggest || !result?.ok || pathEdited) return;
       const input = $(ui, '#wt-c-path');
       input.value = result.path;
       // The end of the path is the part that changes; keep it in view.
@@ -807,7 +822,9 @@ function wtCreateDialog(project, repo) {
   };
   const fillBranches = async (ui) => {
     branches = null;
+    const mine = ++latest.branches;
     const result = await wtApi('listWorktreeBranches', project.id, current.mainPath);
+    if (mine !== latest.branches) return;
     if (!result?.ok) { ui.setError(result?.error || 'Could not read the branches.'); return; }
     branches = result;
     const starts = wtStartPointOptions(result);
@@ -829,7 +846,10 @@ function wtCreateDialog(project, repo) {
   const fillEnv = async (ui) => {
     const slot = $(ui, '#wt-c-env');
     slot.innerHTML = '';
+    slot._files = [];
+    const mine = ++latest.env;
     const result = await wtApi('listEnvFiles', current.mainPath);
+    if (mine !== latest.env) return;
     const files = result?.files || [];
     if (!files.length) return;
     const defaults = new Set(result.defaults || []);
@@ -944,6 +964,7 @@ function wtRemoveDialog(project, repo, wt) {
     ${wt.exists ? wtCheck('wt-r-force', 'Discard its uncommitted changes', wt.dirty ? 'It has some. They are lost: git cannot bring them back.' : 'Only needed if it has any.') : ''}
     ${wt.branch ? wtCheck('wt-r-branch', `Also delete the branch <span class="mono">${escapeHtml(wt.branch)}</span>`, 'If it is not merged you are asked again.') : ''}
     ${settings.preRemoveCmd && wt.exists ? `<div class="add-project-hint wt-hint">Runs <code>${escapeHtml(settings.preRemoveCmd)}</code> first. If it fails, the worktree stays.</div>` : ''}
+    ${wt.exists ? '<div class="add-project-hint wt-hint">Files git ignores there, like node_modules or a copied .env, go with the folder.</div>' : ''}
     ${wt.attached ? '<div class="add-project-hint wt-hint">It is detached from the project too.</div>' : ''}`;
   const readiness = (ui) => {
     const unlock = ui.dialog.querySelector('#wt-r-unlock');
@@ -1091,16 +1112,18 @@ async function wtPruneDialog(project, repo) {
 
 /**
  * The merged worktrees as checkboxes. One that cannot go is disabled with the
- * reason; one with running sessions can go but is not ticked for you.
+ * reason. One with running sessions, or still at the base's tip (just made,
+ * nothing done in it yet), can go but is not ticked for you.
  */
 function wtMergedListHtml(result, repo, live = new Map()) {
   if (!result.worktrees.length) return `<div class="add-project-hint">No worktree has a branch merged into <span class="mono">${escapeHtml(result.base)}</span>.</div>`;
   return `<div class="wt-merged-list">${result.worktrees.map((item, i) => {
     const running = (live.get(item.path) || []).length;
-    const notes = [wtRowPath(item, repo), item.reason, running ? `${running} running` : ''].filter(Boolean);
+    const notes = [wtRowPath(item, repo), item.reason, item.fresh ? 'no commits of its own yet' : '', running ? `${running} running` : ''].filter(Boolean);
+    const ticked = item.eligible && !running && !item.fresh;
     return `
     <label class="wt-check${item.eligible ? '' : ' disabled'}" title="${wtAttr(item.path)}">
-      <input type="checkbox" data-merged="${i}" ${item.eligible && !running ? 'checked' : ''} ${item.eligible ? '' : 'disabled'}>
+      <input type="checkbox" data-merged="${i}" ${ticked ? 'checked' : ''} ${item.eligible ? '' : 'disabled'}>
       <span><span class="mono">${escapeHtml(item.branch)}</span><span class="wt-check-help">${escapeHtml(notes.join(' · '))}</span></span>
     </label>`;
   }).join('')}</div>`;
@@ -1126,14 +1149,18 @@ async function wtMergedDialog(project, repo) {
       <label class="new-project-label">Merged into</label>
       <select class="ws-select wt-field" id="wt-x-base">${wtOptionsHtml(bases, result.base)}</select>
       <div id="wt-x-list"></div>
-      ${wtCheck('wt-x-branches', 'Also delete their branches', 'Safe: every commit on them is in the base branch.', true)}`,
+      ${wtCheck('wt-x-branches', 'Also delete their branches', 'Git deletes only a branch it sees as merged; any other stays and is listed.', true)}`,
     confirm: 'Remove selected',
     danger: true,
     wide: true,
     onReady: (ui) => {
       refreshList(ui);
+      let asked = 0;
       ui.dialog.querySelector('#wt-x-base').onchange = async (e) => {
+        const mine = ++asked;
+        ui.setConfirm(null, false);
         const next = await wtApi('getMergedWorktrees', project.id, repo.mainPath, e.target.value);
+        if (mine !== asked) return; // another base was picked meanwhile
         if (!next?.ok) { ui.setError(next?.error || 'Could not check that branch.'); return; }
         ui.setError('');
         result = next;
@@ -1149,8 +1176,9 @@ async function wtMergedDialog(project, repo) {
       for (const item of chosen) {
         ui.setConfirm(`Removing ${item.branch}…`, false);
         const done = await wtApi('removeWorktree', project.id, item.path, { deleteBranch });
-        if (done?.ok) removed += 1;
-        else failures.push(`${item.branch}: ${done?.error || 'failed'}`);
+        if (!done?.ok) { failures.push(`${item.branch}: ${done?.error || 'failed'}`); continue; }
+        removed += 1;
+        if (done.branchError) failures.push(`${item.branch}: removed, but the branch stays: ${done.branchError.split('\n')[0]}`);
       }
       return { removed, failures };
     },
@@ -1158,7 +1186,7 @@ async function wtMergedDialog(project, repo) {
     if (outcome && outcome !== true) {
       const text = `Removed ${wtPlural(outcome.removed, 'merged worktree')}`;
       wtSetNotice(project, outcome.failures.length
-        ? { kind: 'error', text: `${text}; ${outcome.failures.length} could not go`, output: outcome.failures.join('\n') }
+        ? { kind: 'error', text: `${text}; ${wtPlural(outcome.failures.length, 'problem')}`, output: outcome.failures.join('\n') }
         : { kind: 'ok', text });
       await wtReload(project);
     }

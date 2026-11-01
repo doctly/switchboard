@@ -10,6 +10,14 @@ const fs = require('fs');
 const path = require('path');
 
 const MAX_BUFFER = 4 * 1024 * 1024;
+
+// Every git call: never hang on a credential prompt, never take the index
+// lock just to refresh stat data (a status here must not collide with the
+// user's own git add), and messages in English, since some errors are
+// recognised by their text.
+function gitEnv() {
+  return { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' };
+}
 const MAX_DIFF_LENGTH = 256 * 1024;
 const MAX_UNTRACKED_STAT_BYTES = 2 * 1024 * 1024;
 
@@ -18,8 +26,7 @@ function run(args, cwd) {
     execFile('git', args, {
       cwd,
       maxBuffer: MAX_BUFFER,
-      // Never hang on a credential prompt; a worktree add has no reason to ask.
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      env: gitEnv(),
     }, (err, stdout, stderr) => {
       if (err) {
         const error = new Error(String(stderr || err.message).trim() || `git ${args[0]} failed`);
@@ -39,7 +46,7 @@ function runRaw(args, cwd, { allowExitCodes = [] } = {}) {
     execFile('git', args, {
       cwd,
       maxBuffer: MAX_BUFFER,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      env: gitEnv(),
     }, (err, stdout, stderr) => {
       if (!err || allowExitCodes.includes(err.code)) {
         resolve(String(stdout));
@@ -60,7 +67,7 @@ function runCapture(args, cwd) {
     execFile('git', args, {
       cwd,
       maxBuffer: MAX_BUFFER,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      env: gitEnv(),
     }, (err, stdout, stderr) => {
       if (err) {
         const error = new Error(String(stderr || err.message).trim() || `git ${args[0]} failed`);
@@ -137,13 +144,17 @@ function refuseOptionLike(value, label) {
   if (typeof value === 'string' && value.startsWith('-')) throw new Error(`${label} cannot start with "-"`);
 }
 
-/** Remove a worktree. Refuses a dirty one unless force; the branch always stays. */
-async function worktreeRemove(repo, targetPath, { force = false } = {}) {
+/**
+ * Remove a worktree. Refuses a dirty one unless force; the branch always stays.
+ * prune: false keeps the records of other worktrees whose folder is missing
+ * (moved by hand, on a drive that is not mounted) instead of dropping them too.
+ */
+async function worktreeRemove(repo, targetPath, { force = false, prune = true } = {}) {
   const args = ['worktree', 'remove'];
   if (force) args.push('--force');
   args.push(targetPath);
   await run(args, repo);
-  try { await run(['worktree', 'prune'], repo); } catch {}
+  if (prune) try { await run(['worktree', 'prune'], repo); } catch {}
 }
 
 /** True when git refused to remove a worktree because it has local changes. */
@@ -270,10 +281,15 @@ async function isValidBranchName(repo, name) {
  * out or starts from: { local: [{ name, head, upstream }], remote: [{ name, remote, head }] }.
  */
 async function listBranches(repo) {
-  const output = await runRaw([
-    'for-each-ref', '--format=%(refname)%00%(objectname:short)%00%(upstream:short)%00%(symref)',
-    'refs/heads', 'refs/remotes',
-  ], repo);
+  const [output, remoteNames] = await Promise.all([
+    runRaw([
+      'for-each-ref', '--format=%(refname)%00%(objectname:short)%00%(upstream:short)%00%(symref)',
+      'refs/heads', 'refs/remotes',
+    ], repo),
+    runOr(['remote'], repo, ''),
+  ]);
+  // A remote's name can hold a slash (team/fork), so match the longest one.
+  const remotes = remoteNames.split('\n').map(name => name.trim()).filter(Boolean).sort((a, b) => b.length - a.length);
   const local = [];
   const remote = [];
   for (const line of output.split('\n')) {
@@ -283,7 +299,7 @@ async function listBranches(repo) {
     if (ref.startsWith('refs/heads/')) local.push({ name: ref.slice('refs/heads/'.length), head, upstream: upstream || '' });
     else if (ref.startsWith('refs/remotes/')) {
       const name = ref.slice('refs/remotes/'.length);
-      remote.push({ name, remote: name.split('/')[0], head });
+      remote.push({ name, remote: remotes.find(r => name.startsWith(r + '/')) || name.split('/')[0], head });
     }
   }
   return { local, remote };

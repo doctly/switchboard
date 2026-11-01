@@ -195,3 +195,24 @@ test('the merged list ticks what can go, but not a worktree with sessions runnin
   assert.match(html, /Uncommitted changes/);
   assert.match(ctx.wtMergedListHtml({ base: 'main', worktrees: [] }, {}), /No worktree has a branch merged/);
 });
+
+test('a worktree attached through a symlink still matches its project folder and its sessions', () => {
+  const linked = { ...beta, attached: true, attachedPath: '/links/beta' };
+  const ctx = loadContext({
+    activePtyIds: new Set(['s1']),
+    sessionMap: new Map([['s1', { sessionId: 's1', projectPath: '/links/beta/src' }]]),
+  });
+  const byPath = ctx.wtSessionsByWorktree([{ worktrees: [main, linked] }]);
+  assert.equal(byPath.get(beta.path).length, 1, 'counted under git\'s path');
+  const items = ctx.wtRowMenuItems({ id: 'p', folders: [{ path: '/links/beta' }] }, { mainPath: '/w/app' }, linked);
+  assert.equal(items.find(i => i.label === 'Show in the Git tab').disabled, false);
+});
+
+test('a merged worktree with no commits of its own is offered but not ticked', () => {
+  const ctx = loadContext();
+  const html = ctx.wtMergedListHtml({ base: 'main', worktrees: [
+    { path: '/w/app.worktrees/new', branch: 'new', eligible: true, reason: '', fresh: true },
+  ] }, { mainPath: '/w/app' });
+  assert.doesNotMatch(html.match(/<input[^>]*>/)[0], /checked/);
+  assert.match(html, /no commits of its own yet/);
+});
