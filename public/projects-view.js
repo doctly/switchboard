@@ -172,7 +172,7 @@ function saveProjectsUi() {
   sessionStorage.setItem('projects.archivedOpen', JSON.stringify(projectsUi.archivedOpen));
 }
 
-const PROJECT_WORKSPACE_TABS = new Set(['overview', 'plan', 'files', 'git', 'settings']);
+const PROJECT_WORKSPACE_TABS = new Set(['overview', 'plan', 'files', 'git', 'worktrees', 'settings']);
 
 function projectTab(projectOrId = projectsUi.selectedProjectId) {
   const projectId = typeof projectOrId === 'string' ? projectOrId : projectOrId?.id;
@@ -1067,6 +1067,8 @@ function applySessionStatus(project) {
     badge.style.display = running ? '' : 'none';
   }
 
+  // The Worktrees tab counts the sessions running in each worktree.
+  if (projectTab(project) === 'worktrees' && typeof applyWorktreeSessionCounts === 'function') applyWorktreeSessionCounts(project);
   // Only the Overview tab shows sessions; the others do not care.
   if (projectTab(project) !== 'overview') return;
   for (const card of projectViewer.querySelectorAll('.tcard[data-track-key]')) {
@@ -1303,6 +1305,7 @@ function renderOverview() {
         <button type="button" class="ws-tab ${tabName === 'plan' ? 'active' : ''}" data-tab="plan" title="Phases from plan-tracker.md and the todos, with the sessions that worked on them">Plan <span class="ws-tab-meta" id="ws-tab-plan-meta"></span></button>
         <button type="button" class="ws-tab ${tabName === 'files' ? 'active' : ''}" data-tab="files" title="The project folder: brief, plan, todos and anything else the project keeps">Files</button>
         <button type="button" class="ws-tab ${tabName === 'git' ? 'active' : ''}" data-tab="git" title="Branches, working changes and recent commits in attached repositories">Git</button>
+        <button type="button" class="ws-tab ${tabName === 'worktrees' ? 'active' : ''}" data-tab="worktrees" title="Every git worktree of the project's repositories: create, open, lock, move, prune and remove them">Worktrees</button>
         <button type="button" class="ws-tab ${tabName === 'settings' ? 'active' : ''}" data-tab="settings">Settings</button>
       </div>
     </div>
@@ -1310,6 +1313,7 @@ function renderOverview() {
 
   const body = projectViewer.querySelector('#ws-body');
   if (tabName === 'settings') renderSettings(project, body);
+  else if (tabName === 'worktrees') renderProjectWorktreesTab(project, body);
   else if (tabName === 'files') renderFilesTab(project, body);
   else if (tabName === 'plan') renderPlanTab(project, body);
   else if (tabName === 'git') renderProjectGitTab(project, body);

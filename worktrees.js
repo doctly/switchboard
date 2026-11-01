@@ -308,7 +308,7 @@ async function listProjectWorktrees(projectId) {
   const groups = await discoverRepos(folders);
   const repositories = await Promise.all(groups.map(group => describeRepository(project, folders, group)));
   repositories.sort((a, b) => a.name.localeCompare(b.name) || a.mainPath.localeCompare(b.mainPath));
-  return { ok: true, repositories, settings: settingsFor(projectId) };
+  return { ok: true, repositories, settings: settingsFor(projectId), homeDir: os.homedir() };
 }
 
 // --- The boundary every action goes through ---
