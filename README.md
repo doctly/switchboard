@@ -62,6 +62,7 @@ Turn either CLI off under **CLI Agents** in Settings. A switched-off CLI is not 
 - **Per-CLI launch options** — Permission mode, worktree, sandbox, approval policy, model, and effort, set per session, per project, or globally.
 - **IDE emulation** (Claude only) — Review and edit Claude's proposed diffs in a side panel before they land.
 - **Projects** — Group work by what it is, not where it lives: a folder on disk, a brief the agent reads, a plan, a todo list, and the sessions filed under it.
+- **Worktrees tab** — Every git worktree of a project's repositories in one list: create, open, lock, move, prune, and remove them, and start a session in any of them.
 - **Project tasks and server logs** — Run `.vscode/tasks.json` commands and keep their logs beside your sessions.
 - **Scheduled tasks** — Start a session with a prompt on a timer, in a project, a track, or any folder.
 - **Plans and memory** (Claude only) — Browse and edit plan files and `CLAUDE.md` in one place.
@@ -204,6 +205,13 @@ Attaching a plain folder uses it where it is. Attaching a git repository asks ho
 - **With its own checkout** under the project folder at `repos/<name>`, on one branch shared by every worktree in the project, or one you name per repository.
 
 A worktree inherits the repository's `.vscode/tasks.json`. Switchboard keeps its generated `CLAUDE.md` and `AGENTS.md` in the project folder; it does not add instruction overrides or ignore rules to attached repositories. Marking a project done asks whether to keep its worktrees on disk (the default, so the project can be reopened as it was) or delete them. Branches stay.
+
+The project's **Worktrees** tab lists every worktree of the project's repositories, wherever it came from: made here, by `claude --worktree` (`.claude/worktrees`), by Codex, or by hand. An attached folder that is not a repository is searched a few levels down for the ones it holds. Each row shows the branch, the folder (the full path is in its tooltip), whether it is locked, missing, or has uncommitted changes, how far it is ahead of or behind its upstream, its last commit, and the sessions running in it. Filter the list or sort it by name or creation time.
+
+- **New worktree** — On a new branch (from HEAD or any branch), an existing branch, a remote branch (a local branch that tracks it), or a detached commit. The folder comes from a template, next to the repository by default (`<repo>.worktrees/<branch>`), and can be changed every time. Optionally attach it to the project, copy the repository's `.env` files, and open a Claude or Codex session or a terminal in it right away.
+- **Remove** — Asks before discarding uncommitted changes, unlocks a locked worktree if you say so, and can delete the branch too. A branch that is not merged is only deleted after a second confirmation.
+- **Maintenance** — Lock (with a reason) and unlock, move (the project's folder, default folder and track folders follow), repair one worktree or a whole repository, repair a folder moved by hand, prune the records of worktrees whose folder is gone, and remove the worktrees whose branch is already merged.
+- **Worktree settings** — The folder template (`$BASE_PATH`, `$BASE_ROOT`, `$BASE_NAME`, `$REF_NAME`, `$INDEX`, `$PROJECT_ROOT`), patterns of files to copy into a new worktree, and commands to run after creating one (such as `npm install`) and before removing one. The commands run in your login shell, in the worktree, and come only from these settings, never from a file in a repository. If the command before removing fails, the worktree stays.
 
 ## Project Tasks and Server Logs
 
