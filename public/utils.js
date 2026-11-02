@@ -58,6 +58,16 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// escapeHtml() leaves quotes alone; use this for values inside quoted attributes.
+function escapeAttr(str) {
+  return String(str == null ? '' : str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function shellEscape(path) {
   return "'" + path.replace(/'/g, "'\\''") + "'";
 }

@@ -315,6 +315,14 @@ projects.initPlanWatch({
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...args);
   },
 });
+// --- Git Graph tab: read-only commit graph service ---
+const gitGraphService = require('./git-graph-service');
+gitGraphService.init({
+  log,
+  send: (channel, ...args) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...args);
+  },
+});
 
 // --- IPC: browse-folder ---
 ipcMain.handle('browse-folder', async () => {
@@ -470,6 +478,15 @@ ipcMain.handle('get-project-git-status', guarded((id, opts) => projects.folderGi
 ipcMain.handle('get-project-git-info', guarded((id) => projects.projectGitInfo(id)));
 ipcMain.handle('get-project-git-diff', guarded((id, folderPath, filePath) => projects.projectGitDiff(id, folderPath, filePath)));
 ipcMain.handle('get-folder-git-status', guarded((folderPath) => projects.folderGitInfo(String(folderPath || ''))));
+
+// --- IPC: Git Graph tab (read-only) ---
+// Every handler delegates one line into projects.js, same shape as the four
+// git handlers above; projects.js re-checks the attached-folder boundary.
+ipcMain.handle('get-project-git-graph', guarded((id, folderPath, opts) => projects.projectGitGraph(id, String(folderPath || ''), opts || {})));
+ipcMain.handle('get-git-graph-commit-detail', guarded((id, folderPath, hash) => projects.projectGitGraphCommitDetail(id, String(folderPath || ''), hash)));
+ipcMain.handle('get-git-graph-compare-detail', guarded((id, folderPath, fromHash, toHash) => projects.projectGitGraphCompareDetail(id, String(folderPath || ''), fromHash, toHash)));
+ipcMain.handle('get-git-graph-file-at-revision', guarded((id, folderPath, rev, filePath) => projects.projectGitGraphFileAtRevision(id, String(folderPath || ''), rev, filePath)));
+ipcMain.handle('get-git-graph-file-diff-between', guarded((id, folderPath, fromRev, toRevOrNull, filePath) => projects.projectGitGraphFileDiffBetween(id, String(folderPath || ''), fromRev, toRevOrNull, filePath)));
 // The .env files a folder has, and the ones the dialog ticks by default,
 // so a new worktree can be offered its repository's local environment.
 ipcMain.handle('list-env-files', guarded((folderPath) => ({

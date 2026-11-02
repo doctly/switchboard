@@ -496,7 +496,7 @@ function createMergeViewer(parent, originalContent, modifiedContent, filename) {
   });
 }
 
-function createUnifiedMergeViewer(parent, originalContent, modifiedContent, filename) {
+function createUnifiedMergeViewer(parent, originalContent, modifiedContent, filename, { readOnly = false } = {}) {
   const langExt = getLanguageExt(filename);
   const state = EditorState.create({
     doc: modifiedContent,
@@ -516,12 +516,15 @@ function createUnifiedMergeViewer(parent, originalContent, modifiedContent, file
       dracula,
       syntaxHighlighting(markdownExtras),
       appThemePatch,
+      readOnly ? EditorView.editable.of(false) : [],
+      readOnly ? EditorState.readOnly.of(true) : [],
       unifiedMergeView({
         original: originalContent,
         gutter: true,
         highlightChanges: true,
         syntaxHighlightDeletions: true,
         collapseUnchanged: { margin: 3, minSize: 4 },
+        mergeControls: !readOnly,
       }),
     ],
   });

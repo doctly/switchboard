@@ -1391,3 +1391,81 @@ test('legacy omitted options preserve old defaults and invalid settings retry in
     assert.equal(projects.importLegacySchedules([bad, defaults]), 1, 'fixed files can be retried');
   } finally { t.cleanup(); }
 });
+
+// --- Git Graph tab (read-only): boundary check + delegation into git-graph-service.js ---
+
+const gitGraphService = require('../git-graph-service');
+const realGit = require('../git');
+
+function initGitGraphServiceFor() {
+  gitGraphService.init({ log: { info() {}, error() {} }, git: realGit });
+}
+
+test('every Git Graph projects.js wrapper rejects a folderPath not attached to the project', { skip: !haveGit && 'git not installed' }, async () => {
+  const t = setup();
+  const repo = makeRepo();
+  const other = makeRepo('switchboard-other-repo-');
+  initGitGraphServiceFor();
+  try {
+    const created = await projects.createProject({ name: 'Git Graph boundary', folders: [{ path: repo, mode: 'in-place' }] });
+    const id = created.project.id;
+
+    const calls = [
+      () => projects.projectGitGraph(id, other, {}),
+      () => projects.projectGitGraphCommitDetail(id, other, 'deadbeef'),
+      () => projects.projectGitGraphCompareDetail(id, other, 'deadbeef', 'beefdead'),
+      () => projects.projectGitGraphFileAtRevision(id, other, 'HEAD', 'README.md'),
+      () => projects.projectGitGraphFileDiffBetween(id, other, 'HEAD', null, 'README.md'),
+    ];
+    for (const call of calls) {
+      await assert.rejects(call(), /not attached/, `${call} should reject a folderPath not attached to the project`);
+    }
+  } finally {
+    rm(other);
+    rm(repo);
+    t.cleanup();
+  }
+});
+
+test('projectGitGraph delegates to git-graph-service for an attached repository and returns real commits', { skip: !haveGit && 'git not installed' }, async () => {
+  const t = setup();
+  const repo = makeRepo();
+  initGitGraphServiceFor();
+  try {
+    const created = await projects.createProject({ name: 'Git Graph delegation', folders: [{ path: repo, mode: 'in-place' }] });
+    const result = await projects.projectGitGraph(created.project.id, repo, { limit: 10 });
+    assert.equal(result.ok, true);
+    assert.ok(result.commits.some(c => c.subject === 'init'));
+  } finally {
+    rm(repo);
+    t.cleanup();
+  }
+});
+
+test('projectGitGraphCommitDetail/CompareDetail/FileAtRevision/FileDiffBetween all delegate for an attached repository', { skip: !haveGit && 'git not installed' }, async () => {
+  const t = setup();
+  const repo = makeRepo();
+  initGitGraphServiceFor();
+  try {
+    const created = await projects.createProject({ name: 'Git Graph reads', folders: [{ path: repo, mode: 'in-place' }] });
+    const id = created.project.id;
+    const head = (await realGit.logWithParents(repo, { limit: 1 }))[0].hash;
+
+    const detail = await projects.projectGitGraphCommitDetail(id, repo, head);
+    assert.equal(detail.ok, true);
+    assert.equal(detail.commit.subject, 'init');
+
+    const compare = await projects.projectGitGraphCompareDetail(id, repo, head, null);
+    assert.equal(compare.ok, true);
+
+    const atRevision = await projects.projectGitGraphFileAtRevision(id, repo, head, 'README.md');
+    assert.equal(atRevision.ok, true);
+    assert.match(atRevision.content, /hello/);
+
+    const diffBetween = await projects.projectGitGraphFileDiffBetween(id, repo, head, null, 'README.md');
+    assert.equal(diffBetween.ok, true);
+  } finally {
+    rm(repo);
+    t.cleanup();
+  }
+});
