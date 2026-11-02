@@ -169,6 +169,59 @@ test('setGitChangesViewMode swallows a throwing localStorage', () => {
   assert.doesNotThrow(() => ctx.setGitChangesViewMode('tree'));
 });
 
+test('the Git workspace defaults to Changes and remembers its view per project', () => {
+  const ctx = loadContext();
+  assert.equal(ctx.projectGitView('one'), 'changes');
+  ctx.setProjectGitView('one', 'history');
+  assert.equal(ctx.projectGitView('one'), 'history');
+  assert.equal(ctx.projectGitView('two'), 'changes');
+  ctx.setProjectGitView('one', 'unknown');
+  assert.equal(ctx.projectGitView('one'), 'history');
+});
+
+test('switching Git views carries the selected repository in both directions', () => {
+  const ctx = loadContext();
+  const history = { selectedRepo: null };
+  ctx.gitGraphState = () => history;
+  ctx.gitTabState('project').selectedRepo = '/repo/from-changes';
+
+  ctx.setProjectGitView('project', 'history');
+  assert.equal(history.selectedRepo, '/repo/from-changes');
+
+  history.selectedRepo = '/repo/from-history';
+  ctx.setProjectGitView('project', 'changes');
+  assert.equal(ctx.gitTabState('project').selectedRepo, '/repo/from-history');
+});
+
+test('Git workspace navigation exposes Changes and History as accessible subviews', () => {
+  const ctx = loadContext();
+  const changes = ctx.gitWorkspaceNavHtml('changes');
+  assert.match(changes, /role="tablist" aria-label="Git view"/);
+  assert.match(changes, /data-git-view="changes"[^>]*aria-selected="true"/);
+  assert.match(changes, /data-git-view="history"[^>]*aria-selected="false"/);
+
+  const history = ctx.gitWorkspaceNavHtml('history');
+  assert.match(history, /data-git-view="history"[^>]*aria-selected="true"/);
+  assert.match(history, /id="git-workspace-history-tab"/);
+});
+
+test('Changes keeps the latest-commit summary but no longer repeats a Recent commits section', () => {
+  const ctx = loadContext();
+  const body = { innerHTML: '', querySelectorAll: () => [] };
+  const repo = {
+    path: '/repo', git: true, branch: 'main', detached: false, operation: null,
+    ahead: 0, behind: 0, changes: [], stats: { insertions: 0, deletions: 0 },
+    commits: [{ shortHash: 'abc1234', subject: 'Latest work', author: 'Ali', date: '2026-11-02T00:00:00Z' }],
+  };
+  const state = ctx.gitTabState('project');
+  state.repositories = [repo];
+  ctx.paintGitRepository({ id: 'project' }, state, body);
+  assert.match(body.innerHTML, /Latest commit/);
+  assert.match(body.innerHTML, /Latest work/);
+  assert.doesNotMatch(body.innerHTML, /Recent commits/);
+  assert.doesNotMatch(body.innerHTML, /git-commits/);
+});
+
 // --- paintGitChanges: exercises the actual list/tree render dispatch and
 // the folder-row click wiring, not just the pure tree helpers above. ---
 
