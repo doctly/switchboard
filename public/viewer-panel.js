@@ -10,6 +10,7 @@
  *   - Images, PDFs and PowerPoint: read-only previews with text editing controls hidden
  *   - Wrap: shown for text (defaults on for markdown, off for others)
  *   - Save: shown if onSave is provided
+ *   - Open in default app: always shown
  *   - Close: shown if onClose is provided
  *   - Copy path/content: shown if opted in
  *
@@ -52,6 +53,7 @@ class ViewerPanel {
       wrap: true,
       gotoLine: true,
       save: !!opts.onSave,
+      openExternal: true,
       close: !!opts.onClose,
     });
     container.insertBefore(this.toolbar.el, container.firstChild);
@@ -108,6 +110,10 @@ class ViewerPanel {
 
     if (toolbar.saveBtn && opts.onSave) {
       toolbar.saveBtn.addEventListener('click', () => this._save());
+    }
+
+    if (toolbar.openExternalBtn) {
+      toolbar.openExternalBtn.addEventListener('click', () => this._openExternally());
     }
 
     if (toolbar.closeBtn && opts.onClose) {
@@ -407,6 +413,17 @@ class ViewerPanel {
       }
     } finally {
       setTimeout(() => { this._saving = false; }, 500);
+    }
+  }
+
+  // Opens the file as saved on disk; unsaved edits stay in this editor.
+  async _openExternally() {
+    if (!this.filePath) return;
+    try {
+      const opened = await window.api.openFileExternally(this.filePath, null);
+      if (!opened?.ok) throw new Error(opened?.error || 'Could not open the file in its default application.');
+    } catch (error) {
+      alert(error.message || 'Could not open the file in its default application.');
     }
   }
 

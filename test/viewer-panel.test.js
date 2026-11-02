@@ -15,14 +15,15 @@ function setup() {
     replaceChildren(...children) { this.children = children; },
   });
   const toolbar = { setTitle(title) { this.titleEl.textContent = title; }, setPath() {}, setWrapMode() {}, setPreviewMode() {} };
-  for (const key of ['el', 'titleEl', 'previewBtn', 'wrapBtn', 'saveBtn', 'gotoLineBtn', 'copyContentBtn']) toolbar[key] = element();
+  for (const key of ['el', 'titleEl', 'previewBtn', 'wrapBtn', 'saveBtn', 'gotoLineBtn', 'copyContentBtn', 'openExternalBtn']) toolbar[key] = element();
   const revoked = [];
   let nextUrl = 0;
   let saved = 0;
   const api = { watchFile() {}, unwatchFile() {} };
+  const alerts = [];
   const context = vm.createContext({
     document: { createElement: element }, localStorage: { getItem() { return null; } },
-    Uint8Array, Blob, atob, setTimeout,
+    Uint8Array, Blob, atob, setTimeout, alert: message => alerts.push(message),
     URL: { createObjectURL: () => `blob:${++nextUrl}`, revokeObjectURL: url => revoked.push(url) },
     window: { api, JsoncParser: require('jsonc-parser'), createViewerToolbar: () => toolbar, createEditableViewer: (_el, content) => ({
       state: { doc: { toString: () => content, length: content.length } },
@@ -34,8 +35,22 @@ function setup() {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/viewer-panel.js'), 'utf8'), context);
   const panel = new context.window.ViewerPanel(element(), { language: 'auto', onSave: async () => { saved++; return { ok: true }; } });
   const media = { previewType: 'image', mimeType: 'image/png', base64: 'AAEC' };
-  return { panel, toolbar, revoked, api, media, saved: () => saved };
+  return { panel, toolbar, revoked, api, media, alerts, saved: () => saved };
 }
+
+test('the toolbar opens the shown file in its default app and reports failures', async () => {
+  const { panel, toolbar, api, alerts } = setup();
+  const calls = [];
+  api.openFileExternally = async (...args) => { calls.push(args); return { ok: true }; };
+  await toolbar.openExternalBtn.click();
+  assert.deepEqual(calls, []);
+  panel.open('Code', '/app.js', 'const a = 1;');
+  await toolbar.openExternalBtn.click();
+  assert.deepEqual(calls, [['/app.js', null]]);
+  api.openFileExternally = async () => ({ ok: false, error: 'No default application' });
+  await toolbar.openExternalBtn.click();
+  assert.deepEqual(alerts, ['No default application']);
+});
 
 test('media previews cannot save binary files and switching files restores editing', async () => {
   const { panel, toolbar, media, revoked, saved } = setup();
