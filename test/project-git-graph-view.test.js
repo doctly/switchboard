@@ -330,7 +330,8 @@ test('renderProjectGitGraphTab notices a folder attached elsewhere and refreshes
   const calls = [];
   global.document = { addEventListener() {}, removeEventListener() {}, getElementById: () => null };
   global.selectedProject = () => project;
-  global.projectTab = () => 'gitgraph';
+  global.projectTab = () => 'git';
+  global.projectGitView = () => 'history';
   global.pathBasename = (p) => String(p || '').split('/').filter(Boolean).pop() || '';
   global.window = {
     api: {
@@ -426,7 +427,8 @@ test('Escape closes the Find widget when it is the only thing open', () => {
   global.window = { api: {} };
   global.document = { addEventListener: (type, fn) => { if (type === 'keydown') global.document._handler = fn; }, removeEventListener() {}, getElementById: () => null };
   global.selectedProject = () => project;
-  global.projectTab = () => 'gitgraph';
+  global.projectTab = () => 'git';
+  global.projectGitView = () => 'history';
 
   view.gitGraphBindKeyboard(project, state, body);
   global.document._handler({ key: 'Escape', target: {}, preventDefault() {} });
@@ -455,7 +457,8 @@ test('Ctrl/Cmd+ArrowDown is left alone (never preventDefault-ed) so the app\'s o
   const body = fakeElement();
   global.document = { addEventListener: (type, fn) => { if (type === 'keydown') global.document._handler = fn; }, removeEventListener() {}, getElementById: () => null };
   global.selectedProject = () => project;
-  global.projectTab = () => 'gitgraph';
+  global.projectTab = () => 'git';
+  global.projectGitView = () => 'history';
   global.window = { api: {} };
   view.gitGraphBindKeyboard(project, state, body);
   let prevented = false;
@@ -730,7 +733,7 @@ test('gitGraphSingleCommitHeaderHtml escapes a hostile subject/author rather tha
 // rather than relying on whichever earlier test in this file happened to
 // trigger the real registration first.
 
-test('gitGraphEnsureWatcherBound binds the repo-change listener once and repaints into the CURRENT #ws-body, not whichever body was live when it first bound', async () => {
+test('gitGraphEnsureWatcherBound binds once and repaints into the current Git History view', async () => {
   const modulePath = path.join(__dirname, '../public/project-git-graph-view.js');
   delete require.cache[modulePath];
 
@@ -742,7 +745,7 @@ test('gitGraphEnsureWatcherBound binds the repo-change listener once and repaint
 
   global.document = {
     addEventListener() {}, removeEventListener() {},
-    getElementById: (id) => (id === 'ws-body' ? currentBody : null),
+    getElementById: (id) => (id === 'git-workspace-view' ? currentBody : null),
   };
   global.window = {
     api: {
@@ -752,7 +755,8 @@ test('gitGraphEnsureWatcherBound binds the repo-change listener once and repaint
   };
   const project = { id: 'proj-watcher-rebind' };
   global.selectedProject = () => project;
-  global.projectTab = () => 'gitgraph';
+  global.projectTab = () => 'git';
+  global.projectGitView = () => 'history';
 
   const freshView = require(modulePath);
   try {
@@ -768,10 +772,8 @@ test('gitGraphEnsureWatcherBound binds the repo-change listener once and repaint
     assert.equal(bindCount, 1, 'a second/third render must not add a second listener');
     assert.equal(typeof watcherCallback, 'function');
 
-    // The tab's own #ws-body element gets recreated on a tab switch (it is
-    // never removed, per gitGraphStillActive's own reasoning) — simulate
-    // that by pointing document.getElementById('ws-body') at a new element,
-    // the way the real DOM would after the user left and came back.
+    // The History view gets recreated on a subview or project-tab switch.
+    // Point document.getElementById at the new copy, as the real DOM does.
     bodyFromFirstRender.innerHTML = 'untouched-by-a-later-event';
     currentBody = bodyAfterTabSwitch;
 
@@ -779,7 +781,7 @@ test('gitGraphEnsureWatcherBound binds the repo-change listener once and repaint
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.equal(bodyFromFirstRender.innerHTML, 'untouched-by-a-later-event', 'the stale first-render body must never be repainted into');
-    assert.match(bodyAfterTabSwitch.innerHTML, /gg-tab-shell/, 'the watcher must resolve and repaint into the CURRENT #ws-body');
+    assert.match(bodyAfterTabSwitch.innerHTML, /gg-tab-shell/, 'the watcher must resolve and repaint into the current History view');
   } finally {
     delete require.cache[modulePath];
   }

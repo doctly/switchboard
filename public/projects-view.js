@@ -169,7 +169,7 @@ function saveProjectsUi() {
   sessionStorage.setItem('projects.archivedOpen', JSON.stringify(projectsUi.archivedOpen));
 }
 
-const PROJECT_WORKSPACE_TABS = new Set(['overview', 'plan', 'files', 'git', 'gitgraph', 'settings']);
+const PROJECT_WORKSPACE_TABS = new Set(['overview', 'plan', 'files', 'git', 'settings']);
 
 function projectTab(projectOrId = projectsUi.selectedProjectId) {
   const projectId = typeof projectOrId === 'string' ? projectOrId : projectOrId?.id;
@@ -1300,8 +1300,7 @@ function renderOverview() {
         <button type="button" class="ws-tab ${tabName === 'overview' ? 'active' : ''}" data-tab="overview">Overview</button>
         <button type="button" class="ws-tab ${tabName === 'plan' ? 'active' : ''}" data-tab="plan" title="Phases from plan-tracker.md and the todos, with the sessions that worked on them">Plan <span class="ws-tab-meta" id="ws-tab-plan-meta"></span></button>
         <button type="button" class="ws-tab ${tabName === 'files' ? 'active' : ''}" data-tab="files" title="The project folder: brief, plan, todos and anything else the project keeps">Files</button>
-        <button type="button" class="ws-tab ${tabName === 'git' ? 'active' : ''}" data-tab="git" title="Branches, working changes and recent commits in attached repositories">Git</button>
-        <button type="button" class="ws-tab ${tabName === 'gitgraph' ? 'active' : ''}" data-tab="gitgraph" title="Commit graph of attached repositories, with commit details and diffs">Git Graph</button>
+        <button type="button" class="ws-tab ${tabName === 'git' ? 'active' : ''}" data-tab="git" title="Working changes and repository history for attached repositories">Git</button>
         <button type="button" class="ws-tab ${tabName === 'settings' ? 'active' : ''}" data-tab="settings">Settings</button>
       </div>
     </div>
@@ -1311,8 +1310,7 @@ function renderOverview() {
   if (tabName === 'settings') renderSettings(project, body);
   else if (tabName === 'files') renderFilesTab(project, body);
   else if (tabName === 'plan') renderPlanTab(project, body);
-  else if (tabName === 'git') renderProjectGitTab(project, body);
-  else if (tabName === 'gitgraph') renderProjectGitGraphTab(project, body);
+  else if (tabName === 'git') renderProjectGitWorkspace(project, body);
   else renderOverviewBody(project, body);
 
   projectViewer.querySelectorAll('.ws-tab:not([disabled])').forEach(tab => {

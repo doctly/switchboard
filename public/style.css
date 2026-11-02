@@ -5336,7 +5336,51 @@ body { display: flex; flex-direction: column; }
 .ws-cwd { display: flex; flex-direction: column; gap: 6px; }
 
 /* ---- Read-only Git tab ---- */
-.git-tab-body { padding-top: 20px; }
+.git-workspace-body {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.git-workspace-subnav {
+  flex: 0 0 auto;
+  padding: 10px 28px;
+  border-bottom: 1px solid rgba(255,255,255,0.055);
+  background: rgba(255,255,255,0.012);
+}
+
+.git-workspace-nav {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 7px;
+  background: rgba(255,255,255,0.025);
+}
+
+.git-workspace-nav-btn {
+  border: 0;
+  border-radius: 5px;
+  padding: 5px 12px;
+  background: transparent;
+  color: #77778c;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.git-workspace-nav-btn:hover { color: #bcbccc; }
+.git-workspace-nav-btn.active { color: #d8d8e8; background: rgba(122,132,255,0.16); }
+
+.git-workspace-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.git-tab-body { padding: 20px 28px 28px; }
 
 .git-tab-shell {
   width: 100%;
@@ -5682,22 +5726,6 @@ body { display: flex; flex-direction: column; }
 
 .git-diff-empty { display: flex; align-items: center; justify-content: center; min-height: 180px; text-align: center; }
 
-.git-commits { display: flex; flex-direction: column; }
-
-.git-commit-row {
-  display: grid;
-  grid-template-columns: 66px minmax(0, 1fr);
-  gap: 10px;
-  align-items: baseline;
-  padding: 8px 14px;
-}
-
-.git-commit-row + .git-commit-row { border-top: 1px solid rgba(255,255,255,0.04); }
-.git-commit-hash { color: #7f86c8; font-size: 10.5px; }
-.git-commit-text { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.git-commit-subject { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #bdbdd0; font-size: 11.5px; }
-.git-commit-meta { flex-shrink: 0; color: #65657a; font-size: 10px; }
-
 .git-loading,
 .git-empty-state {
   min-height: 220px;
@@ -5722,7 +5750,6 @@ body { display: flex; flex-direction: column; }
   .git-changes { grid-template-columns: 1fr; }
   .git-file-list { border-right: 0; border-bottom: 1px solid rgba(255,255,255,0.055); }
   .git-diff-pane { min-height: 260px; }
-  .git-commit-text { align-items: flex-start; flex-direction: column; gap: 2px; }
 }
 
 

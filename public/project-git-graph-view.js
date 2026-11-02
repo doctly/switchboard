@@ -306,7 +306,8 @@ function gitGraphLoadGraph(project, state, body, opts = {}) {
 
 function gitGraphStillActive(project) {
   return typeof selectedProject === 'function' && selectedProject()?.id === project.id &&
-    typeof projectTab === 'function' && projectTab(project) === 'gitgraph';
+    typeof projectTab === 'function' && projectTab(project) === 'git' &&
+    typeof projectGitView === 'function' && projectGitView(project) === 'history';
 }
 
 // --- Entry point ---
@@ -324,7 +325,7 @@ function renderProjectGitGraphTab(project, body) {
     showRemoteBranches: prefs.showRemoteBranches !== undefined ? prefs.showRemoteBranches : state.showRemoteBranches,
     fileViewType: prefs.fileViewType || state.fileViewType,
   });
-  body.className = 'ws-body gg-tab-body';
+  body.className = 'git-workspace-view gg-tab-body';
   gitGraphBindKeyboard(project, state, body);
   gitGraphEnsureWatcherBound();
 
@@ -381,7 +382,7 @@ function gitGraphPaint(project, state, body, opts = {}) {
   }
 
   if (state.error) {
-    body.innerHTML = `<div class="gg-tab-shell">${gitGraphRepoPickerHtml(repos, repo)}<div class="gg-error-state"><div class="gg-empty-title">Git Graph could not load this repository</div><div>${escapeHtml(state.error)}</div><button type="button" class="ws-btn" id="gg-retry">Retry</button></div></div>`;
+    body.innerHTML = `<div class="gg-tab-shell">${gitGraphRepoPickerHtml(repos, repo)}<div class="gg-error-state"><div class="gg-empty-title">History could not load this repository</div><div>${escapeHtml(state.error)}</div><button type="button" class="ws-btn" id="gg-retry">Retry</button></div></div>`;
     body.querySelector('#gg-retry').onclick = () => gitGraphLoadGraph(project, state, body, { reset: true });
     gitGraphWireRepoPicker(project, state, body);
     return;
@@ -1205,10 +1206,10 @@ function gitGraphMoveDetailsFocus(project, state, body, dir, mode) {
 // --- Auto-refresh on repo change ---
 //
 // Bound exactly once at module load (not per render, not per project): the
-// #ws-body element this tab paints into is recreated by renderOverview() on
-// every tab switch, so a handler that closed over a particular `body`/
-// `project` would silently stop firing the moment the user left and came
-// back to this tab. Resolving the active project/state/body fresh, at event
+// #git-workspace-view element this view paints into is recreated whenever the
+// Git subview or top-level project tab changes, so a handler that closed over
+// a particular `body`/`project` would silently stop firing the moment the user
+// left and came back. Resolving the active project/state/body fresh, at event
 // time, means one listener stays correct across the whole session.
 
 let gitGraphWatcherBound = false;
@@ -1222,7 +1223,7 @@ function gitGraphEnsureWatcherBound() {
     if (!project || !gitGraphStillActive(project)) return;
     const state = gitGraphTabState.get(project.id);
     if (!state || state.selectedRepo !== folderPath) return;
-    const body = typeof document !== 'undefined' ? document.getElementById('ws-body') : null;
+    const body = typeof document !== 'undefined' ? document.getElementById('git-workspace-view') : null;
     if (!body) return;
     gitGraphLoadGraph(project, state, body, { reset: true });
   });

@@ -19,6 +19,7 @@ function setGitChangesViewMode(mode) {
 function gitTabState(projectId) {
   if (!projectGitTabState.has(projectId)) {
     projectGitTabState.set(projectId, {
+      workspaceView: 'changes',
       repositories: null,
       selectedRepo: null,
       selectedFiles: new Map(),
@@ -29,6 +30,53 @@ function gitTabState(projectId) {
     });
   }
   return projectGitTabState.get(projectId);
+}
+
+function projectGitView(projectOrId) {
+  const projectId = typeof projectOrId === 'string' ? projectOrId : projectOrId?.id;
+  return projectId && gitTabState(projectId).workspaceView === 'history' ? 'history' : 'changes';
+}
+
+function setProjectGitView(projectOrId, view) {
+  const projectId = typeof projectOrId === 'string' ? projectOrId : projectOrId?.id;
+  if (!projectId || !['changes', 'history'].includes(view)) return;
+  const changesState = gitTabState(projectId);
+  const current = projectGitView(projectId);
+
+  // Both views have their own richer state, but the selected repository is a
+  // workspace-level choice. Carry it across when the user changes views.
+  if (typeof gitGraphState === 'function') {
+    const historyState = gitGraphState(projectId);
+    if (current === 'changes' && view === 'history' && changesState.selectedRepo) {
+      historyState.selectedRepo = changesState.selectedRepo;
+    } else if (current === 'history' && view === 'changes' && historyState.selectedRepo) {
+      changesState.selectedRepo = historyState.selectedRepo;
+    }
+  }
+  changesState.workspaceView = view;
+}
+
+function gitWorkspaceNavHtml(view) {
+  const button = (name, label) => `<button type="button" id="git-workspace-${name}-tab" class="git-workspace-nav-btn${view === name ? ' active' : ''}" data-git-view="${name}" role="tab" aria-selected="${view === name}" aria-controls="git-workspace-view">${label}</button>`;
+  return `<div class="git-workspace-subnav"><div class="git-workspace-nav" role="tablist" aria-label="Git view">${button('changes', 'Changes')}${button('history', 'History')}</div></div>`;
+}
+
+function renderProjectGitWorkspace(project, body) {
+  const view = projectGitView(project);
+  body.className = 'ws-body git-workspace-body';
+  body.innerHTML = `${gitWorkspaceNavHtml(view)}<div class="git-workspace-view" id="git-workspace-view" role="tabpanel" aria-labelledby="git-workspace-${view}-tab"></div>`;
+
+  body.querySelectorAll('.git-workspace-nav-btn').forEach((button) => {
+    button.onclick = () => {
+      if (button.dataset.gitView === projectGitView(project)) return;
+      setProjectGitView(project, button.dataset.gitView);
+      renderProjectGitWorkspace(project, body);
+    };
+  });
+
+  const viewBody = body.querySelector('#git-workspace-view');
+  if (view === 'history') renderProjectGitGraphTab(project, viewBody);
+  else renderProjectGitTab(project, viewBody);
 }
 
 function gitCollapsedSet(state, repoPath) {
@@ -320,15 +368,6 @@ function gitViewToggleHtml(mode) {
   </span>`;
 }
 
-function gitCommitsHtml(repo) {
-  if (!repo.commits.length) return '<div class="git-empty-row">No commits yet.</div>';
-  return repo.commits.map(commit => `
-    <div class="git-commit-row">
-      <span class="git-commit-hash mono">${escapeHtml(commit.shortHash)}</span>
-      <span class="git-commit-text"><span class="git-commit-subject">${escapeHtml(commit.subject)}</span><span class="git-commit-meta">${escapeHtml(commit.author)} · ${escapeHtml(gitRelativeTime(commit.date))}</span></span>
-    </div>`).join('');
-}
-
 function paintGitRepository(project, state, body) {
   const repositories = state.repositories || [];
   if (!repositories.length) {
@@ -363,10 +402,6 @@ function paintGitRepository(project, state, body) {
           <div class="git-section-heading"><span>Changes</span><span class="git-heading-right">${changed ? gitViewToggleHtml(gitChangesViewMode()) : ''}<span class="git-section-meta">${changed ? `${changed} file${changed === 1 ? '' : 's'}` : 'Working tree clean'}</span></span></div>
           ${changed ? '<div class="git-changes"><div class="git-file-list" id="git-file-list"></div><div class="git-diff-pane" id="git-diff-pane"></div></div>' : '<div class="git-empty-row">There are no staged, unstaged, or untracked files.</div>'}
         </section>
-        <section class="git-section">
-          <div class="git-section-heading"><span>Recent commits</span><span class="git-section-meta">${repo.commits.length ? `Latest ${Math.min(20, repo.commits.length)}` : 'No history'}</span></div>
-          <div class="git-commits">${gitCommitsHtml(repo)}</div>
-        </section>
       </div>`;
     if (changed) paintGitChanges(project, state, repo, body);
   }
@@ -398,7 +433,7 @@ function paintGitRepository(project, state, body) {
 
 function renderProjectGitTab(project, body) {
   const state = gitTabState(project.id);
-  body.className = 'ws-body git-tab-body';
+  body.className = 'git-workspace-view git-tab-body';
   if (state.repositories) paintGitRepository(project, state, body);
   else body.innerHTML = '<div class="git-loading"><span class="git-loading-dot"></span>Reading repository…</div>';
 
@@ -409,7 +444,7 @@ function renderProjectGitTab(project, body) {
     if (!result?.ok) throw new Error(result?.error || 'Could not read Git information.');
     state.diffs.clear();
     state.repositories = result.repositories || [];
-    if (body.isConnected && selectedProject()?.id === project.id && projectTab(project) === 'git') {
+    if (body.isConnected && selectedProject()?.id === project.id && projectTab(project) === 'git' && projectGitView(project) === 'changes') {
       paintGitRepository(project, state, body);
     }
   }).catch((err) => {
