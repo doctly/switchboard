@@ -545,6 +545,7 @@ for (const version of [4, 12]) {
         db.prepare(\`INSERT INTO session_cache (sessionId, folder, summary, runtime, sessionFile)
           VALUES ('kept', 'codex/day', 'Existing session', 'codex', '/original/rollout.jsonl')\`).run();
         db.prepare("INSERT INTO cache_meta VALUES ('codex/day', NULL, 123)").run();
+        db.prepare("INSERT INTO cache_meta VALUES ('-tmp-project', '/tmp/project', 456)").run();
         // A partial migration from another branch must be adopted too.
         if (${version} > 4) {
           db.exec('ALTER TABLE session_cache ADD COLUMN customTitle TEXT');
@@ -565,7 +566,8 @@ for (const version of [4, 12]) {
         const api = require('./db');
         const row = api.getCachedSession('kept');
         console.log(JSON.stringify({row, meta:api.getMeta('kept'),
-          folder:api.getFolderMeta('codex/day'), hits:api.searchByType('session','searchable'),
+          folder:api.getFolderMeta('codex/day'), claudeFolder:api.getFolderMeta('-tmp-project'),
+          hits:api.searchByType('session','searchable'),
           version:api.getSetting('db_version')}));
       `, dir);
       assert.equal(result.status, 0, result.stderr);
@@ -578,7 +580,10 @@ for (const version of [4, 12]) {
       assert.equal(state.meta.name, 'My name');
       assert.equal(state.meta.starred, 1);
       assert.equal(state.meta.archived, 1);
-      assert.equal(state.folder.indexMtimeMs, 123);
+      // The one-time Codex date fix clears Codex folders' index state so their
+      // transcripts are read again. Every other folder keeps its own.
+      assert.equal(state.folder, null);
+      assert.equal(state.claudeFolder.indexMtimeMs, 456);
       assert.equal(state.hits[0].id, 'kept');
       assert.equal(state.version, version);
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }

@@ -144,7 +144,8 @@ test('reconcileCacheFromFilesystem indexes new and stale folders but skips up-to
       indexMtimeMs: getFolderIndexMtimeMs(path.join(projectsDir, 'proj-current')),
     });
 
-    const fake = makeFakeDb(metaMap);
+    // Keep the machine's real ~/.codex out of a Claude-only test.
+    const fake = makeFakeDb(metaMap, { disabledHarnesses: ['codex'] });
     sessionCache.init({
       PROJECTS_DIR: projectsDir,
       activeSessions: new Map(),
@@ -348,6 +349,45 @@ test('reconcile indexes codex date folders even though they have no folder proje
     });
     sessionCache.reconcileCacheFromFilesystem();
     assert.equal(second.indexedFolders.size, 0, 'up-to-date codex folder should be skipped');
+  } finally {
+    if (prevHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = prevHome;
+    fs.rmSync(projectsDir, { recursive: true, force: true });
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+// A cleared cache can mean gigabytes of Codex transcripts to re-read. Doing that
+// on the main process stalls the window and every terminal until it finishes.
+test('a large reconcile pass reads transcripts on a worker, then writes them', async () => {
+  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-claude-'));
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-codex-'));
+  const prevHome = process.env.CODEX_HOME;
+  try {
+    process.env.CODEX_HOME = codexHome;
+    writeRollout(path.join(codexHome, 'sessions', '2026', '08', '26'), '/tmp/some-project');
+
+    const metaMap = new Map();
+    const fake = makeFakeDb(metaMap);
+    sessionCache.init({
+      PROJECTS_DIR: projectsDir, activeSessions: new Map(),
+      getMainWindow: () => null, log: console, db: fake.db,
+      inlineReadLimitBytes: 0,
+    });
+
+    const pending = sessionCache.reconcileCacheFromFilesystem();
+    assert.ok(pending, 'a pass over the limit hands its reads to a worker');
+    assert.equal(fake.cachedRows.length, 0, 'nothing is written before the worker reports');
+    assert.equal(sessionCache.reconcileCacheFromFilesystem(), pending,
+      'a folder the worker owns is not planned again while it reads');
+
+    await pending;
+    assert.ok(fake.indexedFolders.has('codex/2026/08/26'));
+    assert.equal(fake.cachedRows.length, 1);
+    assert.equal(fake.cachedRows[0].projectPath, '/tmp/some-project');
+    assert.equal(metaMap.get('codex/2026/08/26').projectPath, null);
+
+    assert.equal(sessionCache.reconcileCacheFromFilesystem(), null, 'an up-to-date folder needs no worker');
+    assert.equal(fake.cachedRows.length, 1);
   } finally {
     if (prevHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = prevHome;
     fs.rmSync(projectsDir, { recursive: true, force: true });
