@@ -36,8 +36,9 @@
       { key: 'effort', label: 'Effort', type: 'select', default: '', more: true, choices: CLAUDE_EFFORTS, description: "Default uses Claude's own setting" },
       { key: 'allowedTools', label: 'Allowed Tools', type: 'text', default: '', more: true, wide: true, description: 'Tools allowed without a permission prompt (comma-separated)' },
       { key: 'appendSystemPrompt', label: 'Additional System Prompt', type: 'textarea', default: '', more: true, wide: true, description: 'Instructions appended to Claude’s system prompt' },
-      { key: 'worktree', label: 'Worktree', type: 'boolean', default: false, description: 'Run each new session in an isolated git worktree' },
-      { key: 'worktreeName', label: 'Worktree Name', type: 'text', default: '', placeholder: 'name (optional)' },
+      // newOnly: the harness ignores these on resume, so the resume form hides them.
+      { key: 'worktree', label: 'Worktree', type: 'boolean', default: false, newOnly: true, description: 'Run each new session in an isolated git worktree' },
+      { key: 'worktreeName', label: 'Worktree Name', type: 'text', default: '', newOnly: true, placeholder: 'name (optional)' },
       { key: 'chrome', label: 'Chrome', type: 'boolean', default: false, description: 'Enable Chrome browser automation' },
       { key: 'mcpEmulation', type: 'boolean', default: true, hidden: true },
     ],

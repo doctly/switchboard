@@ -129,3 +129,42 @@ test('additional Claude instructions preserve multiline text through settings an
   assert.throws(() => SessionConfig.normalizeOverrides('claude', { appendSystemPrompt: 'bad\x00prompt' }), /unsafe characters/);
   assert.throws(() => SessionConfig.normalizeOverrides('codex', { allowedTools: 'Read' }), /Unsupported/);
 });
+
+test('resume with config shows and passes the settings of the CLI that wrote the session', async () => {
+  const created = [];
+  const element = () => {
+    const children = {};
+    const el = { setAttribute() {}, appendChild() {}, remove() {},
+      querySelector: selector => children[selector] || (children[selector] = element()) };
+    created.push(el);
+    return el;
+  };
+  const mounts = [];
+  const opened = [];
+  const effective = { codexSandbox: 'workspace-write', codexModel: 'gpt-5', permissionMode: 'plan', chrome: true };
+  const context = vm.createContext({
+    SessionConfig,
+    SessionConfigForm: { mount: (_container, opts) => {
+      mounts.push(opts);
+      return { getOptions: () => SessionConfig.resolveOptions(opts.runtime, opts.defaults) };
+    } },
+    document: { createElement: element, body: { appendChild() {} }, addEventListener() {}, removeEventListener() {} },
+    escapeHtml: value => String(value),
+    openSession: (session, options) => opened.push([session, options]),
+    window: { api: { getEffectiveSettings: async () => effective } },
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/dialogs.js'), 'utf8'), context);
+  const session = { sessionId: 'abc', projectPath: '/project', runtime: 'codex', name: 'Daily check' };
+  await context.showResumeSessionDialog(session);
+  assert.equal(mounts[0].runtime, 'codex');
+  assert.equal(mounts[0].resume, true);
+  const dialog = created[1];
+  assert.match(dialog.innerHTML, /Resume Codex Session/);
+  dialog.querySelector('.new-session-start-btn').onclick();
+  assert.equal(opened[0][0], session);
+  const options = opened[0][1];
+  assert.equal(options.codexSandbox, 'workspace-write');
+  assert.equal(options.codexModel, 'gpt-5');
+  assert.equal(options.permissionMode, undefined);
+  assert.equal(options.chrome, undefined);
+});

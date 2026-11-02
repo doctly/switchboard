@@ -1,11 +1,11 @@
-// The same settings form is mounted by New Session and Create/Edit Schedule.
+// The same settings form is mounted by New Session, Resume Session and Create/Edit Schedule.
 (function (root) {
   let mounts = 0;
-  function mount(container, { runtime, defaults = {}, overrides = {}, inherit = false, onChange = () => {} }) {
+  function mount(container, { runtime, defaults = {}, overrides = {}, inherit = false, resume = false, onChange = () => {} }) {
     const uid = ++mounts;
     let saved = SessionConfig.normalizeOverrides(runtime, overrides);
     let values = SessionConfig.resolveOptions(runtime, defaults, saved);
-    const fields = SessionConfig.fieldsFor(runtime).filter(f => !f.hidden);
+    const fields = SessionConfig.fieldsFor(runtime).filter(f => !f.hidden && !(resume && f.newOnly));
     const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const listId = field => `session-config-${uid}-${field.key}`;
     const keys = field => field.type === 'permission' ? [field.key, 'dangerouslySkipPermissions'] : [field.key];

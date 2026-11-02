@@ -168,6 +168,10 @@ async function launchTerminalSession(project) {
   pollActiveSessions();
 }
 
+function runtimeLabel(runtime) {
+  return runtime === 'codex' ? 'Codex' : runtime === 'claude' ? 'Claude' : runtime;
+}
+
 async function showNewSessionDialog(project, runtime = 'claude') {
   const effective = await window.api.getEffectiveSettings(project.projectPath);
   const overlay = document.createElement('div');
@@ -177,7 +181,7 @@ async function showNewSessionDialog(project, runtime = 'claude') {
   dialog.setAttribute('role', 'dialog');
   dialog.setAttribute('aria-modal', 'true');
   dialog.innerHTML = `
-    <h3>New ${escapeHtml(runtime === 'codex' ? 'Codex' : runtime === 'claude' ? 'Claude' : runtime)} Session — ${escapeHtml(shortProjectPath(project.projectPath))}</h3>
+    <h3>New ${escapeHtml(runtimeLabel(runtime))} Session — ${escapeHtml(shortProjectPath(project.projectPath))}</h3>
     <div class="session-config-fields"></div>
     <div class="session-config-error" role="alert" hidden></div>
     <div class="new-session-actions">
@@ -209,115 +213,43 @@ async function showNewSessionDialog(project, runtime = 'claude') {
 
 async function showResumeSessionDialog(session) {
   const effective = await window.api.getEffectiveSettings(session.projectPath);
-
+  // Same form as New Session, for the CLI that wrote this session, so a codex
+  // session shows and passes codex settings rather than Claude's.
+  const runtime = session.runtime || 'claude';
+  const sessionName = session.name || session.aiTitle || session.summary || session.sessionId.slice(0, 8);
   const overlay = document.createElement('div');
   overlay.className = 'new-session-overlay';
-
   const dialog = document.createElement('div');
   dialog.className = 'new-session-dialog';
-
-  let selectedMode = effective.permissionMode || null;
-  let dangerousSkip = effective.dangerouslySkipPermissions || false;
-
-  const modes = PERMISSION_MODES;
-
-  function renderModeGrid() {
-    return modes.map(m => {
-      const isSelected = !dangerousSkip && selectedMode === m.value;
-      return `<button class="permission-option${isSelected ? ' selected' : ''}" data-mode="${m.value}"><span class="perm-name">${m.label}</span><span class="perm-desc">${m.desc}</span></button>`;
-    }).join('') +
-    `<button class="permission-option dangerous${dangerousSkip ? ' selected' : ''}" data-mode="dangerous-skip"><span class="perm-name">Dangerous Skip</span><span class="perm-desc">Skip all safety prompts (use with caution)</span></button>`;
-  }
-
-  const sessionName = session.name || session.aiTitle || session.summary || session.sessionId.slice(0, 8);
-
+  dialog.setAttribute('role', 'dialog');
+  dialog.setAttribute('aria-modal', 'true');
   dialog.innerHTML = `
-    <h3>Resume Session — ${escapeHtml(sessionName)}</h3>
-    <div class="settings-field">
-      <div class="settings-label">Permission Mode</div>
-      <div class="permission-grid" id="rsd-mode-grid">${renderModeGrid()}</div>
-    </div>
-    <div class="settings-field">
-      <div class="settings-field-info">
-        <span class="settings-label">Chrome</span>
-        <div class="settings-description">Enable Chrome browser automation</div>
-      </div>
-      <div class="settings-field-control">
-        <label class="settings-toggle"><input type="checkbox" id="rsd-chrome" ${effective.chrome ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
-      </div>
-    </div>
-    <div class="settings-field settings-field-wide">
-      <div class="settings-field-info">
-        <span class="settings-label">Pre-launch Command</span>
-        <div class="settings-description">Prepended to the claude command</div>
-      </div>
-      <div class="settings-field-control">
-        <input type="text" class="settings-input" id="rsd-pre-launch" placeholder="e.g. aws-vault exec profile --" value="${escapeHtml(effective.preLaunchCmd || '')}">
-      </div>
-    </div>
-    <div class="settings-field settings-field-wide">
-      <div class="settings-field-info">
-        <span class="settings-label">Additional Directories</span>
-        <div class="settings-description">Extra directories to include (comma-separated)</div>
-      </div>
-      <div class="settings-field-control">
-        <input type="text" class="settings-input" id="rsd-add-dirs" placeholder="/path/to/dir1, /path/to/dir2" value="${escapeHtml(effective.addDirs || '')}">
-      </div>
-    </div>
+    <h3>Resume ${escapeHtml(runtimeLabel(runtime))} Session — ${escapeHtml(sessionName)}</h3>
+    <div class="session-config-fields"></div>
+    <div class="session-config-error" role="alert" hidden></div>
     <div class="new-session-actions">
-      <button class="new-session-cancel-btn">Cancel</button>
-      <button class="new-session-start-btn">Resume</button>
-    </div>
-  `;
-
+      <button type="button" class="new-session-cancel-btn">Cancel</button>
+      <button type="button" class="new-session-start-btn">Resume</button>
+    </div>`;
+  const form = SessionConfigForm.mount(dialog.querySelector('.session-config-fields'), { runtime, defaults: effective, resume: true });
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
-
-  // Bind mode grid clicks
-  const modeGrid = dialog.querySelector('#rsd-mode-grid');
-  modeGrid.addEventListener('click', (e) => {
-    const btn = e.target.closest('.permission-option');
-    if (!btn) return;
-    const mode = btn.dataset.mode;
-    if (mode === 'dangerous-skip') {
-      dangerousSkip = !dangerousSkip;
-      if (dangerousSkip) selectedMode = null;
-    } else {
-      dangerousSkip = false;
-      selectedMode = mode === 'null' ? null : mode;
-    }
-    modeGrid.innerHTML = renderModeGrid();
-  });
-
-  function close() {
-    overlay.remove();
-    document.removeEventListener('keydown', onKey);
-  }
-
+  function close() { overlay.remove(); document.removeEventListener('keydown', onKey); }
   function resume() {
-    const options = {};
-    if (dangerousSkip) {
-      options.dangerouslySkipPermissions = true;
-    } else if (selectedMode) {
-      options.permissionMode = selectedMode;
+    let options;
+    try { options = form.getOptions(); } catch (err) {
+      const error = dialog.querySelector('.session-config-error');
+      error.textContent = err.message; error.hidden = false;
+      return;
     }
-    if (dialog.querySelector('#rsd-chrome').checked) {
-      options.chrome = true;
-    }
-    const preLaunch = dialog.querySelector('#rsd-pre-launch').value.trim();
-    if (preLaunch) options.preLaunchCmd = preLaunch;
-    options.addDirs = dialog.querySelector('#rsd-add-dirs').value.trim();
-    if (effective.mcpEmulation === false) options.mcpEmulation = false;
     close();
     openSession(session, options);
   }
-
   dialog.querySelector('.new-session-cancel-btn').onclick = close;
   dialog.querySelector('.new-session-start-btn').onclick = resume;
-
   function onKey(e) {
     if (e.key === 'Escape') close();
-    if (e.key === 'Enter' && !e.target.matches('input')) resume();
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || !e.target.matches('input, textarea, select'))) resume();
   }
   document.addEventListener('keydown', onKey);
 }
