@@ -183,7 +183,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   readFileForPanel: (filePath) => ipcRenderer.invoke('read-file-for-panel', filePath),
   openFileExternally: (filePath, projectRoot) => ipcRenderer.invoke('open-file-externally', filePath, projectRoot),
-  resolveTerminalFiles: (references) => ipcRenderer.invoke('resolve-terminal-files', references),
+  resolveTerminalFiles: (references, context) => ipcRenderer.invoke('resolve-terminal-files', references, context),
   listProjectDirectory: (projectPath, relativePath) => ipcRenderer.invoke('list-project-directory', projectPath, relativePath),
   readProjectFile: (projectPath, relativePath) => ipcRenderer.invoke('read-project-file', projectPath, relativePath),
   manageProjectEntry: (projectPath, relativePath, action, newName) => ipcRenderer.invoke('manage-project-entry', projectPath, relativePath, action, newName),

@@ -123,6 +123,31 @@ test('created and modified come from the transcript, not the file', () => {
   });
 });
 
+test('settings and injected context do not advance the last conversation timestamp', () => {
+  const original = rollout({ cwd: '/p', turns: [['user', 'hello'], ['assistant', 'done']] });
+  withFixture({ [NAME]: original }, dir => {
+    const file = path.join(dir, NAME);
+    const before = codex.readSessionFile(file, 'f');
+    const timestamp = '2026-09-19T16:32:46.980Z';
+    for (const record of [
+      { type: 'event_msg', payload: { type: 'thread_settings_applied' } },
+      { type: 'token_usage_record', payload: {} },
+      { type: 'response_item', payload: { type: 'message', role: 'developer', content: 'Settings' } },
+      { type: 'response_item', payload: { type: 'message', role: 'user', content: '<environment_context>Updated</environment_context>' } },
+    ]) {
+      fs.appendFileSync(file, JSON.stringify({ timestamp, ...record }) + '\n');
+      const after = codex.readSessionFile(file, 'f');
+      assert.equal(after.modified, before.modified);
+      assert.equal(after.messageCount, before.messageCount);
+      assert.equal(after.created, before.created);
+    }
+    fs.appendFileSync(file, JSON.stringify({ timestamp, type: 'response_item', payload: {
+      type: 'message', role: 'user', content: 'A real follow-up',
+    } }) + '\n');
+    assert.equal(codex.readSessionFile(file, 'f').modified, timestamp);
+  });
+});
+
 test('only rollout files are listed, and ids are read without opening them', () => {
   withFixture({
     [NAME]: 'ignored',

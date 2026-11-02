@@ -4,6 +4,32 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+test('message search handles platform find shortcuts only while the viewer is visible', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../public/jsonl-viewer.js'), 'utf8');
+  const searchSetup = source.slice(source.indexOf('let jsonlSearch ='), source.indexOf('let jsonlViewRequest ='));
+  for (const platform of ['MacIntel', 'Win32', 'Linux x86_64']) {
+    let listener, opened = 0, visible = true, prevented = 0;
+    const context = vm.createContext({
+      document: { addEventListener: (_name, fn) => { listener = fn; } },
+      navigator: { platform },
+      jsonlViewer: { getClientRects: () => visible ? [{}] : [] },
+      jsonlViewerBody: {},
+      createMessageSearch: () => ({ open: () => opened++ }),
+    });
+    vm.runInContext(searchSetup, context);
+    const event = { key: 'f', metaKey: platform === 'MacIntel', ctrlKey: platform !== 'MacIntel',
+      preventDefault: () => prevented++, stopImmediatePropagation() {} };
+    listener(event);
+    assert.equal(opened, 1, platform);
+    assert.equal(prevented, 1);
+    listener({ ...event, altKey: true });
+    listener({ ...event, metaKey: false, ctrlKey: false });
+    visible = false;
+    listener(event);
+    assert.equal(opened, 1, 'other shortcuts and hidden viewers are ignored');
+  }
+});
+
 test('messages open beside the project list before loading and ignore replies after navigation', async () => {
   const source = fs.readFileSync(path.join(__dirname, '../public/jsonl-viewer.js'), 'utf8');
   const projects = fs.readFileSync(path.join(__dirname, '../public/projects-view.js'), 'utf8');
@@ -13,6 +39,7 @@ test('messages open beside the project list before loading and ignore replies af
   const context = vm.createContext({
     document: { querySelectorAll: () => [], querySelector: () => null },
     activeTab: 'projects', activeSessionId: null,
+    jsonlSearch: null,
     placeholder: element(), terminalArea: element(), jsonlViewer: element(),
     jsonlViewerTitle: element(), jsonlViewerSessionId: element(), jsonlViewerBody: element(),
     hideAllViewers() {},

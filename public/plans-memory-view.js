@@ -128,6 +128,7 @@ async function openPlan(plan) {
 
 /** Hide the full-page viewers and bring the terminal area back, leaving any project chrome alone. */
 function hideViewerPanels() {
+  if (typeof jsonlSearch !== 'undefined') jsonlSearch?.close(false);
   planViewer.style.display = 'none';
   statsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';

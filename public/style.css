@@ -1571,6 +1571,11 @@ body { display: flex; flex-direction: column; }
 }
 
 /* ========== SESSION GRID ========== */
+.message-search-bar { top: 44px; max-width: calc(100% - 24px); right: 12px; }
+.message-search-bar .terminal-search-input { min-width: 40px; flex: 1; }
+::highlight(message-find) { background-color: #515C6A; color: #fff; }
+::highlight(message-find-active) { background-color: #EAA549; color: #171717; }
+
 #grid-viewer {
   display: none;
   flex-shrink: 0;
@@ -1850,6 +1855,18 @@ body { display: flex; flex-direction: column; }
 
 .viewer-panel-editor .cm-editor {
   height: 100%;
+}
+
+/* Keep link destinations visible even before the preview receives focus. */
+.viewer-panel-editor .cm-editor .cm-line.cm-activeLine {
+  background-color: rgba(128, 136, 255, 0.24);
+  box-shadow: inset 3px 0 #a6abff;
+}
+
+.viewer-panel-editor .cm-editor .cm-gutterElement.cm-activeLineGutter {
+  background-color: #484c78;
+  color: #fff;
+  font-weight: 700;
 }
 
 /* ========== STATS VIEWER ========== */
@@ -5016,6 +5033,17 @@ body { display: flex; flex-direction: column; }
 .tcard--done { opacity: 0.6; }
 .tcard--done:hover { opacity: 1; }
 
+/* A done track shows only its heading until the heading is clicked. */
+.tcard-h--toggle { cursor: pointer; user-select: none; }
+.tcard--collapsed .tcard-h { border-bottom: none; border-radius: 9px; }
+.tcard-chevron {
+  display: inline-flex;
+  align-items: center;
+  color: #6a6a80;
+  flex: none;
+  margin-right: -2px;
+}
+
 .tcard-h {
   display: flex;
   align-items: center;
@@ -6080,6 +6108,11 @@ body { display: flex; flex-direction: column; }
 .ctx-item.muted .ctx-icon, .ctx-item.disabled .ctx-icon { color: #6a6a80; }
 .ctx-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ctx-hint { font-size: 11px; color: #7a7a90; margin-left: 10px; }
+.terminal-file-choices { max-width: min(560px, calc(100vw - 16px)); }
+.terminal-file-choices .ctx-item { flex-direction: column; align-items: stretch; height: auto; gap: 4px; padding: 8px; white-space: normal; }
+.terminal-file-choices .ctx-label { flex: none; }
+.terminal-file-choices .ctx-hint { margin-left: 0; overflow-wrap: anywhere; }
+.terminal-file-choices .ctx-item:focus-visible { outline: 1px solid #8088ff; }
 .ctx-arrow { color: #6a6a80; display: inline-flex; margin-left: 6px; }
 .ctx-sep { height: 1px; background: rgba(255,255,255,0.08); margin: 4px 6px; }
 .ctx-head {
@@ -6095,6 +6128,17 @@ body { display: flex; flex-direction: column; }
 /* The running-work list in "mark as done": long titles stay inside the dialog. */
 .done-running-list { max-height: 150px; overflow-y: auto; }
 .done-running-list .np-tree-item { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* "Mark as done": keep or delete the worktrees, decided in the same dialog. */
+.done-choice { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.done-choice-opt { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; cursor: pointer; font-size: 12.5px; color: #c8c8dc; }
+.done-choice-opt:hover { background: rgba(255,255,255,0.03); }
+.done-choice-opt:has(input:checked) { border-color: rgba(120,130,255,0.4); background: rgba(120,130,255,0.08); }
+.done-choice-opt input { margin: 2px 0 0; accent-color: #8088ff; cursor: pointer; }
+.done-choice-opt b { font-weight: 600; display: block; }
+.done-choice-help { display: block; margin-top: 2px; font-size: 11.5px; color: #6a6a80; line-height: 1.4; }
+.done-choice-paths { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; font-size: 11px; color: #9090a8; word-break: break-all; }
+.done-choice-paths em { font-style: normal; color: #e05070; }
+.done-choice-warn { margin-top: 10px; font-size: 12px; color: #e05070; line-height: 1.4; }
 .ws-prompt .folder-input-row input { width: 100%; }
 
 /* Thin scrollbars on the project pages, matching the sidebar. */
@@ -6246,18 +6290,30 @@ body { display: flex; flex-direction: column; }
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: min(var(--files-tree-width, 240px), 60%) 8px minmax(0, 1fr);
+  gap: 4px;
 }
 
 @media (max-width: 900px) {
-  .ws-files { grid-template-columns: 200px minmax(0, 1fr); }
+  .ws-files { --files-tree-width: 200px; }
 }
+
+.ws-files-divider {
+  cursor: col-resize;
+  touch-action: none;
+  border-radius: 4px;
+}
+.ws-files-divider:hover,
+.ws-files-divider:focus-visible,
+.ws-files.is-resizing .ws-files-divider { background: rgba(128,136,255,0.4); }
+.ws-files.is-resizing { user-select: none; }
+.ws-files.is-resizing iframe { pointer-events: none; }
 
 .ws-files-side {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
   background: #18181f;
   border: 1px solid rgba(255,255,255,0.06);
   border-radius: 10px;

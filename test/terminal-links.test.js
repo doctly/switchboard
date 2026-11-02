@@ -11,8 +11,10 @@ test('detection supports full Linux/macOS and Windows paths, home paths, quoting
   assert.deepEqual(findFileReferences('Open C:\\work\\file.ts:2 or ~\\notes.md or /work/a(b).js.').map(m => m.reference), ['C:\\work\\file.ts:2', '~\\notes.md', '/work/a(b).js']);
 });
 
-test('relative references, web URLs, emails and unsupported schemes are not file candidates', () => {
-  assert.deepEqual(findFileReferences('plan.md plan.txt ./plan.md ../plan.md src/app.js README:3 [plan](plan.md) https://example.com/path/file.md user@example.com javascript:alert(1) --config=/work/file.md'), []);
+test('relative references are detected but web URLs, emails and unsupported schemes are excluded', () => {
+  assert.deepEqual(findFileReferences('plan.md plan.txt ./plan.md ../plan.md src/app.js README:3 [plan](plan.md)').map(m => m.reference),
+    ['plan.md', 'plan.txt', './plan.md', '../plan.md', 'src/app.js', 'README:3', 'plan.md']);
+  assert.deepEqual(findFileReferences('https://example.com/path/file.md user@example.com javascript:alert(1) --config=/work/file.md ordinary prose'), []);
   assert.deepEqual(findFileReferences('vscode://file/tmp/app.js:2 file:///tmp/app.js').map(m => m.reference), ['vscode://file/tmp/app.js:2', 'file:///tmp/app.js']);
 });
 
@@ -61,14 +63,52 @@ test('link ranges use display cells for wide and combining characters', async t 
   assert.deepEqual(link.range, { start: { x: 9, y: 1 }, end: { x: 10, y: 2 } });
 });
 
-test('plain relative filenames cause no filesystem lookup, and missing full paths are not linked', async t => {
+test('relative files are checked on hover and missing full paths are not linked', async t => {
   const s = setup(t);
   await s.write('plan.md plan.txt ./plan.md');
-  assert.deepEqual(await s.links(1), []);
-  assert.equal(s.calls.length, 0);
+  assert.equal(s.calls.length, 0, 'writing terminal output does not resolve files');
+  assert.equal((await s.links(1)).length, 3);
+  assert.equal(s.calls.length, 1);
   await s.write('\r\n/missing.md\r\n/work/notes.md');
   assert.deepEqual(await s.links(2), []);
   assert.equal((await s.links(3))[0].text, '/work/notes.md');
+});
+
+test('ambiguous relative links open a labeled chooser without opening either file first', async t => {
+  const s = setup(t);
+  const choices = [
+    { filePath: '/session/plan.md', label: 'Session working directory', line: 3, column: 1 },
+    { filePath: '/project/plan.md', label: 'Project folder', line: 3, column: 1 },
+  ];
+  let choose;
+  let context = { cwd: '/session' };
+  let calls = 0;
+  const dependencies = { ...s.dependencies, getContext: () => context,
+    resolve: async () => { calls++; return [{ choices }]; },
+    chooseFile: (_event, found, open) => { assert.deepEqual(found, choices); choose = open; },
+  };
+  const provider = createFileLinkProvider(s.terminal, dependencies);
+  t.after(() => provider.dispose());
+  await s.write('plan.md:3');
+  const links = () => new Promise(resolve => provider.provideLinks(1, resolve));
+  const [link] = await links();
+  await links();
+  assert.equal(calls, 1, 'hover checks are cached');
+  link.hover({});
+  assert.match(s.tooltips.at(-1), /Session working directory: \/session\/plan.md:3:1/);
+  link.activate({ clientX: 10, clientY: 20 });
+  assert.equal(s.opened.length, 0);
+  choose(choices[1]);
+  assert.deepEqual(s.opened[0], ['session-one', '/project/plan.md', choices[1]]);
+  context = { cwd: '/changed' };
+  await links();
+  assert.equal(calls, 2, 'a directory change bypasses cached resolutions');
+  const handler = createLinkHandler(dependencies);
+  await handler.activate({}, 'plan.md:3');
+  assert.equal(s.opened.length, 1);
+  choose(choices[0]);
+  assert.equal(s.opened[1][1], '/session/plan.md');
+  handler.dispose();
 });
 
 test('late validation cannot link replaced output or revive a disposed provider', async t => {
@@ -111,8 +151,9 @@ test('OSC file links share the resolved hover target with clicks and web links s
   assert.equal(tooltips.at(-1), 'https://example.com');
   await handler.activate({}, 'https://example.com');
   assert.deepEqual(calls.at(-1), ['web', 'https://example.com']);
-  const before = calls.length;
   await handler.activate({}, 'plan.md');
+  assert.equal(calls.at(-1)[0], 'file', 'relative OSC targets use the same resolver');
+  const before = calls.length;
   await handler.activate({}, 'command:do-something');
   assert.equal(calls.length, before);
   handler.dispose();

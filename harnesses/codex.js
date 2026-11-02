@@ -250,7 +250,6 @@ function readSessionFile(filePath, folder) {
       if (ts) {
         // ISO-8601 UTC strings — lexicographic comparison is chronological
         if (!firstTimestamp || ts < firstTimestamp) firstTimestamp = ts;
-        if (!lastTimestamp || ts > lastTimestamp) lastTimestamp = ts;
       }
 
       const payload = entry.payload;
@@ -276,6 +275,9 @@ function readSessionFile(filePath, folder) {
       const text = messageText(payload);
       if (role === 'user' && INJECTED_RE.test(text)) continue;
 
+      // Settings, usage records and injected context can be appended when an
+      // old thread is opened. Only conversation messages advance its date.
+      if (ts && (!lastTimestamp || ts > lastTimestamp)) lastTimestamp = ts;
       messageCount++;
       if (!summary && role === 'user' && text) summary = text.slice(0, 120);
       // Keep full conversation text; tool calls/results and reasoning never
@@ -294,7 +296,7 @@ function readSessionFile(filePath, folder) {
       sessionFile: filePath,
       summary, firstPrompt: summary,
       created: firstTimestamp || stat.birthtime.toISOString(),
-      modified: lastTimestamp || stat.mtime.toISOString(),
+      modified: lastTimestamp || firstTimestamp || stat.birthtime.toISOString(),
       fileMtime: stat.mtime.toISOString(),
       messageCount, textContent: textParts.join('\n'),
       slug: null, customTitle: null, aiTitle: null,

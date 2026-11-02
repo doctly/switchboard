@@ -203,7 +203,7 @@ Attaching a plain folder uses it where it is. Attaching a git repository asks ho
 - **As it is**, on whatever branch is checked out.
 - **With its own checkout** under the project folder at `repos/<name>`, on one branch shared by every worktree in the project, or one you name per repository.
 
-A worktree inherits the repository's `.vscode/tasks.json`. Switchboard keeps its generated `CLAUDE.md` and `AGENTS.md` in the project folder; it does not add instruction overrides or ignore rules to attached repositories. Marking a project done offers to remove its worktrees. Branches stay.
+A worktree inherits the repository's `.vscode/tasks.json`. Switchboard keeps its generated `CLAUDE.md` and `AGENTS.md` in the project folder; it does not add instruction overrides or ignore rules to attached repositories. Marking a project done asks whether to keep its worktrees on disk (the default, so the project can be reopened as it was) or delete them. Branches stay.
 
 ## Project Tasks and Server Logs
 

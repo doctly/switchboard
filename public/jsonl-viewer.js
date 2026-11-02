@@ -553,9 +553,20 @@ function renderJsonlEntry(entry, toolResultMap) {
   return div;
 }
 
+let jsonlSearch = null;
+document.addEventListener('keydown', event => {
+  const mod = /Mac|iPhone|iPad/.test(navigator.platform) ? event.metaKey : event.ctrlKey;
+  if (!mod || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'f' || !jsonlViewer.getClientRects().length) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (!jsonlSearch) jsonlSearch = createMessageSearch(jsonlViewer, jsonlViewerBody);
+  jsonlSearch.open();
+}, true);
+
 let jsonlViewRequest = 0;
 
 async function showJsonlViewer(session) {
+  jsonlSearch?.close(false);
   const request = ++jsonlViewRequest;
   if (typeof leaveTaskLogView === 'function') leaveTaskLogView();
   // Viewing a transcript is another way of navigating to a session. Keep the
@@ -589,6 +600,7 @@ async function showJsonlViewer(session) {
 
   if (result.error) {
     jsonlViewerBody.innerHTML = '<div class="plans-empty">Error loading messages: ' + escapeHtml(result.error) + '</div>';
+    jsonlSearch?.refresh();
     return;
   }
 
@@ -637,4 +649,5 @@ async function showJsonlViewer(session) {
 
   // Scroll to the bottom so the most recent messages are visible
   jsonlViewerBody.scrollTop = jsonlViewerBody.scrollHeight;
+  jsonlSearch?.refresh();
 }

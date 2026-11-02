@@ -440,11 +440,21 @@ async function addProjectFiles(projectId, sourcePaths) {
 function syncBriefFile(filePath, block) {
   if (!fs.existsSync(filePath)) return false;
   const text = fs.readFileSync(filePath, 'utf8');
-  const start = text.indexOf(MANAGED_START);
-  const end = text.indexOf(MANAGED_END);
-  const next = start !== -1 && end !== -1 && end > start
-    ? text.slice(0, start) + block.trimEnd() + '\n' + text.slice(end + MANAGED_END.length).replace(/^\n+/, '')
-    : block.trimEnd() + '\n\n' + text.trimStart();
+  // Remove every complete block, not just the first. Do not let an unclosed
+  // legacy header consume a later block (or the user's notes between them).
+  let inserted = false;
+  const replacement = () => {
+    if (inserted) return '';
+    inserted = true;
+    return block.trimEnd() + '\n';
+  };
+  let next = text.replace(/<!-- switchboard:managed -->(?:(?!<!-- switchboard:managed -->)[\s\S])*?<!-- \/switchboard:managed -->\r?\n?/g, replacement);
+  // Older briefs left the outer managed marker open and owned only this
+  // header plus individually delimited rules/folders sections. Keep any text
+  // outside those sections, including notes after the final folders marker.
+  next = next.replace(/<!-- switchboard:managed -->\r?\n<!-- Managed by Switchboard: this block is replaced on update\. Put your own notes outside it\. -->\r?\n# [^\r\n]*\r?\nProject folder: [^\r\n]*\r?\n\s*(?=<!-- switchboard:rules -->)/g, replacement);
+  next = next.replace(/<!-- switchboard:(rules|folders) -->[\s\S]*?<!-- \/switchboard:\1 -->\r?\n?/g, '');
+  if (!inserted) next = block.trimEnd() + '\n\n' + next.trimStart();
   if (next !== text) fs.writeFileSync(filePath, next, 'utf8');
   return true;
 }
@@ -712,13 +722,7 @@ function updateProject(id, patch) {
   // The brief's title comes from the project name, so a rename rewrites it.
   if (clean.name) syncProjectBrief(id).catch(err => log.error?.('[projects] could not retitle the brief', err));
   notifyRendererProjectsChanged();
-  const result = { ok: true, project: loadProjectNode(id) };
-  // Finishing a project is the moment to offer removing its worktrees; the
-  // renderer asks, then detaches each one with removeWorktree.
-  if (clean.status === 'done') {
-    result.worktrees = db.listProjectFolders(id).filter(f => f.mode === 'worktree').map(f => f.path);
-  }
-  return result;
+  return { ok: true, project: loadProjectNode(id) };
 }
 
 /**

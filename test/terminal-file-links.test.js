@@ -69,6 +69,29 @@ test('only existing absolute files become links; literal filenames precede locat
   assert.deepEqual(await resolveTerminalFiles(Array(33).fill('app.js')), []);
 });
 
+test('relative files resolve against explicit session and project folders with labeled ambiguity', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-relative-link-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cwd = path.join(root, 'session');
+  const projectRoot = path.join(root, 'project');
+  fs.mkdirSync(cwd); fs.mkdirSync(projectRoot);
+  fs.writeFileSync(path.join(cwd, 'both.txt'), 'session');
+  fs.writeFileSync(path.join(projectRoot, 'both.txt'), 'project');
+  fs.writeFileSync(path.join(projectRoot, 'only.txt'), 'project only');
+  const [both, only, missing, directory] = await resolveTerminalFiles(['both.txt:2:3', './only.txt', 'missing.txt', '.'], { cwd, projectRoot });
+  assert.deepEqual(both.choices.map(c => [c.label, c.filePath, c.line, c.column]), [
+    ['Session working directory', path.join(cwd, 'both.txt'), 2, 3],
+    ['Project folder', path.join(projectRoot, 'both.txt'), 2, 3],
+  ]);
+  assert.equal(only.filePath, path.join(projectRoot, 'only.txt'));
+  assert.equal(missing, null); assert.equal(directory, null);
+  const [same] = await resolveTerminalFiles(['both.txt'], { cwd, projectRoot: cwd });
+  assert.equal(same.filePath, path.join(cwd, 'both.txt'));
+  assert.equal(same.choices, undefined);
+  const [absolute] = await resolveTerminalFiles([path.join(cwd, 'both.txt')], { cwd, projectRoot });
+  assert.deepEqual(absolute, { filePath: path.join(cwd, 'both.txt') });
+});
+
 test('bare plan filenames cannot open an unrelated plan in the process directory', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-plan-link-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

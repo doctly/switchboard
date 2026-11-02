@@ -401,7 +401,29 @@ function createTerminalEntry(session) {
 
   const linkTooltip = TerminalFileLinks.createTooltip(container);
   const linkActions = {
-    resolve: references => window.api.resolveTerminalFiles(references),
+    getContext: () => ({
+      cwd: entry.cwd || entry.session.projectPath,
+      projectRoot: typeof projectForSession === 'function' ? projectForSession(entry.session)?.project.root : null,
+    }),
+    resolve: references => window.api.resolveTerminalFiles(references, linkActions.getContext()),
+    chooseFile: (event, choices, open) => {
+      const position = { x: event?.clientX || 20, y: event?.clientY || 20 };
+      const menu = showContextMenu([
+        { head: 'Open relative file from…' },
+        ...choices.map(choice => ({ label: choice.label, hint: TerminalFileLinks.formatTarget(choice), onClick: () => open(choice) })),
+      ], position);
+      menu.classList.add('terminal-file-choices');
+      menu.querySelectorAll('.ctx-item').forEach((row, index) => {
+        row.tabIndex = 0;
+        row.setAttribute('role', 'button');
+        row.title = TerminalFileLinks.formatTarget(choices[index]);
+        row.onkeydown = e => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); row.click(); }
+        };
+      });
+      placeMenu(menu, position);
+      menu.querySelector('.ctx-item')?.focus();
+    },
     showTooltip: linkTooltip.show,
     hideTooltip: linkTooltip.hide,
     openFile: (...args) => openFileInPanel(...args),
@@ -518,6 +540,17 @@ function createTerminalEntry(session) {
   searchBar.querySelector('.terminal-search-close').addEventListener('click', closeSearchBar);
 
   const entry = { terminal, element: container, fitAddon, searchAddon, openSearchBar, closeSearchBar, session, closed: false };
+  // OSC 7 is emitted by shells with directory reporting enabled. Otherwise
+  // the session's launch folder remains the best known working directory.
+  const cwdRegistration = terminal.parser.registerOscHandler(7, value => {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== 'file:') return false;
+      const cwd = decodeURIComponent(url.pathname);
+      if (cwd.startsWith('/') && !/[\x00-\x1f\x7f]/.test(cwd)) entry.cwd = cwd.replace(/^\/([a-z]:[/\\])/i, '$1');
+    } catch {}
+    return true;
+  });
   openSessions.set(sessionId, entry);
   // OSC 8 and web links retain precedence over detected filesystem paths.
   const fileLinks = TerminalFileLinks.createFileLinkProvider(terminal, {
@@ -532,7 +565,7 @@ function createTerminalEntry(session) {
   terminal.loadAddon({
     activate() {},
     dispose() {
-      fileLinks.dispose(); fileLinkRegistration.dispose();
+      fileLinks.dispose(); fileLinkRegistration.dispose(); cwdRegistration.dispose();
       linkScroll.dispose(); linkResize.dispose();
       container.removeEventListener('mouseleave', linkHandler.leave);
       container.removeEventListener('wheel', linkHandler.leave);

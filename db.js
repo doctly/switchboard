@@ -182,6 +182,16 @@ if (migrations.length > currentDbVersion) {
   }
 }
 
+// Re-read Codex timestamps once after switching from any-record activity to
+// conversation activity. Invalidate both gates without deleting session data.
+db.transaction(() => {
+  const key = 'codex_message_timestamps_v1';
+  if (db.prepare('SELECT value FROM settings WHERE key = ?').get(key)) return;
+  db.exec("UPDATE session_cache SET fileMtime = NULL WHERE runtime = 'codex'");
+  db.exec("DELETE FROM cache_meta WHERE folder LIKE 'codex/%'");
+  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(key, 'true');
+})();
+
 // --- Projects ---
 // A project is a piece of work with a folder on disk (`root`). It attaches
 // zero or more folders (the cwds sessions run in) and, later, tracks. Sessions

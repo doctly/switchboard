@@ -239,7 +239,6 @@ test('updateProject, attach/detach, deleteProject keep the folder on disk', asyn
     assert.equal(updated.project.sharedBranch, false);
     assert.equal(updated.project.branchName, 'auth');
     assert.equal(updated.project.slug, 'auth-refactor', 'slug does not follow a rename');
-    assert.deepEqual(updated.worktrees, [], 'marking done reports the worktrees to remove');
 
     const attached = (await projects.attachFolder(project.id, { path: os.tmpdir() })).project;
     assert.equal(attached.folders.length, 1);
@@ -453,6 +452,54 @@ test('the brief uses absolute paths and keeps its attached-folder list current',
   } finally { t.cleanup(); }
 });
 
+test('brief sync migrates legacy sections and removes duplicates without losing user notes', async () => {
+  const t = setup();
+  try {
+    const { project } = await projects.createProject({ name: 'Current title' });
+    const current = projects.defaultBrief(project.name, project.root);
+    const legacy = `<!-- switchboard:managed -->
+<!-- Managed by Switchboard: this block is replaced on update. Put your own notes outside it. -->
+# Old title
+Project folder: ${project.root}
+
+<!-- switchboard:rules -->
+## Working rules
+Old rules
+<!-- /switchboard:rules -->
+My notes between sections.
+<!-- switchboard:folders -->
+## Attached folders
+- /old/folder
+<!-- /switchboard:folders -->
+My trailing notes.
+`;
+    for (const original of [legacy, current + legacy, legacy + current, current + current, legacy.replace(/\n/g, '\r\n')]) {
+      for (const file of ['CLAUDE.md', 'AGENTS.md']) {
+        fs.writeFileSync(path.join(project.root, file), 'My leading notes.\n' + original);
+      }
+      await projects.syncProjectBrief(project.id);
+      for (const file of ['CLAUDE.md', 'AGENTS.md']) {
+        const filePath = path.join(project.root, file);
+        const result = fs.readFileSync(filePath, 'utf8');
+        assert.equal((result.match(/<!-- switchboard:managed -->/g) || []).length, 1);
+        assert.equal((result.match(/<!-- \/switchboard:managed -->/g) || []).length, 1);
+        assert.ok(result.includes(current));
+        assert.ok(result.startsWith('My leading notes.\n'));
+        assert.ok(!result.includes('Old title'));
+        assert.ok(!result.includes('/old/folder'));
+        assert.ok(!result.includes('switchboard:rules'));
+        assert.ok(!result.includes('switchboard:folders'));
+        if (original.includes('My trailing notes.')) {
+          assert.ok(result.includes('My notes between sections.'));
+          assert.ok(result.includes('My trailing notes.'));
+        }
+        await projects.syncProjectBrief(project.id);
+        assert.equal(fs.readFileSync(filePath, 'utf8'), result, 'repeat sync is unchanged');
+      }
+    }
+  } finally { t.cleanup(); }
+});
+
 test('defaultCwd is validated, and detaching a folder resets cwds that pointed into it', async () => {
   const t = setup();
   try {
@@ -571,9 +618,10 @@ test('project instructions stay in the project root and leave worktree instructi
     assert.ok(!fs.existsSync(wt.path), 'checkout removed');
     assert.equal(gitIn(repo, 'rev-parse', '--verify', 'refs/heads/feature-x').length, 40, 'branch kept');
 
-    // Marking done reports the remaining worktree; detaching without removal keeps it on disk.
+    // Marking done leaves worktrees alone; detaching without removal keeps it on disk.
     const done = projects.updateProject(project.id, { status: 'done' });
-    assert.deepEqual(done.worktrees, [wt2.path]);
+    assert.equal(done.project.status, 'done');
+    assert.ok(fs.existsSync(wt2.path), 'marking done keeps the worktree');
     fs.writeFileSync(path.join(wt2.path, 'AGENTS.override.md'), userOverride);
     const kept = await projects.detachFolder(project.id, wt2.path, {});
     assert.equal(kept.worktreeRemoved, false);

@@ -537,7 +537,7 @@ ipcMain.on('mcp-diff-response', (_event, sessionId, diffId, action, editedConten
   resolvePendingDiff(sessionId, diffId, action, editedContent);
 });
 
-ipcMain.handle('resolve-terminal-files', (_event, references) => resolveTerminalFiles(references));
+ipcMain.handle('resolve-terminal-files', (_event, references, context) => resolveTerminalFiles(references, context));
 
 ipcMain.handle('open-file-externally', async (_event, filePath, projectRoot) => {
   try {

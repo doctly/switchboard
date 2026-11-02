@@ -3,9 +3,12 @@
 (function (root) {
   function looksLikeFile(value) {
     if (typeof value !== 'string' || !value || value.length > 4096) return false;
-    // No session-directory inference: only absolute paths, home paths and
-    // explicit local/editor URIs. The main process validates the target.
-    return /^(?:\/(?![/\\])|~[/\\]|[a-z]:[/\\]|(?:file|vscode|vscode-insiders|cursor|windsurf):\/\/)/i.test(value);
+    if (/^(?:\/(?![/\\])|~[/\\]|[a-z]:[/\\]|(?:file|vscode|vscode-insiders|cursor|windsurf):\/\/)/i.test(value)) return true;
+    // Recognize path-shaped relative tokens, not arbitrary prose or URLs.
+    // Existence is checked only for the hovered logical line by the main process.
+    if (/^[~\/\\-]/.test(value) || /[=@]/.test(value) || /^[a-z][a-z\d+.-]*:(?!\d+(?::\d+)?$)/i.test(value)) return false;
+    return /[/\\]|\.[\p{L}\p{N}_-]+(?::\d+(?::\d+)?|#L\d+(?:C\d+)?(?:-L?\d+(?:C\d+)?)?)?$|:\d+(?::\d+)?$/iu.test(value)
+      || /^(?:README|LICENSE|Makefile|Dockerfile)$/i.test(value);
   }
 
   function findFileReferences(text) {
@@ -68,7 +71,13 @@
     return { text, positions, first, cols: terminal.cols, buffer };
   }
 
-  function createFileLinkProvider(terminal, { getSession, resolve, openFile, showTooltip = () => {}, hideTooltip = () => {} }) {
+  function openTarget(target, event, { getSession, openFile, chooseFile }) {
+    const open = choice => openFile(getSession().sessionId, choice.filePath, choice);
+    if (target.choices?.length) return chooseFile?.(event, target.choices, open);
+    if (target.filePath) return open(target);
+  }
+
+  function createFileLinkProvider(terminal, { getSession, getContext = () => null, resolve, openFile, chooseFile, showTooltip = () => {}, hideTooltip = () => {} }) {
     const cache = new Map();
     let disposed = false;
     return {
@@ -79,7 +88,8 @@
         if (!context || disposed) { callback([]); return; }
         const matches = findFileReferences(context.text).filter(match =>
           context.positions[match.start]?.start.y <= y && context.positions[match.end - 1]?.end.y >= y);
-        const key = JSON.stringify(matches.map(match => match.reference));
+        const resolutionContext = JSON.stringify(getContext());
+        const key = JSON.stringify([resolutionContext, matches.map(match => match.reference)]);
         let cached = cache.get(key);
         if (!cached || cached.until < Date.now()) {
           const promise = matches.length ? Promise.resolve().then(() => resolve(matches.map(match => match.reference))).catch(() => []) : Promise.resolve([]);
@@ -88,16 +98,16 @@
           if (cache.size > 128) cache.delete(cache.keys().next().value);
         }
         const targets = await cached.promise;
-        if (disposed) { callback([]); return; }
+        if (disposed || JSON.stringify(getContext()) !== resolutionContext) { callback([]); return; }
         const current = logicalLine(terminal, y);
         if (disposed || !current || current.text !== context.text ||
             current.first !== context.first || current.cols !== context.cols || current.buffer !== context.buffer) { callback([]); return; }
         callback(matches.flatMap((match, index) => {
           const target = targets?.[index];
-          if (!target?.filePath) return [];
+          if (!target?.filePath && !target?.choices?.length) return [];
           return [{ text: match.reference,
             range: { start: context.positions[match.start].start, end: context.positions[match.end - 1].end },
-            activate: () => { hideTooltip(); return openFile(getSession().sessionId, target.filePath, target); },
+            activate: event => { hideTooltip(); return openTarget(target, event, { getSession, openFile, chooseFile }); },
             hover: event => showTooltip(event, formatTarget(target)),
             leave: hideTooltip,
             dispose: hideTooltip,
@@ -108,10 +118,11 @@
   }
 
   function formatTarget(target) {
+    if (target.choices?.length) return target.choices.map(choice => `${choice.label}: ${formatTarget(choice)}`).join('\n');
     return target.filePath + (target.line ? `:${target.line}${target.column ? ':' + target.column : ''}` : '');
   }
 
-  function createLinkHandler({ getSession, resolve, openFile, openExternal, showTooltip, hideTooltip }) {
+  function createLinkHandler({ getSession, getContext = () => null, resolve, openFile, chooseFile, openExternal, showTooltip, hideTooltip }) {
     let generation = 0;
     let disposed = false;
     let hovered = null;
@@ -119,11 +130,12 @@
     const targetFor = uri => {
       if (/^https?:\/\//i.test(uri)) return Promise.resolve({ url: uri });
       if (!looksLikeFile(uri)) return Promise.resolve(null);
-      let cached = cache.get(uri);
+      const key = JSON.stringify([uri, getContext()]);
+      let cached = cache.get(key);
       if (!cached || cached.until < Date.now()) {
         cached = { until: Date.now() + 1500,
           promise: Promise.resolve().then(() => resolve([uri])).then(targets => targets?.[0] || null).catch(() => null) };
-        cache.set(uri, cached);
+        cache.set(key, cached);
         if (cache.size > 64) cache.delete(cache.keys().next().value);
       }
       return cached.promise;
@@ -138,7 +150,7 @@
         const target = await targetPromise;
         if (disposed || !target) return;
         if (target.url) await openExternal(target.url);
-        else if (target.filePath) await openFile(getSession().sessionId, target.filePath, target);
+        else await openTarget(target, _event, { getSession, openFile, chooseFile });
       },
       async hover(event, uri) {
         leave();

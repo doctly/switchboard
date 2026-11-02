@@ -42,6 +42,9 @@ const projectsUi = {
   working: false,
   doneOpen: false,
   snoozedOpen: false,
+  // `${projectId}:${trackKey}` → true while a done track's card is expanded.
+  // Done cards collapse to their heading; this is the user peeking inside.
+  doneCardsOpen: {},
   // Ids of the projects the list last showed as snoozed. The session poll
   // compares against it to notice a snoozed project raising its hand.
   snoozedKey: '',
@@ -1343,7 +1346,9 @@ function renderOverviewBody(project, body) {
     </div>`;
   const cards = body.querySelector('#ws-cards');
   cards.appendChild(buildTrackCard(project, null));
-  for (const track of tracks) cards.appendChild(buildTrackCard(project, track));
+  // Finished tracks sit below the live ones, each keeping its own order.
+  const byDoneLast = [...tracks.filter(t => t.status !== 'done'), ...tracks.filter(t => t.status === 'done')];
+  for (const track of byDoneLast) cards.appendChild(buildTrackCard(project, track));
   if (!tracks.length && !project.sessions.length) {
     const hint = document.createElement('div');
     hint.className = 'ws-hint';
@@ -1372,8 +1377,12 @@ function buildCardSessionRow(project, session) {
 function buildTrackCard(project, track) {
   const key = track ? track.id : 'general';
   const sessions = sessionsOfTrack(project, key);
+  const done = track?.status === 'done';
+  // A done track is finished work: just its heading, unless the user opens it.
+  const doneKey = `${project.id}:${key}`;
+  const collapsed = done && !projectsUi.doneCardsOpen[doneKey];
   const card = document.createElement('div');
-  card.className = 'tcard' + (track ? '' : ' tcard--general') + (track?.status === 'done' ? ' tcard--done' : '');
+  card.className = 'tcard' + (track ? '' : ' tcard--general') + (done ? ' tcard--done' : '') + (collapsed ? ' tcard--collapsed' : '');
   card.dataset.trackKey = key;
   card.dataset.projectId = project.id;
   // What this card is showing, so a session-only refresh can tell whether it
@@ -1384,14 +1393,31 @@ function buildTrackCard(project, track) {
   const head = document.createElement('div');
   head.className = 'tcard-h';
   const colors = trackColors(project, track);
-  head.innerHTML = stateDot(state) +
-    `<span class="tcard-name" style="color:${colors.fg}">${escapeHtml(track ? track.name : 'General')}${track?.status === 'done' ? '<span class="project-done-chip">done</span>' : ''}</span>` +
+  head.innerHTML = (done ? `<span class="tcard-chevron">${collapsed ? PICONS.chevronRight(10) : PICONS.chevronDown(10)}</span>` : '') +
+    stateDot(state) +
+    `<span class="tcard-name" style="color:${colors.fg}">${escapeHtml(track ? track.name : 'General')}${done ? '<span class="project-done-chip">done</span>' : ''}</span>` +
     `<span class="tcard-meta mono">${track ? escapeHtml(cwdLabel) : 'sessions not in a track'}</span>` +
+    (collapsed && sessions.length ? `<span class="tcard-meta">${sessions.length} session${sessions.length === 1 ? '' : 's'}</span>` : '') +
     `<span class="ws-flex"></span>` +
     (track?.cli ? `<span class="ws-chip ws-chip--cli ${track.cli}" title="${escapeHtml(track.cli === 'codex' ? 'Codex' : 'Claude')}">${track.cli === 'codex' ? ICONS.codex(12) : ICONS.claude(12)}</span>` : '') +
     `<button type="button" class="ws-ghost ws-ghost--sm tcard-new">${PICONS.plus(11)}<span>New session</span></button>` +
     (track ? `<button type="button" class="tcard-more" title="Track menu">${PICONS.dots(13)}</button>` : '');
   card.appendChild(head);
+
+  if (done) {
+    // The heading toggles the card open; its buttons keep their own jobs.
+    head.classList.add('tcard-h--toggle');
+    head.onclick = (e) => {
+      if (e.target.closest('button')) return;
+      if (collapsed) projectsUi.doneCardsOpen[doneKey] = true; else delete projectsUi.doneCardsOpen[doneKey];
+      card.replaceWith(buildTrackCard(project, track));
+    };
+  }
+  head.querySelector('.tcard-new').onclick = (e) => launchFromTrack(project, track, e.currentTarget);
+  const moreBtn = head.querySelector('.tcard-more');
+  if (moreBtn) moreBtn.onclick = (e) => { e.stopPropagation(); showContextMenu(trackMenuItems(project, track), { anchor: e.currentTarget }); };
+  if (track) card.oncontextmenu = (e) => { e.preventDefault(); showContextMenu(trackMenuItems(project, track), { x: e.clientX, y: e.clientY }); };
+  if (collapsed) return card;
 
   const shown = sessions.slice(0, visibleSessionCount);
   for (const s of shown) card.appendChild(buildCardSessionRow(project, s));
@@ -1434,12 +1460,8 @@ function buildTrackCard(project, track) {
 
   // Nothing left to show in the foot once New session moved up to the head.
   if (!foot.querySelector('button')) foot.remove();
-  head.querySelector('.tcard-new').onclick = (e) => launchFromTrack(project, track, e.currentTarget);
   const more = foot.querySelector('.tcard-more-sessions');
   if (more) more.onclick = () => openTrackInPanes(project, key);
-  const moreBtn = head.querySelector('.tcard-more');
-  if (moreBtn) moreBtn.onclick = (e) => { e.stopPropagation(); showContextMenu(trackMenuItems(project, track), { anchor: e.currentTarget }); };
-  if (track) card.oncontextmenu = (e) => { e.preventDefault(); showContextMenu(trackMenuItems(project, track), { x: e.clientX, y: e.clientY }); };
   return card;
 }
 
@@ -2122,6 +2144,44 @@ async function renderFileTree(project, list, state) {
   }
 }
 
+function bindFilesDivider(project, container) {
+  const handle = container.querySelector('.ws-files-divider');
+  const storageKey = `project-files-tree-width:${project.id}`;
+  const saved = Number(localStorage.getItem(storageKey));
+  const resize = (width) => {
+    const max = Math.max(0, Math.min(600, container.getBoundingClientRect().width * 0.6));
+    const next = Math.round(Math.max(Math.min(160, max), Math.min(max, width)));
+    container.style.setProperty('--files-tree-width', `${next}px`);
+    handle.setAttribute('aria-valuenow', String(next));
+    return next;
+  };
+  if (Number.isFinite(saved) && saved > 0) resize(saved);
+  let drag = null;
+  handle.onpointerdown = (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    handle.focus();
+    drag = { x: event.clientX, width: container.firstElementChild.getBoundingClientRect().width };
+    handle.setPointerCapture(event.pointerId);
+    container.classList.add('is-resizing');
+  };
+  handle.onpointermove = (event) => {
+    if (drag) resize(drag.width + event.clientX - drag.x);
+  };
+  handle.onlostpointercapture = () => {
+    if (!drag) return;
+    drag = null;
+    container.classList.remove('is-resizing');
+    localStorage.setItem(storageKey, parseFloat(container.style.getPropertyValue('--files-tree-width')) || container.firstElementChild.getBoundingClientRect().width);
+  };
+  handle.onkeydown = (event) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const width = container.firstElementChild.getBoundingClientRect().width;
+    localStorage.setItem(storageKey, resize(width + (event.key === 'ArrowLeft' ? -20 : 20)));
+  };
+}
+
 async function renderFilesTab(project, body) {
   body.classList.add('ws-body--files');
   body.innerHTML = `
@@ -2131,9 +2191,11 @@ async function renderFilesTab(project, body) {
         <div class="ws-files-list" id="ws-files-list"></div>
         <div class="ws-help ws-files-hint">CLAUDE.md is the brief every session reads. The agent creates plan.md, plan-tracker.md, todos.md and memory.md when it needs them. Attached repositories are not listed here.</div>
       </div>
+      <div class="ws-files-divider" role="separator" aria-label="Resize file tree" aria-orientation="vertical" tabindex="0"></div>
       <div class="ws-editor" id="ws-editor"><div class="ws-editor-empty">Pick a file to read or edit it here.</div></div>
     </div>`;
   const state = filesState(project);
+  bindFilesDivider(project, body.querySelector('.ws-files'));
   const list = body.querySelector('#ws-files-list');
   body.querySelector('#ws-files-open').onclick = async () => {
     const result = await window.api.openPath(project.root);
@@ -3200,6 +3262,7 @@ function sessionMenuItems(session) {
     ? { ...launchTargetFor(info.project, (info.project.tracks || []).find(t => t.id === session.trackId) || null), projectPath: session.projectPath }
     : folder;
   const sessionActions = [
+    running ? { label: 'Stop', icon: '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>', onClick: () => confirmAndStopSession(session.sessionId) } : null,
     session.type !== 'terminal' && !running ? { label: 'Resume with config…', icon: ICONS.launchConfig(14), onClick: () => showResumeSessionDialog(session) } : null,
     session.type !== 'terminal' ? { label: 'Fork', icon: PICONS.fork(14), onClick: () => forkSession(session, forkTarget) } : null,
     session.type !== 'terminal' ? { label: unread ? 'Mark as read' : 'Mark as unread', icon: unread ? ICONS.markRead(14) : ICONS.markUnread(14), onClick: () => { if (unread) clearUnread(session.sessionId); else markUnread(session.sessionId); refreshSidebar(); } } : null,
@@ -3207,7 +3270,6 @@ function sessionMenuItems(session) {
   ].filter(Boolean);
   const stateActions = [
     { label: 'Copy session ID', onClick: () => window.api.writeClipboard(session.sessionId) },
-    running ? { label: 'Stop', icon: '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>', onClick: () => confirmAndStopSession(session.sessionId) } : null,
     isDismissibleSession(session.sessionId) ? { label: 'Dismiss', icon: PICONS.x(14), hint: 'never started', onClick: () => dismissSession(session.sessionId) } : null,
     session.type !== 'terminal' ? { label: session.archived ? 'Unarchive' : 'Archive', icon: PICONS.archive(14), onClick: () => toggleArchiveSession(session) } : null,
   ].filter(Boolean);
@@ -3350,23 +3412,34 @@ async function deleteTrackFlow(project, track) {
   await loadProjects();
 }
 
-/** After marking a project done: offer to remove its worktrees, one confirm each for dirty ones. */
-async function offerWorktreeRemoval(project, worktrees) {
-  const n = worktrees.length;
-  if (!confirm(`Remove ${n} worktree${n === 1 ? '' : 's'} for ${project.name}?\n\n${worktrees.join('\n')}\n\nThe branches stay. Cancel keeps the checkouts on disk.`)) return;
-  for (const p of worktrees) {
-    let result = await window.api.detachProjectFolder(project.id, p, { removeWorktree: true });
-    if (result?.dirty && confirm(`${p} has uncommitted changes.\n\n${result.error}\n\nRemove it anyway and lose them?`)) {
-      result = await window.api.detachProjectFolder(project.id, p, { removeWorktree: true, force: true });
-    }
-    if (result?.error) alert(result.error);
+/** A project's worktrees, each marked dirty when git reports uncommitted changes right now. */
+async function projectWorktreesWithState(project) {
+  const worktrees = (project.folders || []).filter(f => f.mode === 'worktree');
+  if (!worktrees.length) return [];
+  let byPath = {};
+  try { byPath = (await window.api.getProjectGitStatus(project.id, { force: true }))?.byPath || {}; } catch {}
+  return worktrees.map(f => ({ path: f.path, branch: f.branch || '', dirty: !!(byPath[f.path]?.git && byPath[f.path].dirty) }));
+}
+
+/**
+ * Delete the checkouts of a finished project's worktrees. Only the ones the
+ * dialog showed as having uncommitted changes are forced, so a checkout that
+ * picked up changes after the user looked is kept rather than wiped.
+ * Resolves the ones that stay, with why.
+ */
+async function deleteProjectWorktrees(project, worktrees) {
+  const kept = [];
+  for (const wt of worktrees) {
+    const result = await window.api.detachProjectFolder(project.id, wt.path, { removeWorktree: true, force: wt.dirty });
+    if (result?.error) kept.push(`${wt.path}\n  ${result.dirty ? 'It has uncommitted changes.' : result.error}`);
   }
+  return kept;
 }
 
 /**
  * What is still alive in a project: its running sessions, and the tasks
- * running in any folder it works in. Marking a project done leaves both
- * running, so the user is asked first.
+ * running in any folder it works in. Marking a project done stops both, so
+ * the user is asked first.
  */
 function runningWorkInProject(project) {
   const sessions = projectSessionsAll(project).filter(s => isSessionRunning(s.sessionId));
@@ -3394,36 +3467,33 @@ async function stopRunningWork(running) {
   pollActiveSessions();
 }
 
-/**
- * Warn before stopping a project's running work, either on its own ("Stop
- * all") or as part of marking the project done. Mid-turn sessions are called
- * out, since stopping those interrupts work in progress. Resolves true to go
- * ahead, false to leave everything as it is.
- */
-function confirmStopWork(project, running, { schedules = [], markDone = false } = {}) {
+/** Running sessions (mid-turn ones marked) and tasks, one line each. */
+function runningWorkLines(running) {
+  const busyIds = new Set((running.busy || []).map(s => s.sessionId));
+  return [
+    ...running.sessions.map(s => busyIds.has(s.sessionId) ? `${sessionTitle(s)}  · working` : sessionTitle(s)),
+    ...running.tasks.map(t => t.label),
+  ];
+}
+
+/** Mid-turn sessions are called out, since stopping those interrupts work in progress. */
+function busyNote(running) {
+  const n = (running.busy || []).length;
+  return n ? `${n} session${n === 1 ? ' is' : 's are'} mid-turn; stopping interrupts work in progress.` : '';
+}
+
+/** A short scrolling list for a dialog, capped at `max` lines. */
+function dialogListHtml(lines, max = 8) {
+  const shown = lines.slice(0, max);
+  const more = lines.length - shown.length;
+  return `<div class="np-tree mono done-running-list">${shown.map(n => `<span class="np-tree-item">${escapeHtml(n)}</span>`).join('')}${more > 0 ? `<span class="np-tree-item"><em>+ ${more} more</em></span>` : ''}</div>`;
+}
+
+/** Warn before "Stop all" stops a project's running work. Resolves true to go ahead. */
+function confirmStopWork(project, running) {
   const parts = [];
   if (running.sessions.length) parts.push(`${running.sessions.length} running session${running.sessions.length === 1 ? '' : 's'}`);
   if (running.tasks.length) parts.push(`${running.tasks.length} running task${running.tasks.length === 1 ? '' : 's'}`);
-  const stopping = parts.length > 0;
-  const busyIds = new Set((running.busy || []).map(s => s.sessionId));
-  const all = [
-    ...running.sessions.map(s => busyIds.has(s.sessionId) ? `${sessionTitle(s)}  · working` : sessionTitle(s)),
-    ...running.tasks.map(t => t.label),
-    ...schedules.map(s => `${s.name} (scheduled, will pause)`),
-  ];
-  const busyNote = busyIds.size
-    ? ` ${busyIds.size} session${busyIds.size === 1 ? ' is' : 's are'} mid-turn; stopping interrupts work in progress.`
-    : '';
-  const scheduleNote = schedules.length
-    ? ` ${schedules.length} scheduled task${schedules.length === 1 ? '' : 's'} will pause until the project is reopened.`
-    : '';
-  const lead = markDone ? 'Marking the project done stops all of it.' : '';
-  const names = all.slice(0, 8);
-  const more = all.length - names.length;
-  const title = stopping
-    ? `Stop ${parts.join(' and ')} in ${project.name}?`
-    : `Mark ${project.name} as done?`;
-  const confirmLabel = markDone ? (stopping ? 'Stop and mark as done' : 'Mark as done') : 'Stop all';
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     overlay.className = 'add-project-overlay';
@@ -3431,19 +3501,90 @@ function confirmStopWork(project, running, { schedules = [], markDone = false } 
     dialog.className = 'add-project-dialog ws-prompt';
     dialog.setAttribute('role', 'dialog');
     dialog.setAttribute('aria-modal', 'true');
-    dialog.setAttribute('aria-labelledby', 'done-running-title');
+    dialog.setAttribute('aria-labelledby', 'stop-running-title');
     dialog.innerHTML = `
-      <h3 id="done-running-title">${escapeHtml(title)}</h3>
-      <div class="add-project-hint">${escapeHtml(lead + busyNote + scheduleNote)}</div>
-      <div class="np-tree mono done-running-list">${names.map(n => `<span class="np-tree-item">${escapeHtml(n)}</span>`).join('')}${more > 0 ? `<span class="np-tree-item"><em>+ ${more} more</em></span>` : ''}</div>
+      <h3 id="stop-running-title">${escapeHtml(`Stop ${parts.join(' and ')} in ${project.name}?`)}</h3>
+      <div class="add-project-hint">${escapeHtml(busyNote(running))}</div>
+      ${dialogListHtml(runningWorkLines(running))}
       <div class="add-project-actions">
         <button class="add-project-cancel-btn" type="button">Cancel</button>
-        <button class="add-project-add-btn" type="button">${escapeHtml(confirmLabel)}</button>
+        <button class="add-project-add-btn" type="button">Stop all</button>
       </div>`;
     const finish = value => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(value); };
     const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); finish(false); } };
     dialog.querySelector('.add-project-cancel-btn').onclick = () => finish(false);
     dialog.querySelector('.add-project-add-btn').onclick = () => finish(true);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    document.addEventListener('keydown', onKey);
+    dialog.querySelector('.add-project-cancel-btn').focus();
+  });
+}
+
+/**
+ * The one question before a project is marked done: what stops, what pauses,
+ * and whether to keep or delete its worktrees. Keep is the default, so a
+ * project can be reopened later exactly as it was. Cancel changes nothing.
+ * Resolves { deleteWorktrees } to go ahead, or null.
+ */
+function confirmMarkDone(project, { running, schedules, worktrees }) {
+  const stopLines = runningWorkLines(running);
+  const dirty = worktrees.filter(w => w.dirty);
+  const n = worktrees.length;
+  const plural = n === 1 ? 'worktree' : 'worktrees';
+  const sections = [];
+  if (stopLines.length) {
+    sections.push(`
+      <label class="new-project-label">Stops now</label>
+      ${busyNote(running) ? `<div class="add-project-hint">${escapeHtml(busyNote(running))}</div>` : ''}
+      ${dialogListHtml(stopLines)}`);
+  }
+  if (schedules.length) {
+    sections.push(`
+      <label class="new-project-label">Pauses until reopened</label>
+      ${dialogListHtml(schedules.map(s => s.name))}`);
+  }
+  if (n) {
+    const wtLines = worktrees.map(w => `${pathBasename(w.path)}${w.branch ? ` · ${w.branch}` : ''}${w.dirty ? '  · uncommitted changes' : ''}`);
+    sections.push(`
+      <label class="new-project-label">${n === 1 ? 'Worktree' : `${n} worktrees`}</label>
+      ${dialogListHtml(wtLines)}
+      <div class="done-choice" role="radiogroup">
+        <label class="done-choice-opt"><input type="radio" name="done-wt" value="keep" checked><span><b>Keep on disk</b><span class="done-choice-help">Reopen the project any time and pick up where you left off.</span></span></label>
+        <label class="done-choice-opt"><input type="radio" name="done-wt" value="delete"><span><b>Delete the ${plural}</b><span class="done-choice-help">Removes ${n === 1 ? 'this folder' : 'these folders'}. Branches and their commits stay.</span>
+          <span class="done-choice-paths mono">${worktrees.map(w => `<span title="${escapeHtml(w.path)}">${escapeHtml(shortPathLabel(w.path))}${w.dirty ? '<em> · uncommitted changes</em>' : ''}</span>`).join('')}</span></span></label>
+      </div>
+      ${dirty.length ? `<div class="done-choice-warn" hidden>${dirty.length === n && n === 1 ? 'It has' : `${dirty.length} of them ${dirty.length === 1 ? 'has' : 'have'}`} uncommitted changes. Deleting loses them.</div>` : ''}`);
+  }
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'add-project-overlay';
+    const dialog = document.createElement('div');
+    dialog.className = 'add-project-dialog ws-prompt';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', 'mark-done-title');
+    dialog.innerHTML = `
+      <h3 id="mark-done-title">${escapeHtml(`Mark ${project.name} as done?`)}</h3>
+      <div class="add-project-hint">It moves to the Done list. Reopen it any time.</div>
+      ${sections.join('')}
+      <div class="add-project-actions">
+        <button class="add-project-cancel-btn" type="button">Cancel</button>
+        <button class="add-project-add-btn" type="button">Mark as done</button>
+      </div>`;
+    const confirmBtn = dialog.querySelector('.add-project-add-btn');
+    const warn = dialog.querySelector('.done-choice-warn');
+    const deleting = () => dialog.querySelector('input[name="done-wt"]:checked')?.value === 'delete';
+    dialog.querySelectorAll('input[name="done-wt"]').forEach(input => {
+      input.onchange = () => {
+        confirmBtn.textContent = deleting() ? `Mark as done and delete ${plural}` : 'Mark as done';
+        if (warn) warn.hidden = !deleting();
+      };
+    });
+    const finish = value => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(value); };
+    const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); finish(null); } };
+    dialog.querySelector('.add-project-cancel-btn').onclick = () => finish(null);
+    confirmBtn.onclick = () => finish({ deleteWorktrees: deleting() });
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
     document.addEventListener('keydown', onKey);
@@ -3464,21 +3605,35 @@ async function toggleTrackDone(project, track, patch) {
   await patch({ status: toDone ? 'done' : 'active' });
 }
 
+/**
+ * Reopening is one click. Marking done asks once, and only when there is
+ * something to ask about: running work, schedules, or worktrees. Everything
+ * is decided in that dialog; nothing happens until the user confirms.
+ */
 async function toggleProjectDone(project) {
-  const isDone = project.status === 'done';
-  if (!isDone) {
-    const running = runningWorkInProject(project);
-    // Schedules do not need stopping — a done project simply stops firing
-    // them — but the user should hear that before it happens.
-    const schedules = schedulesForProject(project).filter(s => s.enabled);
-    if (anyRunningWork(running) || schedules.length) {
-      if (!await confirmStopWork(project, running, { schedules, markDone: true })) return;
-      await stopRunningWork(running);
-    }
+  if (project.status === 'done') {
+    const result = await window.api.updateProject(project.id, { status: 'active' });
+    if (result?.error) { alert(result.error); return; }
+    loadProjects();
+    return;
   }
-  const result = await window.api.updateProject(project.id, { status: isDone ? 'active' : 'done' });
+  const running = runningWorkInProject(project);
+  // Schedules do not need stopping — a done project simply stops firing
+  // them — but the user should hear that before it happens.
+  const schedules = schedulesForProject(project).filter(s => s.enabled);
+  const worktrees = await projectWorktreesWithState(project);
+  let choice = { deleteWorktrees: false };
+  if (anyRunningWork(running) || schedules.length || worktrees.length) {
+    choice = await confirmMarkDone(project, { running, schedules, worktrees });
+    if (!choice) return;
+  }
+  if (anyRunningWork(running)) await stopRunningWork(running);
+  const result = await window.api.updateProject(project.id, { status: 'done' });
   if (result?.error) { alert(result.error); return; }
-  if (!isDone && result.worktrees?.length) await offerWorktreeRemoval(project, result.worktrees);
+  if (choice.deleteWorktrees) {
+    const kept = await deleteProjectWorktrees(project, worktrees);
+    if (kept.length) alert(`${project.name} is done, but ${kept.length === 1 ? 'one worktree was' : `${kept.length} worktrees were`} not deleted and ${kept.length === 1 ? 'stays' : 'stay'} on disk:\n\n${kept.join('\n\n')}`);
+  }
   loadProjects();
 }
 
