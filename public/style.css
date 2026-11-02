@@ -5242,6 +5242,9 @@ body { display: flex; flex-direction: column; }
 .ws-frow-detail { flex: 1; min-width: 0; }
 .ws-frow .ws-ghost { opacity: 0; }
 .ws-frow:hover .ws-ghost { opacity: 1; }
+/* Detach on the Overview: always in sight, quiet until pointed at. */
+.ws-frow .ws-frow-x { opacity: 1; flex-shrink: 0; height: 20px; margin: -2px -6px -2px 0; padding: 0 5px; color: #5a5a70; }
+.ws-frow .ws-frow-x:hover { color: #f07090; background: rgba(224,80,112,0.1); }
 
 .ws-added-files-card { padding-bottom: 8px; }
 
@@ -6101,6 +6104,8 @@ body { display: flex; flex-direction: column; }
 /* The running-work list in "mark as done": long titles stay inside the dialog. */
 .done-running-list { max-height: 150px; overflow-y: auto; }
 .done-running-list .np-tree-item { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The folder a detach is about, in full: its name is at the end. */
+.detach-folder-path .np-tree-item { overflow-wrap: anywhere; }
 /* "Mark as done": keep or delete the worktrees, decided in the same dialog. */
 .done-choice { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
 .done-choice-opt { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; cursor: pointer; font-size: 12.5px; color: #c8c8dc; }

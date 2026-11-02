@@ -2359,7 +2359,8 @@ function renderSideCards(project, side) {
         <div class="ws-frow" data-path="${escapeHtml(f.path)}" data-detail="mode" title="${escapeHtml(f.path)}">
           <span class="ws-frow-icon ${f.mode === 'worktree' ? 'is-worktree' : ''}">${f.mode === 'worktree' ? PICONS.branch(13) : PICONS.folder(13)}</span>
           <span class="ws-frow-name">${escapeHtml(pathBasename(f.path))}</span>
-          <span class="ws-card-meta mono">${escapeHtml(folderModeText(project, f))}</span>
+          <span class="ws-card-meta mono ws-frow-detail">${escapeHtml(folderModeText(project, f))}</span>
+          <button type="button" class="ws-ghost ws-ghost--sm ws-frow-x" title="Detach from the project" aria-label="${escapeHtml(`Detach ${pathBasename(f.path)}`)}">${PICONS.x(12)}</button>
         </div>`).join('') : '<div class="ws-card-text muted">No folders attached. Sessions run in the project folder.</div>'}
     </div>
     <div class="ws-card ws-added-files-card">
@@ -2378,6 +2379,12 @@ function renderSideCards(project, side) {
   side.querySelector('#ws-plan-open').onclick = () => openProjectFileInEditor(project, 'plan.md');
   side.querySelector('#ws-plan-tracker').onclick = () => openProjectFileInEditor(project, 'plan-tracker.md');
   side.querySelector('#ws-folders-add').onclick = () => attachFolderAsk(project);
+  side.querySelectorAll('.ws-frow-x').forEach(btn => {
+    btn.onclick = () => {
+      const folder = (project.folders || []).find(f => f.path === btn.closest('.ws-frow').dataset.path);
+      if (folder) detachFolderFlow(project, folder);
+    };
+  });
   bindAddedFilesCard(project, side);
   bindRecentFilesCard(project, side);
   side.querySelectorAll('.ws-todo input').forEach(box => {
@@ -3352,13 +3359,50 @@ async function attachFolderFlow(project, mode, folderPath = null) {
   loadProjects();
 }
 
+/**
+ * The one question before a folder leaves a project. A worktree also offers
+ * to delete its checkout; keeping it is the default. Cancel changes nothing.
+ * Resolves { removeWorktree } to go ahead, or null.
+ */
+function confirmDetachFolder(project, folder) {
+  const isWorktree = folder.mode === 'worktree';
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'add-project-overlay';
+    const dialog = document.createElement('div');
+    dialog.className = 'add-project-dialog ws-prompt';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', 'detach-folder-title');
+    dialog.innerHTML = `
+      <h3 id="detach-folder-title">${escapeHtml(`Detach ${pathBasename(folder.path)} from ${project.name}?`)}</h3>
+      <div class="add-project-hint">${isWorktree ? 'New sessions of the project stop working in it.' : 'New sessions of the project stop working in it. Nothing on disk changes.'}</div>
+      <div class="np-tree mono detach-folder-path"><span class="np-tree-item">${escapeHtml(folder.path)}</span></div>
+      ${isWorktree ? `
+        <label class="new-project-label"><input type="checkbox" class="detach-folder-remove"> Also delete this checkout</label>
+        <div class="add-project-hint">${escapeHtml(folder.branch ? `The branch ${folder.branch} and its commits stay.` : 'Its branch and commits stay.')}</div>` : ''}
+      <div class="add-project-actions">
+        <button class="add-project-cancel-btn" type="button">Cancel</button>
+        <button class="add-project-add-btn" type="button">Detach</button>
+      </div>`;
+    const removeBox = dialog.querySelector('.detach-folder-remove');
+    const confirmBtn = dialog.querySelector('.add-project-add-btn');
+    if (removeBox) removeBox.onchange = () => { confirmBtn.textContent = removeBox.checked ? 'Detach and delete' : 'Detach'; };
+    const finish = value => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(value); };
+    const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); finish(null); } };
+    dialog.querySelector('.add-project-cancel-btn').onclick = () => finish(null);
+    confirmBtn.onclick = () => finish({ removeWorktree: !!removeBox?.checked });
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    document.addEventListener('keydown', onKey);
+    dialog.querySelector('.add-project-cancel-btn').focus();
+  });
+}
+
 async function detachFolderFlow(project, folder) {
-  let opts = {};
-  if (folder.mode === 'worktree') {
-    opts = { removeWorktree: confirm(`Detach ${pathBasename(folder.path)}.\n\nAlso remove the checkout at ${folder.path}?\nOK removes it (the branch "${folder.branch}" stays). Cancel keeps it on disk.`) };
-  } else if (!confirm(`Detach ${pathBasename(folder.path)} from ${project.name}?\n\nNothing on disk changes.`)) {
-    return;
-  }
+  const choice = await confirmDetachFolder(project, folder);
+  if (!choice) return;
+  const opts = folder.mode === 'worktree' ? { removeWorktree: choice.removeWorktree } : {};
   let result = await window.api.detachProjectFolder(project.id, folder.path, opts);
   if (result?.dirty && confirm(`The worktree has uncommitted changes.\n\n${result.error}\n\nRemove it anyway and lose those changes?`)) {
     result = await window.api.detachProjectFolder(project.id, folder.path, { removeWorktree: true, force: true });
