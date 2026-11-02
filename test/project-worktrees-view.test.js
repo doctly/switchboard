@@ -216,3 +216,42 @@ test('a merged worktree with no commits of its own is offered but not ticked', (
   assert.doesNotMatch(html.match(/<input[^>]*>/)[0], /checked/);
   assert.match(html, /no commits of its own yet/);
 });
+
+// The real escapeHtml from utils.js, over a document stub that serializes text
+// the way the DOM does (only &, <, > and no-break spaces are escaped).
+function realEscapeHtml() {
+  const utils = fs.readFileSync(path.join(__dirname, '../public/utils.js'), 'utf8');
+  const fn = utils.match(/function escapeHtml\(str\) \{[\s\S]*?\n\}/)[0];
+  const document = {
+    createElement: () => {
+      let text = '';
+      return {
+        set textContent(v) { text = v == null ? '' : String(v); },
+        get innerHTML() { return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\u00a0/g, '&nbsp;'); },
+      };
+    },
+  };
+  return new Function('document', `${fn}; return escapeHtml;`)(document);
+}
+
+test('hostile repository, branch, path and lock names render as text and stay inside their attributes', () => {
+  const ctx = loadContext({ escapeHtml: realEscapeHtml() });
+  const evil = `x"><img src=x onerror=alert(1)>'&`;
+  const repo = { id: 'r', name: `repo${evil}`, mainPath: `/w/${evil}`, worktrees: [
+    wt(`/w/${evil}`, { isMain: true, branch: `main${evil}`, kind: 'main' }),
+    wt(`/w/${evil}.worktrees/b`, { branch: `feat/${evil}`, locked: true, lockReason: evil,
+      lastCommit: { subject: evil, time: Date.now() } }),
+  ] };
+  const html = [
+    ctx.wtListHtml({ id: 'p' }, { repositories: [repo], query: '', settings: {} }),
+    ctx.wtMergedListHtml({ base: `main${evil}`, worktrees: [{ path: `/w/${evil}.worktrees/b`, branch: evil, eligible: false, reason: evil }] }, repo),
+  ].join('\n');
+  assert.doesNotMatch(html, /<img/, 'no element comes out of a name');
+  // Every quoted attribute value is closed by its own quote: nothing a name
+  // holds can end it early and start a new attribute.
+  const tags = html.match(/<[a-z][^>]*>/gi) || [];
+  for (const tag of tags) {
+    const rest = tag.replace(/\s[a-z-]+="[^"]*"/gi, '').replace(/\s[a-z-]+(?=[\s>])/gi, '');
+    assert.match(rest, /^<[a-z0-9-]+\s*\/?>$/i, `unexpected markup in ${tag}`);
+  }
+});
