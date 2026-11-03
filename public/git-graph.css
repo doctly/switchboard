@@ -4,7 +4,7 @@
    tab it sits directly beside; no new hex values are introduced for
    anything the Git tab already has a colour for. */
 
-.gg-tab-body { padding: 12px 0 0; display: flex; flex-direction: column; overflow: hidden; }
+.gg-tab-body { padding: 20px 28px 28px; display: flex; flex-direction: column; overflow: hidden; }
 
 .gg-tab-shell {
   width: 100%;
@@ -16,46 +16,19 @@
   position: relative;
 }
 
-/* --- Repo picker (mirrors .git-repo-picker) --- */
-
-.gg-repo-picker {
-  display: flex;
-  gap: 4px;
-  padding: 3px;
-  align-self: flex-start;
-  max-width: 100%;
-  overflow-x: auto;
-  border-radius: 7px;
-  background: rgba(255,255,255,0.035);
-}
-
-.gg-repo-option {
-  border: 0;
-  border-radius: 5px;
-  padding: 5px 10px;
-  background: transparent;
-  color: #77778c;
-  font-family: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.gg-repo-option:hover { color: #bcbccc; }
-.gg-repo-option.active { color: #d8d8e8; background: rgba(255,255,255,0.075); }
-
 /* --- Control bar --- */
 
 .gg-toolbar {
+  flex: 0 0 auto;
+  min-width: 0;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
   padding: 8px 14px;
-  border-top: 1px solid rgba(255,255,255,0.065);
-  border-bottom: 1px solid rgba(255,255,255,0.065);
+  border: 1px solid rgba(255,255,255,0.065);
   background: #18181f;
 }
 
@@ -165,12 +138,12 @@
 /* --- Table --- */
 
 .gg-table-wrap {
-  border-top: 1px solid rgba(255,255,255,0.065);
-  border-bottom: 1px solid rgba(255,255,255,0.065);
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.065);
   background: #14141a;
   overflow: auto;
-  flex: 1 1 auto;
-  min-height: 200px;
+  flex: 1 1 0;
+  min-height: 0;
 }
 
 .gg-thead {
@@ -407,6 +380,7 @@
 /* --- Find widget --- */
 
 .gg-find-widget {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 8px;

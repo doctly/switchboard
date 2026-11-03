@@ -5375,36 +5375,31 @@ body { display: flex; flex-direction: column; }
   flex-direction: column;
 }
 
-.git-workspace-subnav {
-  flex: 0 0 auto;
-  padding: 10px 28px;
-  border-bottom: 1px solid rgba(255,255,255,0.055);
-  background: rgba(255,255,255,0.012);
-}
-
-.git-workspace-nav {
-  display: inline-flex;
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid rgba(255,255,255,0.09);
-  border-radius: 7px;
-  background: rgba(255,255,255,0.025);
-}
-
-.git-workspace-nav-btn {
-  border: 0;
-  border-radius: 5px;
-  padding: 5px 12px;
-  background: transparent;
-  color: #77778c;
-  font-family: inherit;
-  font-size: 11.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
+.git-workspace-subnav { flex: 0 0 auto; padding: 20px 28px 0; min-width: 0; }
+.git-workspace-context { background: #18181f; border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; min-width: 0; }
+.git-workspace-repository-row, .git-workspace-view-row { display: flex; align-items: center; gap: 16px; min-width: 0; padding: 12px 16px; }
+.git-workspace-view-row { border-top: 1px solid rgba(255,255,255,0.055); padding-top: 0; padding-bottom: 0; }
+.git-workspace-label { flex: 0 0 76px; color: #77778c; font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+#git-workspace-repository { flex: 1; min-width: 0; }
+.git-workspace-repositories { display: flex; align-items: center; gap: 7px; overflow-x: auto; padding: 2px; }
+.git-workspace-repo { display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto; max-width: 260px; padding: 7px 11px; border-radius: 7px; border: 1px solid rgba(255,255,255,0.08); background: transparent; color: #9090a8; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.git-workspace-repo span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-workspace-repo svg { flex-shrink: 0; color: #77778c; }
+.git-workspace-repo:hover { color: #d8d8e8; background: rgba(255,255,255,0.035); }
+.git-workspace-repo.active { color: #d8d8e8; border-color: rgba(128,136,255,0.4); background: rgba(128,136,255,0.12); }
+.git-workspace-repo.active svg { color: #a6abff; }
+.git-workspace-repo:focus-visible, .git-workspace-nav-btn:focus-visible { outline: 2px solid #9298ff; outline-offset: 2px; }
+.git-workspace-no-repos { color: #77778c; font-size: 12px; }
+.git-workspace-nav { display: flex; gap: 24px; min-width: 0; overflow-x: auto; }
+.git-workspace-nav-btn { flex: 0 0 auto; border: 0; border-bottom: 2px solid transparent; padding: 12px 0 10px; background: transparent; color: #77778c; font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
 .git-workspace-nav-btn:hover { color: #bcbccc; }
-.git-workspace-nav-btn.active { color: #d8d8e8; background: rgba(122,132,255,0.16); }
+.git-workspace-nav-btn.active { color: #d8d8e8; border-bottom-color: #9298ff; }
+.git-workspace-view .git-tab-shell { max-width: none; }
+@media (max-width: 900px) {
+  .git-workspace-label { flex-basis: 64px; }
+  .git-workspace-repository-row, .git-workspace-view-row { gap: 10px; padding-left: 12px; padding-right: 12px; }
+  .git-workspace-nav { gap: 18px; }
+}
 
 .git-workspace-view {
   flex: 1 1 auto;
@@ -5454,33 +5449,6 @@ body { display: flex; flex-direction: column; }
   text-transform: uppercase;
   padding-top: 3px;
 }
-
-.git-repo-picker {
-  display: flex;
-  gap: 4px;
-  padding: 3px;
-  align-self: flex-start;
-  max-width: 100%;
-  overflow-x: auto;
-  border-radius: 7px;
-  background: rgba(255,255,255,0.035);
-}
-
-.git-repo-option {
-  border: 0;
-  border-radius: 5px;
-  padding: 5px 10px;
-  background: transparent;
-  color: #77778c;
-  font-family: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.git-repo-option:hover { color: #bcbccc; }
-.git-repo-option.active { color: #d8d8e8; background: rgba(255,255,255,0.075); }
 
 .git-alert {
   border: 1px solid rgba(233,166,76,0.28);
@@ -5784,6 +5752,229 @@ body { display: flex; flex-direction: column; }
   .git-diff-pane { min-height: 260px; }
 }
 
+
+/* ---- Git: Worktrees ---- */
+.wt-top-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.wt-top-actions .ws-btn:disabled { opacity: 0.45; cursor: default; }
+
+.wt-toolbar { display: flex; align-items: center; gap: 8px; }
+.wt-search {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 7px;
+  background: rgba(255,255,255,0.03);
+  color: #6f6f84;
+}
+.wt-search:focus-within { border-color: rgba(120,130,255,0.4); }
+.wt-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #d0d0e0;
+  font: inherit;
+  font-size: 12px;
+}
+.wt-sort { width: auto; height: 30px; }
+
+.wt-notice {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 8px 11px;
+  font-size: 11.5px;
+  color: #b8b8cc;
+  background: rgba(255,255,255,0.03);
+}
+.wt-notice .git-loading-dot { margin-top: 4px; flex-shrink: 0; }
+.wt-notice-text { flex: 1; min-width: 0; line-height: 1.45; word-break: break-word; }
+.wt-notice--ok { border-color: rgba(74,190,96,0.25); color: #8fd29c; background: rgba(74,190,96,0.06); }
+.wt-notice--error { border-color: rgba(224,80,112,0.3); color: #ec8a9e; background: rgba(224,80,112,0.06); }
+.wt-notice-close {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+  padding: 2px;
+}
+.wt-notice-close:hover { opacity: 1; }
+.wt-notice-output { flex-basis: 100%; }
+.wt-notice-output summary { cursor: pointer; color: #8a8aa0; }
+.wt-notice-output pre {
+  margin: 6px 0 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background: rgba(0,0,0,0.25);
+  color: #b0b0c4;
+  font-size: 10.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.wt-list { display: flex; flex-direction: column; gap: 12px; }
+.wt-list .git-empty-state .ws-btn { margin-top: 6px; }
+.wt-repo-head { justify-content: flex-start; gap: 10px; }
+.wt-repo-head .git-heading-right { margin-left: auto; gap: 6px; }
+.wt-repo-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #9a9ab0;
+  font: inherit;
+  cursor: pointer;
+}
+.wt-repo-name { color: #d6d6e8; font-size: 12px; letter-spacing: 0; text-transform: none; font-weight: 700; }
+.wt-repo-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #64647a;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.wt-rows { display: flex; flex-direction: column; }
+.wt-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+}
+.wt-row + .wt-row { border-top: 1px solid rgba(255,255,255,0.04); }
+.wt-row:hover { background: rgba(255,255,255,0.02); }
+.wt-row.missing { opacity: 0.7; }
+.wt-row-icon { color: #83cd92; display: inline-flex; }
+.wt-row.main .wt-row-icon { color: #8a90e8; }
+.wt-row-main { min-width: 0; }
+.wt-row-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.wt-row-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #d6d6e8;
+  font: 650 12.5px 'SF Mono', 'Fira Code', Menlo, monospace;
+}
+.wt-row-path {
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #6a6a80;
+  font-size: 10.5px;
+}
+.wt-row-status { display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: #77778d; white-space: nowrap; }
+.wt-row-actions { display: flex; align-items: center; gap: 4px; }
+
+.wt-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1.4;
+  color: #9a9ab0;
+  background: rgba(255,255,255,0.06);
+}
+.wt-badge--main { color: #a6abff; background: rgba(120,130,255,0.13); }
+.wt-badge--switchboard { color: #8fd29c; background: rgba(74,190,96,0.11); }
+.wt-badge--claude { color: #e3a27a; background: rgba(217,119,87,0.13); }
+.wt-badge--codex { color: #9ec3f0; background: rgba(90,150,230,0.13); }
+.wt-badge--locked { color: #e3ad67; background: rgba(233,166,76,0.12); }
+.wt-badge--missing { color: #ec8a9e; background: rgba(224,80,112,0.12); }
+
+.wt-state { border-radius: 5px; padding: 2px 6px; font-weight: 650; }
+.wt-state.clean { color: #74cf86; background: rgba(74,190,96,0.1); }
+.wt-state.changed { color: #e0aa63; background: rgba(224,170,99,0.1); }
+.wt-sync { font-family: 'SF Mono', 'Fira Code', Menlo, monospace; color: #9a9ab0; }
+
+/* Dialogs */
+.wt-dialog { max-height: calc(100vh - 80px); overflow-y: auto; }
+.wt-dialog--wide { width: min(560px, calc(100vw - 48px)); }
+.wt-dialog-body { display: flex; flex-direction: column; }
+.wt-dialog-body .new-project-label { margin-top: 12px; }
+.wt-field { width: 100%; box-sizing: border-box; }
+.wt-textarea { height: auto; min-height: 52px; padding: 7px 9px; resize: vertical; line-height: 1.45; }
+.wt-hint { margin-top: 6px; }
+.wt-hint code, .wt-check code, .wt-dialog-body code { font-family: 'SF Mono', 'Fira Code', Menlo, monospace; font-size: 11px; color: #c8c8dc; }
+.wt-dialog-path { word-break: break-all; }
+.wt-dialog-error {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: rgba(224,80,112,0.08);
+  color: #ec8a9e;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow: auto;
+}
+.add-project-add-btn.wt-danger { background: rgba(224,80,112,0.18); border-color: rgba(224,80,112,0.45); color: #f08aa0; }
+.add-project-add-btn:disabled { opacity: 0.5; cursor: default; }
+.wt-modes { display: flex; flex-wrap: wrap; gap: 6px; }
+.wt-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 7px;
+  font-size: 12px;
+  color: #c8c8dc;
+  cursor: pointer;
+}
+.wt-mode:has(input:checked) { border-color: rgba(120,130,255,0.4); background: rgba(120,130,255,0.08); }
+.wt-mode input { margin: 0; accent-color: #8088ff; }
+.wt-c-fields { display: flex; flex-direction: column; }
+/* An author display rule beats the hidden attribute; keep hidden parts hidden. */
+.wt-dialog [hidden], .wt-notice [hidden] { display: none !important; }
+.wt-path-row { display: flex; gap: 6px; align-items: center; }
+.wt-path-row .ws-input { flex: 1; }
+.wt-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: #c8c8dc;
+  cursor: pointer;
+}
+.wt-check input { margin: 2px 0 0; accent-color: #8088ff; cursor: pointer; flex-shrink: 0; }
+.wt-check.disabled { color: #6a6a80; cursor: default; }
+.wt-check-help { display: block; margin-top: 2px; font-size: 11.5px; color: #6a6a80; line-height: 1.4; }
+.wt-check--inline { margin-top: 4px; }
+.wt-env-list, .wt-merged-list { display: flex; flex-direction: column; max-height: 180px; overflow-y: auto; }
+
+@container (max-width: 720px) {
+  .wt-row { grid-template-columns: 18px minmax(0, 1fr) auto; }
+  .wt-row-status { grid-column: 2 / -1; grid-row: 2; flex-wrap: wrap; }
+  .wt-top-actions .ws-btn span { display: none; }
+}
 
 /* ---- Working mode: strip + pane beside the terminal ---- */
 #project-strip {

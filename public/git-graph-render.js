@@ -160,9 +160,10 @@ function gitGraphRenderGraphSvg(rows, laneAssignments, opts = {}) {
   const uncommittedStyle = opts.uncommittedChangesStyle || 'openAtUncommitted';
   const rowHeight = opts.rowHeight || GG_ROW_HEIGHT;
   const laneWidth = opts.laneWidth || GG_LANE_WIDTH;
+  const leftPadding = 12;
   const byHash = new Map(rows.map((r, i) => [r.hash, i]));
   const maxLane = laneAssignments.reduce((m, a) => Math.max(m, a.lane), 0);
-  const width = (maxLane + 1) * laneWidth + laneWidth;
+  const width = leftPadding + (maxLane + 1) * laneWidth + laneWidth;
   // opts.rowY carries each table row's measured centre, so nodes stay on their
   // rows even when rows differ in height or commit details open inline.
   const rowY = Array.isArray(opts.rowY) && opts.rowY.length === rows.length ? opts.rowY : null;
@@ -174,7 +175,7 @@ function gitGraphRenderGraphSvg(rows, laneAssignments, opts = {}) {
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const assignment = laneAssignments[i] || { lane: 0, colorIndex: 0, edges: [] };
-    const cx = laneWidth / 2 + assignment.lane * laneWidth;
+    const cx = leftPadding + laneWidth / 2 + assignment.lane * laneWidth;
     const cy = yOf(i);
     const color = gitGraphPaletteColor(palette, assignment.colorIndex || 0);
 
@@ -182,10 +183,10 @@ function gitGraphRenderGraphSvg(rows, laneAssignments, opts = {}) {
       // An edge bends into its own lane on the first row, runs straight down,
       // and only bends again on the last row if its parent sits in another lane.
       // A parent that isn't loaded yet keeps the lane running off the bottom.
-      const via = laneWidth / 2 + (edge.viaLane != null ? edge.viaLane : edge.toLane) * laneWidth;
+      const via = leftPadding + laneWidth / 2 + (edge.viaLane != null ? edge.viaLane : edge.toLane) * laneWidth;
       const targetRow = byHash.get(edge.parentHash);
       const loaded = targetRow !== undefined;
-      const tx = loaded ? laneWidth / 2 + edge.toLane * laneWidth : via;
+      const tx = loaded ? leftPadding + laneWidth / 2 + edge.toLane * laneWidth : via;
       const ty = loaded ? yOf(targetRow) : height + rowHeight / 2;
       const endRow = loaded ? targetRow : rows.length;
       const route = endRow - i > 1

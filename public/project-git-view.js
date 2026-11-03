@@ -34,31 +34,78 @@ function gitTabState(projectId) {
 
 function projectGitView(projectOrId) {
   const projectId = typeof projectOrId === 'string' ? projectOrId : projectOrId?.id;
-  return projectId && gitTabState(projectId).workspaceView === 'history' ? 'history' : 'changes';
+  const view = projectId && gitTabState(projectId).workspaceView;
+  return ['history', 'worktrees'].includes(view) ? view : 'changes';
 }
 
 function setProjectGitView(projectOrId, view) {
   const projectId = typeof projectOrId === 'string' ? projectOrId : projectOrId?.id;
-  if (!projectId || !['changes', 'history'].includes(view)) return;
+  if (!projectId || !['changes', 'history', 'worktrees'].includes(view)) return;
   const changesState = gitTabState(projectId);
   const current = projectGitView(projectId);
 
-  // Both views have their own richer state, but the selected repository is a
+  // Each view has its own richer state, but the selected repository is a
   // workspace-level choice. Carry it across when the user changes views.
   if (typeof gitGraphState === 'function') {
     const historyState = gitGraphState(projectId);
-    if (current === 'changes' && view === 'history' && changesState.selectedRepo) {
-      historyState.selectedRepo = changesState.selectedRepo;
-    } else if (current === 'history' && view === 'changes' && historyState.selectedRepo) {
+    if (current === 'history' && historyState.selectedRepo) {
       changesState.selectedRepo = historyState.selectedRepo;
     }
+  }
+  if (typeof wtTabState === 'function') {
+    const worktreesState = wtTabState(projectId);
+    if (current === 'worktrees') {
+      const repo = wtSelectedRepository(worktreesState);
+      if (repo) changesState.selectedRepo = !repo.nested && repo.attachedFolders?.length
+        ? (repo.attachedFolders.includes(changesState.selectedRepo) ? changesState.selectedRepo : repo.attachedFolders[0])
+        : repo.mainPath;
+    }
+    if (view === 'worktrees') {
+      worktreesState.selectedRepo = null;
+      worktreesState.workspaceRepoPath = changesState.selectedRepo;
+    }
+  }
+  if (view === 'history' && typeof gitGraphState === 'function' && changesState.selectedRepo) {
+    gitGraphState(projectId).selectedRepo = changesState.selectedRepo;
   }
   changesState.workspaceView = view;
 }
 
+// Repository selection lives above the view tabs, outside each view's repaint.
+function gitWorkspaceRepositoriesHtml(repositories, selectedPath) {
+  if (!repositories.length) return '<span class="git-workspace-no-repos">No repositories attached</span>';
+  return `<div class="git-workspace-repositories" role="group" aria-label="Repositories">${repositories.map((repo, index) => `<button type="button" class="git-workspace-repo${repo.path === selectedPath ? ' active' : ''}" data-repo-index="${index}" aria-pressed="${repo.path === selectedPath}" title="${escapeAttr(repo.path)}">${PICONS.branch(13)}<span>${escapeHtml(repo.name || pathBasename(repo.path) || repo.path)}</span></button>`).join('')}</div>`;
+}
+
+function updateGitWorkspaceRepositories(project, body, repositories, selectedPath, select) {
+  const workspace = typeof body.closest === 'function' ? body.closest('.git-workspace-body') : null;
+  const slot = workspace?.querySelector('#git-workspace-repository');
+  if (!slot || !body.isConnected) return;
+  // Keep folder order stable across views, even when worktree discovery sorts by name.
+  const paths = [project.root, ...(project.folders || []).map(folder => folder.path)];
+  const ordered = repositories.map((repo, index) => ({ ...repo, originalIndex: index }))
+    .sort((a, b) => {
+      const rank = repo => {
+        const n = paths.indexOf(repo.path);
+        return n < 0 ? paths.length : n;
+      };
+      return rank(a) - rank(b) || a.originalIndex - b.originalIndex;
+    });
+  slot.innerHTML = gitWorkspaceRepositoriesHtml(ordered, selectedPath);
+  slot.querySelectorAll('[data-repo-index]').forEach(button => {
+    button.onclick = () => {
+      const repo = ordered[Number(button.dataset.repoIndex)];
+      if (repo && repo.path !== selectedPath) select(repo.originalIndex);
+    };
+  });
+}
+
 function gitWorkspaceNavHtml(view) {
   const button = (name, label) => `<button type="button" id="git-workspace-${name}-tab" class="git-workspace-nav-btn${view === name ? ' active' : ''}" data-git-view="${name}" role="tab" aria-selected="${view === name}" aria-controls="git-workspace-view">${label}</button>`;
-  return `<div class="git-workspace-subnav"><div class="git-workspace-nav" role="tablist" aria-label="Git view">${button('changes', 'Changes')}${button('history', 'History')}</div></div>`;
+  return `<div class="git-workspace-subnav"><div class="git-workspace-context">
+    <div class="git-workspace-repository-row"><span class="git-workspace-label">Repository</span><div id="git-workspace-repository"><span class="git-workspace-no-repos">Loading repositories…</span></div></div>
+    <div class="git-workspace-view-row"><span class="git-workspace-label">View</span><div class="git-workspace-nav" role="tablist" aria-label="Git view">${button('changes', 'Changes')}${button('history', 'History')}${button('worktrees', 'Worktrees')}</div></div>
+  </div></div>`;
 }
 
 function renderProjectGitWorkspace(project, body) {
@@ -75,7 +122,8 @@ function renderProjectGitWorkspace(project, body) {
   });
 
   const viewBody = body.querySelector('#git-workspace-view');
-  if (view === 'history') renderProjectGitGraphTab(project, viewBody);
+  if (view === 'worktrees') renderProjectWorktreesTab(project, viewBody);
+  else if (view === 'history') renderProjectGitGraphTab(project, viewBody);
   else renderProjectGitTab(project, viewBody);
 }
 
@@ -371,6 +419,7 @@ function gitViewToggleHtml(mode) {
 function paintGitRepository(project, state, body) {
   const repositories = state.repositories || [];
   if (!repositories.length) {
+    updateGitWorkspaceRepositories(project, body, [], null, () => {});
     body.innerHTML = '<div class="git-empty-state"><div class="git-empty-title">No folders attached</div><div>Git information will appear here when this project has an attached repository.</div></div>';
     return;
   }
@@ -379,16 +428,15 @@ function paintGitRepository(project, state, body) {
   if (!repo) repo = repositories.find(item => item.git) || repositories[0];
   state.selectedRepo = repo.path;
 
-  const picker = repositories.length > 1 ? `
-    <div class="git-repo-picker" role="tablist" aria-label="Repositories">
-      ${repositories.map((item, index) => `<button type="button" class="git-repo-option ${item.path === repo.path ? 'active' : ''}" data-index="${index}">${escapeHtml(gitRepoName(item))}</button>`).join('')}
-    </div>` : '';
+  updateGitWorkspaceRepositories(project, body, repositories, repo.path, index => {
+    state.selectedRepo = repositories[index].path;
+    paintGitRepository(project, state, body);
+  });
 
   if (!repo.git) {
     body.innerHTML = `
       <div class="git-tab-shell">
         <div class="git-tab-top"><div><div class="git-tab-title">Git</div><div class="git-tab-path mono">${escapeHtml(repo.path)}</div></div><span class="git-readonly">Read only</span></div>
-        ${picker}
         <div class="git-empty-state"><div class="git-empty-title">Not a Git repository</div><div>${escapeHtml(repo.path)}</div></div>
       </div>`;
   } else {
@@ -396,7 +444,6 @@ function paintGitRepository(project, state, body) {
     body.innerHTML = `
       <div class="git-tab-shell">
         <div class="git-tab-top"><div><div class="git-tab-title">${escapeHtml(gitRepoName(repo))}</div><div class="git-tab-path mono">${escapeHtml(repo.path)}</div></div><span class="git-readonly">Read only</span></div>
-        ${picker}
         ${gitOverviewHtml(repo)}
         <section class="git-section">
           <div class="git-section-heading"><span>Changes</span><span class="git-heading-right">${changed ? gitViewToggleHtml(gitChangesViewMode()) : ''}<span class="git-section-meta">${changed ? `${changed} file${changed === 1 ? '' : 's'}` : 'Working tree clean'}</span></span></div>
@@ -405,16 +452,6 @@ function paintGitRepository(project, state, body) {
       </div>`;
     if (changed) paintGitChanges(project, state, repo, body);
   }
-
-  body.querySelectorAll('.git-repo-option').forEach(button => {
-    const item = repositories[Number(button.dataset.index)];
-    if (!item) return;
-    button.title = item.path;
-    button.onclick = () => {
-      state.selectedRepo = item.path;
-      paintGitRepository(project, state, body);
-    };
-  });
 
   body.querySelectorAll('.git-view-btn').forEach(button => {
     button.onclick = () => {

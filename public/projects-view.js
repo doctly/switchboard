@@ -1068,6 +1068,8 @@ function applySessionStatus(project) {
     badge.style.display = running ? '' : 'none';
   }
 
+  // The Worktrees tab counts the sessions running in each worktree.
+  if (projectTab(project) === 'git' && projectGitView(project) === 'worktrees' && typeof applyWorktreeSessionCounts === 'function') applyWorktreeSessionCounts(project);
   // Only the Overview tab shows sessions; the others do not care.
   if (projectTab(project) !== 'overview') return;
   for (const card of projectViewer.querySelectorAll('.tcard[data-track-key]')) {
