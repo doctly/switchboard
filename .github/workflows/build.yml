@@ -108,12 +108,20 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Create GitHub release
+      - name: Create or update draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --draft \
-            --title "${GITHUB_REF_NAME#v}" \
-            --notes "" \
-            dist/*
+          if gh release view "${GITHUB_REF_NAME}" --json isDraft > release.json; then
+            if [ "$(jq -r .isDraft release.json)" != "true" ]; then
+              echo "Refusing to replace assets on a published release" >&2
+              exit 1
+            fi
+            gh release upload "${GITHUB_REF_NAME}" --clobber dist/*
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --draft \
+              --title "${GITHUB_REF_NAME#v}" \
+              --notes "" \
+              dist/*
+          fi
