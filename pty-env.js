@@ -1,6 +1,6 @@
 // Environment for PTY children.
 //
-// Two jobs:
+// Three jobs:
 //
 // 1. Strip Electron internals that cause nested Electron apps (or node-pty
 //    inside them) to malfunction.
@@ -19,6 +19,28 @@
 
 const LOCALE_VARS = ['LC_ALL', 'LC_CTYPE', 'LANG'];
 
+// 3. Forget the Claude Code session Switchboard itself may have been started
+//    from (a terminal inside a session, or a session restarting the app).
+//    Claude passes these to every child; a CLI started with them takes itself
+//    for a child of that old session: it writes no transcript of its own, so
+//    the new session gets no title, no row and nothing to resume. Settings a
+//    user puts in env (CLAUDE_CODE_MAX_OUTPUT_TOKENS, …) are kept.
+const INHERITED_CLAUDE_SESSION_VARS = new Set([
+  'CLAUDECODE',
+  'CLAUDE_PID',
+  'CLAUDE_EFFORT',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CLAUDE_CODE_EXECPATH',
+  'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_SESSION_ATTENDED',
+  'CLAUDE_CODE_BRIDGE_SESSION_ID',
+  'CLAUDE_CODE_MESSAGING_TOKEN',
+  'CLAUDE_CODE_MESSAGING_SOCKET',
+  // The IDE server of that session; Switchboard sets its own for --ide.
+  'CLAUDE_CODE_SSE_PORT',
+]);
+
 function buildPtyEnv(sourceEnv) {
   const env = Object.fromEntries(
     Object.entries(sourceEnv).filter(([k]) =>
@@ -26,7 +48,8 @@ function buildPtyEnv(sourceEnv) {
       !k.startsWith('GOOGLE_API_KEY') &&
       k !== 'NODE_OPTIONS' &&
       k !== 'ORIGINAL_XDG_CURRENT_DESKTOP' &&
-      k !== 'WT_SESSION'
+      k !== 'WT_SESSION' &&
+      !INHERITED_CLAUDE_SESSION_VARS.has(k)
     )
   );
 
