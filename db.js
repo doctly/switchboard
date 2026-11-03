@@ -922,6 +922,12 @@ function closeDb() {
   try { db.close(); } catch {}
 }
 
+// Read/modify/write settings used by the index worker must not overwrite a
+// preference saved by the UI between the read and write.
+function withImmediateTransaction(fn) {
+  return db.transaction(fn).immediate();
+}
+
 module.exports = {
   getMeta, getAllMeta, setName, toggleStar, setArchived,
   isCachePopulated, getAllCached, getCachedByFolder, getCachedSession, upsertCachedSessions,
@@ -940,4 +946,5 @@ module.exports = {
   setSessionAssignment, copySessionAssignment, moveSessionAssignment,
   insertPlanLink, listPlanLinks, rekeyPlanLinks,
   closeDb,
+  withImmediateTransaction,
 };

@@ -278,7 +278,15 @@ const { deriveProjectPath } = claudeHarness;
 
 // Session cache → session-cache.js
 const sessionCache = require('./session-cache');
+const { SessionIndexer } = require('./session-indexer');
+const sessionIndexer = new SessionIndexer({
+  projectsDir: PROJECTS_DIR,
+  onStatus: (text, type) => sessionCache.sendStatus(text, type),
+  onChanged: () => sessionCache.notifyRendererProjectsChanged('sessions'),
+  onError: err => log.error('[indexer]', err),
+});
 sessionCache.init({
+  indexer: sessionIndexer,
   PROJECTS_DIR,
   activeSessions,
   getMainWindow: () => mainWindow,
@@ -335,7 +343,7 @@ ipcMain.handle('browse-folder', async () => {
 });
 
 // --- IPC: add-project ---
-ipcMain.handle('add-project', (_event, projectPath) => {
+ipcMain.handle('add-project', async (_event, projectPath) => {
   try {
     // Validate the path exists and is a directory
     const stat = fs.statSync(projectPath);
@@ -368,7 +376,7 @@ ipcMain.handle('add-project', (_event, projectPath) => {
     }
 
     // Immediately index the new folder so it's in cache before frontend renders
-    refreshFolder(folder);
+    await refreshFolder(folder);
     notifyRendererProjectsChanged();
 
     return { ok: true, folder, projectPath };
@@ -640,7 +648,7 @@ ipcMain.handle('unwatch-file', (_event, filePath) => {
 
 ipcMain.handle('get-projects', (_event, showArchived) => {
   try {
-    const needsPopulate = !isCachePopulated() || !isSearchIndexPopulated();
+    const needsPopulate = !sessionIndexer.initialComplete && (!isCachePopulated() || !isSearchIndexPopulated());
 
     if (needsPopulate) {
       populateCacheViaWorker();
@@ -1827,9 +1835,7 @@ function startProjectsWatcher() {
       if (fs.existsSync(folderPath)) {
         detectSessionTransitions(folder);
         refreshFolder(folder);
-      } else {
-        deleteCachedFolder(folder);
-      }
+      } else refreshFolder(folder);
       changed = true;
     }
 

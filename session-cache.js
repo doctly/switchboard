@@ -5,8 +5,6 @@ const { getFolderIndexMtimeMs } = require('./folder-index-state');
 const { encodeProjectPath } = require('./encode-project-path');
 const { getHarness, DEFAULT_HARNESS, harnessForFolder, availableHarnesses } = require('./harnesses');
 
-// Only Claude sessions are indexed today; the harness lookup is here so the
-// call sites already read the right way when codex folders join them.
 const claude = getHarness(DEFAULT_HARNESS);
 const { deriveProjectPath, readSessionFile } = claude;
 
@@ -33,8 +31,12 @@ let deleteCachedFolder, getCachedByFolder, getCachedSession, upsertCachedSession
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
 let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, setSetting, getMeta, setName;
 let updateCachedAiTitle, updateSearchTitle;
+let indexer = null;
+let withImmediateTransaction = null;
 
 function init(ctx) {
+  indexer = ctx.indexer || null;
+  withImmediateTransaction = ctx.db.withImmediateTransaction || null;
   PROJECTS_DIR = ctx.PROJECTS_DIR;
   activeSessions = ctx.activeSessions;
   getMainWindow = ctx.getMainWindow;
@@ -103,6 +105,15 @@ function initializeHiddenProjectTimestamps(now = Date.now()) {
  * second signal for filesystems with coarse or unavailable birth times.
  */
 function restoreProjectsWithNewSessions(sessions) {
+  if (withImmediateTransaction) {
+    const hidden = new Set((getSetting('global') || {}).hiddenProjects || []);
+    if (!sessions.some(s => hidden.has(s.projectPath))) return [];
+    return withImmediateTransaction(() => restoreProjectsWithNewSessionsImpl(sessions));
+  }
+  return restoreProjectsWithNewSessionsImpl(sessions);
+}
+
+function restoreProjectsWithNewSessionsImpl(sessions) {
   if (!sessions.length) return [];
 
   const global = getSetting('global') || {};
@@ -151,6 +162,7 @@ function restoreProjectsWithNewSessions(sessions) {
  * wins over the first-prompt summary.
  */
 function refreshHarnessTitles(harness) {
+  if (indexer) { indexer.titles(harness.id); return 0; }
   if (!harness?.readSessionTitles || !updateCachedAiTitle) return 0;
   const titles = harness.readSessionTitles();
   if (!(titles instanceof Map)) return 0; // unreadable: retain the last good data
@@ -213,11 +225,12 @@ function listAllFolders() {
  * which files are new or changed (stat only) and which cached sessions lost
  * their file. Null when the folder has nothing to index.
  */
-function planFolderRefresh(folder) {
+function planFolderRefresh(folder, force = false) {
   const h = harnessForFolder(folder);
   const folderPath = resolveFolderPath(folder);
   if (!fs.existsSync(folderPath)) {
     deleteCachedFolder(folder);
+    deleteSearchFolder(folder);
     return null;
   }
   // Never mark writes that arrive during this pass as already indexed. The
@@ -256,7 +269,7 @@ function planFolderRefresh(folder) {
     let stat;
     try { stat = fs.statSync(filePath); } catch { continue; }
 
-    if (cachedMap.has(sessionId) && cachedMap.get(sessionId) === stat.mtime.toISOString()) {
+    if (!force && cachedMap.has(sessionId) && cachedMap.get(sessionId) === stat.mtime.toISOString()) {
       continue; // unchanged, skip
     }
     toRead.push({ filePath, sessionId, size: stat.size });
@@ -284,7 +297,17 @@ function readPlannedSessions(plan) {
 }
 
 /** Write a planned folder's freshly read sessions and its removals. */
-function applyFolderRefresh(plan, sessions) {
+function applyFolderRefresh(plan, sessions, finalize = true) {
+  // Cache rows and their search documents must commit together. Otherwise a
+  // worker stopped between the two writes could leave an apparently current
+  // transcript permanently absent from search on the next pass.
+  if (withImmediateTransaction) {
+    return withImmediateTransaction(() => applyFolderRefreshImpl(plan, sessions, finalize));
+  }
+  return applyFolderRefreshImpl(plan, sessions, finalize);
+}
+
+function applyFolderRefreshImpl(plan, sessions, finalize) {
   const searchEntriesToUpsert = [];
   const namesToSet = [];
   for (const sess of sessions) {
@@ -311,7 +334,7 @@ function applyFolderRefresh(plan, sessions) {
   for (const { id, name } of namesToSet) {
     setName(id, name);
   }
-  for (const sessionId of plan.removedIds) {
+  for (const sessionId of finalize ? plan.removedIds : []) {
     deleteCachedSession(sessionId);
     deleteSearchSession(sessionId);
   }
@@ -319,11 +342,12 @@ function applyFolderRefresh(plan, sessions) {
   restoreProjectsWithNewSessions(sessions);
 
   // Update folder mtime
-  setFolderMeta(plan.folder, plan.folderProject, plan.indexMtimeMs);
+  if (finalize) setFolderMeta(plan.folder, plan.folderProject, plan.indexMtimeMs);
 }
 
 /** Refresh a single folder incrementally: only re-read changed/new transcripts */
 function refreshFolder(folder) {
+  if (indexer) return indexer.folder(folder);
   const plan = planFolderRefresh(folder);
   if (plan) applyFolderRefresh(plan, readPlannedSessions(plan));
 }
@@ -417,6 +441,7 @@ function readInBackground(plans) {
  * written; otherwise everything is written before it returns null.
  */
 function reconcileCacheFromFilesystem() {
+  if (indexer) return indexer.reconcile();
   const metaMap = getAllFolderMeta();
   const plans = [];
 
@@ -524,11 +549,13 @@ function buildProjectsFromCache(showArchived) {
   // renders are pure DB reads.
   try {
     const folderMeta = getAllFolderMeta();
-    const dirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
-      .filter(d => d.isDirectory() && d.name !== '.git');
+    const dirs = indexer
+      ? [...folderMeta.keys()].filter(folder => !harnessForFolder(folder).folderPrefix).map(name => ({ name }))
+      : fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+        .filter(d => d.isDirectory() && d.name !== '.git');
     for (const d of dirs) {
       let projectPath = folderMeta.get(d.name)?.projectPath;
-      if (!projectPath) {
+      if (!projectPath && !indexer) {
         projectPath = deriveProjectPath(path.join(PROJECTS_DIR, d.name), d.name);
         if (projectPath) setFolderMeta(d.name, projectPath, 0);
       }
@@ -615,6 +642,7 @@ function sendStatus(text, type) {
 let populatingCache = false;
 
 function populateCacheViaWorker() {
+  if (indexer) return indexer.populate();
   if (populatingCache) return;
   populatingCache = true;
   sendStatus('Scanning projects\u2026', 'active');
@@ -693,7 +721,78 @@ function populateCacheViaWorker() {
   });
 }
 
+// Used only inside the indexing worker. No transcript bodies cross back to the
+// main process. Each small commit releases SQLite's writer lock, then rests so
+// startup indexing does not monopolize CPU or disk bandwidth.
+async function indexFoldersInWorker({ folders, force = false, progress = () => {}, pauseMs = 10 } = {}) {
+  const metaMap = getAllFolderMeta();
+  const allFolders = folders || listAllFolders();
+  let count = 0;
+  let changed = false;
+  const externalTitles = new Map();
+  for (let i = 0; i < allFolders.length; i++) {
+    const folder = allFolders[i];
+    const meta = metaMap.get(folder);
+    if (!force && !folders && meta && fs.existsSync(resolveFolderPath(folder)) &&
+        getFolderIndexMtimeMs(resolveFolderPath(folder)) <= (meta.indexMtimeMs || 0)) continue;
+    progress({ text: `Indexing folders (${i + 1}/${allFolders.length})…`, count });
+    try {
+      const plan = planFolderRefresh(folder, force);
+      if (!plan) { changed = true; continue; }
+      const h = getHarness(plan.harnessId);
+      if (!externalTitles.has(h.id)) externalTitles.set(h.id, h.readSessionTitles?.() || null);
+      let batch = [];
+      let bytes = 0;
+      let stable = true;
+      let batchStarted = Date.now();
+      const flush = async () => {
+        if (batch.length) {
+          applyFolderRefresh(plan, batch, false);
+          count += batch.length;
+          changed = true;
+          batch = [];
+          bytes = 0;
+        }
+        // Rest for at least a quarter of the preceding work time as well as
+        // yielding between small batches. Very large single files still stay
+        // off the UI thread, and do not cause more workers to be spawned.
+        await new Promise(resolve => setTimeout(resolve, Math.max(pauseMs, (Date.now() - batchStarted) / 3)));
+        batchStarted = Date.now();
+      };
+      for (const { filePath, sessionId } of plan.toRead) {
+        const s = h.readSessionFile(filePath, folder, plan.folderProject, getCachedSession(sessionId));
+        if (!s) continue;
+        // Include external titles in the first FTS insert, rather than
+        // rewriting every Codex search document again after the initial scan.
+        const titles = externalTitles.get(h.id);
+        if (titles instanceof Map) s.aiTitle = titles.get(s.sessionId) || null;
+        // A growing transcript must remain eligible for the next pass.
+        try {
+          if (fs.statSync(filePath).mtime.toISOString() !== s.fileMtime) stable = false;
+        } catch { stable = false; }
+        batch.push(s);
+        bytes += Buffer.byteLength(s.textContent || '', 'utf8');
+        if (batch.length >= 8 || bytes >= 512 * 1024) await flush();
+      }
+      await flush();
+      // Preserve the old folder watermark when a file changed during its read.
+      // Its cached parser state still makes the next read incremental.
+      if (!stable) plan.indexMtimeMs = meta?.indexMtimeMs || 0;
+      applyFolderRefresh(plan, []);
+      if (plan.removedIds.length) changed = true;
+    } catch (err) {
+      log.error('Error indexing folder', folder, err);
+      throw err;
+    }
+  }
+  for (const h of availableHarnesses()) {
+    if (!disabledHarnessIds().has(h.id) && refreshHarnessTitles(h)) changed = true;
+  }
+  return { count, changed };
+}
+
 module.exports = {
+  indexFoldersInWorker,
   init,
   refreshFolder,
   reconcileCacheFromFilesystem,

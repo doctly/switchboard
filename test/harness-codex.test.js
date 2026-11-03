@@ -96,6 +96,26 @@ test('a session with no user turn is skipped', () => {
   });
 });
 
+test('large tool output is streamed and a final Unicode turn needs no newline', () => {
+  const body = rollout({ cwd: '/p', turns: [['user', 'first']] })
+    + JSON.stringify({ type: 'response_item', payload: { type: 'function_call_output',
+      output: 'discard this tool output '.repeat(50000) } }) + '\n'
+    + JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant',
+      content: [{ type: 'text', text: 'Finished 🦒 '.repeat(30000) }] } });
+  withFixture({ [NAME]: body }, dir => {
+    const original = fs.readFileSync;
+    fs.readFileSync = file => {
+      if (file === path.join(dir, NAME)) throw new Error('whole-file allocation');
+      return original(file);
+    };
+    try {
+      const session = codex.readSessionFile(path.join(dir, NAME), 'f');
+      assert.equal(session.messageCount, 2);
+      assert.equal(session.textContent, 'first\n' + 'Finished 🦒 '.repeat(30000));
+    } finally { fs.readFileSync = original; }
+  });
+});
+
 test('a rollout with no cwd is skipped — there is no project to file it under', () => {
   const body = JSON.stringify({ timestamp: '2026-08-26T10:00:00Z', type: 'session_meta', payload: { session_id: 'x' } }) + '\n'
     + JSON.stringify({ timestamp: '2026-08-26T10:00:01Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'text', text: 'hi' }] } }) + '\n';

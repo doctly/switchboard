@@ -13,6 +13,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { scanLines } = require('../jsonl-scan');
 
 const id = 'codex';
 const label = 'Codex';
@@ -229,7 +230,6 @@ function messageText(payload) {
 function readSessionFile(filePath, folder) {
   try {
     const stat = fs.statSync(filePath);
-    const lines = fs.readFileSync(filePath, 'utf8').split('\n');
 
     const sessionId = sessionIdFromPath(filePath);
     if (!sessionId) return null;
@@ -240,11 +240,12 @@ function readSessionFile(filePath, folder) {
     const textParts = [];
     let firstTimestamp = null;
     let lastTimestamp = null;
+    let subagent = false;
 
-    for (const line of lines) {
-      if (!line) continue;
+    const onLine = line => {
+      if (!line) return;
       let entry;
-      try { entry = JSON.parse(line); } catch { continue; }
+      try { entry = JSON.parse(line); } catch { return; }
 
       const ts = entry.timestamp;
       if (ts) {
@@ -253,7 +254,7 @@ function readSessionFile(filePath, folder) {
       }
 
       const payload = entry.payload;
-      if (!payload) continue;
+      if (!payload) return;
 
       if (entry.type === 'session_meta') {
         // Sub-agent threads are recorded as ordinary rollouts, but codex refuses
@@ -262,18 +263,18 @@ function readSessionFile(filePath, folder) {
         // resume that always fails. Claude's subagent transcripts are already
         // excluded — they live in a subagents/ subdirectory the indexer never
         // scans — so this keeps the two consistent.
-        if (isSubagentMeta(payload)) return null;
+        if (isSubagentMeta(payload)) { subagent = true; return false; }
         projectPath = projectPath || payload.cwd || null;
-        continue;
+        return;
       }
 
-      if (entry.type !== 'response_item' || payload.type !== 'message') continue;
+      if (entry.type !== 'response_item' || payload.type !== 'message') return;
 
       const role = payload.role;
-      if (role !== 'user' && role !== 'assistant') continue; // 'developer' is CLI scaffolding
+      if (role !== 'user' && role !== 'assistant') return; // 'developer' is CLI scaffolding
 
       const text = messageText(payload);
-      if (role === 'user' && INJECTED_RE.test(text)) continue;
+      if (role === 'user' && INJECTED_RE.test(text)) return;
 
       // Settings, usage records and injected context can be appended when an
       // old thread is opened. Only conversation messages advance its date.
@@ -283,7 +284,12 @@ function readSessionFile(filePath, folder) {
       // Keep full conversation text; tool calls/results and reasoning never
       // reach this branch because they are not user/assistant messages.
       if (text) textParts.push(text);
-    }
+    };
+    // Tool output can make rollouts hundreds of MB. Keep one line at a time
+    // instead of retaining the entire file and a second array of split lines.
+    const scan = scanLines(filePath, 0, onLine, stat.size);
+    if (scan.tail && !scan.stopped) onLine(scan.tail);
+    if (subagent) return null;
 
     // No cwd means no project to file it under; no user turn means the session
     // was opened and abandoned. Either way there is nothing to show.
