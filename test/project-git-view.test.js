@@ -337,3 +337,95 @@ test('a collapsed folder that hides the selected file is highlighted in its plac
   const folder = list.children.find(c => typeof c.className === 'string' && c.className.startsWith('git-folder-row'));
   assert.equal(folder.className, 'git-folder-row selected');
 });
+
+
+test('Worktrees is a Git subview and preserves the repository across History and Changes', () => {
+  const ctx = loadContext();
+  const history = { selectedRepo: '/repo/selected' };
+  ctx.gitGraphState = () => history;
+  ctx.setProjectGitView('project', 'history');
+  ctx.setProjectGitView('project', 'worktrees');
+  assert.equal(ctx.projectGitView('project'), 'worktrees');
+  assert.match(ctx.gitWorkspaceNavHtml('worktrees'), /data-git-view="worktrees"[^>]*aria-selected="true"/);
+  ctx.setProjectGitView('project', 'changes');
+  assert.equal(ctx.gitTabState('project').selectedRepo, '/repo/selected');
+  ctx.setProjectGitView('project', 'worktrees');
+  ctx.setProjectGitView('project', 'history');
+  assert.equal(history.selectedRepo, '/repo/selected');
+});
+
+test('the Worktrees subview renders inside the Git panel without replacing navigation', () => {
+  const ctx = loadContext();
+  const viewBody = {};
+  const body = { innerHTML: '', querySelectorAll: () => [], querySelector: () => viewBody };
+  let rendered = null;
+  ctx.renderProjectWorktreesTab = (project, host) => { rendered = { project, host }; };
+  const project = { id: 'project' };
+  ctx.setProjectGitView(project, 'worktrees');
+  ctx.renderProjectGitWorkspace(project, body);
+  assert.equal(rendered.project, project);
+  assert.equal(rendered.host, viewBody);
+  assert.match(body.innerHTML, /git-workspace-subnav/);
+});
+
+
+test('repository selection follows Changes, History and Worktrees, preserving attached aliases', () => {
+  const ctx = loadContext();
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/project-worktrees-view.js'), 'utf8'), ctx);
+  const history = { selectedRepo: '/api' };
+  ctx.gitGraphState = () => history;
+  ctx.wtTabState('p').repositories = [
+    { id: 'sample', mainPath: '/private/sample', attachedFolders: ['/tmp/sample'], worktrees: [] },
+    { id: 'api', mainPath: '/api', attachedFolders: ['/api'], worktrees: [] },
+  ];
+  ctx.gitTabState('p').selectedRepo = '/tmp/sample';
+  ctx.setProjectGitView('p', 'worktrees');
+  assert.equal(ctx.wtSelectedRepository(ctx.wtTabState('p')).id, 'sample');
+  ctx.wtTabState('p').selectedRepo = 'api';
+  ctx.setProjectGitView('p', 'history');
+  assert.equal(history.selectedRepo, '/api');
+  ctx.setProjectGitView('p', 'worktrees');
+  ctx.wtTabState('p').selectedRepo = 'sample';
+  ctx.setProjectGitView('p', 'changes');
+  assert.equal(ctx.gitTabState('p').selectedRepo, '/tmp/sample');
+});
+
+
+test('the shared Git header keeps repository selection above the three view tabs', () => {
+  const ctx = loadContext();
+  for (const view of ['changes', 'history', 'worktrees']) {
+    const html = ctx.gitWorkspaceNavHtml(view);
+    assert.ok(html.indexOf('git-workspace-repository-row') < html.indexOf('git-workspace-view-row'));
+    assert.match(html, new RegExp('data-git-view="' + view + '"[^>]*aria-selected="true"'));
+    assert.equal((html.match(/id="git-workspace-repository"/g) || []).length, 1);
+  }
+});
+
+test('the shared repository picker keeps project folder order and dispatches the original repository', () => {
+  const ctx = loadContext();
+  ctx.escapeAttr = value => String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  let buttons;
+  const slot = {
+    innerHTML: '',
+    querySelectorAll: () => (buttons = [0, 1].map(i => ({ dataset: { repoIndex: String(i) } }))),
+  };
+  const host = { isConnected: true, closest: () => ({ querySelector: () => slot }) };
+  let selected = null;
+  ctx.updateGitWorkspaceRepositories({ id: 'p', folders: [{ path: '/sample' }, { path: '/api' }] }, host,
+    [{ path: '/api', name: 'api-service' }, { path: '/sample', name: 'sample-repo' }], '/api', index => { selected = index; });
+  assert.ok(slot.innerHTML.indexOf('sample-repo') < slot.innerHTML.indexOf('api-service'));
+  assert.match(slot.innerHTML, /aria-pressed="true"[^>]*title="\/api"/);
+  buttons[0].onclick();
+  assert.equal(selected, 1);
+  selected = null;
+  buttons[1].onclick();
+  assert.equal(selected, null, 'the already-selected repository does not reload');
+});
+
+test('detached view responses cannot repaint the active Git repository selector', () => {
+  const ctx = loadContext();
+  const slot = { innerHTML: 'current', querySelectorAll: () => [] };
+  const host = { isConnected: false, closest: () => ({ querySelector: () => slot }) };
+  ctx.updateGitWorkspaceRepositories({ id: 'p' }, host, [], null, () => {});
+  assert.equal(slot.innerHTML, 'current');
+});

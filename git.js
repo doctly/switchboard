@@ -3,13 +3,21 @@
 // Every call goes through execFile with an argv array and no shell, so a path
 // or branch name can never be read as shell syntax. Errors carry git's stderr
 // as their message. Nothing here is used unless a project attaches a folder
-// "on a branch".
+// "on a branch", opens the Git tab, or manages worktrees in the Worktrees tab.
 
 const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
 const MAX_BUFFER = 4 * 1024 * 1024;
+
+// Every git call: never hang on a credential prompt, never take the index
+// lock just to refresh stat data (a status here must not collide with the
+// user's own git add), and messages in English, since some errors are
+// recognised by their text.
+function gitEnv() {
+  return { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' };
+}
 const MAX_DIFF_LENGTH = 256 * 1024;
 const MAX_UNTRACKED_STAT_BYTES = 2 * 1024 * 1024;
 
@@ -18,8 +26,7 @@ function run(args, cwd) {
     execFile('git', args, {
       cwd,
       maxBuffer: MAX_BUFFER,
-      // Never hang on a credential prompt; a worktree add has no reason to ask.
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      env: gitEnv(),
     }, (err, stdout, stderr) => {
       if (err) {
         const error = new Error(String(stderr || err.message).trim() || `git ${args[0]} failed`);
@@ -39,7 +46,7 @@ function runRaw(args, cwd, { allowExitCodes = [] } = {}) {
     execFile('git', args, {
       cwd,
       maxBuffer: MAX_BUFFER,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      env: gitEnv(),
     }, (err, stdout, stderr) => {
       if (!err || allowExitCodes.includes(err.code)) {
         resolve(String(stdout));
@@ -50,6 +57,26 @@ function runRaw(args, cwd, { allowExitCodes = [] } = {}) {
       error.stderr = String(stderr || '');
       error.stdout = String(stdout || '');
       reject(error);
+    });
+  });
+}
+
+/** Run git and keep both streams: a few commands report on stderr even when they succeed. */
+function runCapture(args, cwd) {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, {
+      cwd,
+      maxBuffer: MAX_BUFFER,
+      env: gitEnv(),
+    }, (err, stdout, stderr) => {
+      if (err) {
+        const error = new Error(String(stderr || err.message).trim() || `git ${args[0]} failed`);
+        error.code = err.code;
+        error.stderr = String(stderr || '');
+        reject(error);
+        return;
+      }
+      resolve({ stdout: String(stdout), stderr: String(stderr) });
     });
   });
 }
@@ -80,27 +107,233 @@ async function branchExists(repo, name) {
   }
 }
 
-/** Check the branch out at targetPath, creating the branch from HEAD if needed. */
-async function worktreeAdd(repo, targetPath, branch) {
-  if (await branchExists(repo, branch)) {
-    await run(['worktree', 'add', targetPath, branch], repo);
-  } else {
-    await run(['worktree', 'add', '-b', branch, targetPath], repo);
+/**
+ * Check the branch out at targetPath, creating the branch from HEAD if needed.
+ *
+ * Options, all optional, for the Worktrees tab:
+ * - startPoint: the commit a new branch (or a detached checkout) starts from;
+ * - createBranch: true or false to skip the "does the branch exist" check;
+ * - track: the new branch tracks startPoint (a remote branch). Without it a new
+ *   branch made from a start point does not track it, so a feature branch cut
+ *   from origin/main does not push to main;
+ * - detach: check startPoint out with no branch at all.
+ */
+async function worktreeAdd(repo, targetPath, branch, options = {}) {
+  const { startPoint = '', createBranch, track = false, detach = false } = options;
+  refuseOptionLike(startPoint, 'Start point');
+  if (detach) {
+    await run(['worktree', 'add', '--detach', targetPath, startPoint || 'HEAD'], repo);
+    return;
   }
+  refuseOptionLike(branch, 'Branch');
+  const create = typeof createBranch === 'boolean' ? createBranch : !(await branchExists(repo, branch));
+  if (!create) {
+    await run(['worktree', 'add', targetPath, branch], repo);
+    return;
+  }
+  const args = ['worktree', 'add'];
+  if (track) args.push('--track');
+  else if (startPoint) args.push('--no-track');
+  args.push('-b', branch, targetPath);
+  if (startPoint) args.push(startPoint);
+  await run(args, repo);
 }
 
-/** Remove a worktree. Refuses a dirty one unless force; the branch always stays. */
-async function worktreeRemove(repo, targetPath, { force = false } = {}) {
+// A value that git would read as an option instead of a name.
+function refuseOptionLike(value, label) {
+  if (typeof value === 'string' && value.startsWith('-')) throw new Error(`${label} cannot start with "-"`);
+}
+
+/**
+ * Remove a worktree. Refuses a dirty one unless force; the branch always stays.
+ * prune: false keeps the records of other worktrees whose folder is missing
+ * (moved by hand, on a drive that is not mounted) instead of dropping them too.
+ */
+async function worktreeRemove(repo, targetPath, { force = false, prune = true } = {}) {
   const args = ['worktree', 'remove'];
   if (force) args.push('--force');
   args.push(targetPath);
   await run(args, repo);
-  try { await run(['worktree', 'prune'], repo); } catch {}
+  if (prune) try { await run(['worktree', 'prune'], repo); } catch {}
 }
 
 /** True when git refused to remove a worktree because it has local changes. */
 function isDirtyWorktreeError(err) {
   return /modified or untracked|use --force|uncommitted|contains modified/i.test(String(err?.message || ''));
+}
+
+/**
+ * Parse `git worktree list --porcelain -z`: one record per worktree, the
+ * fields NUL-terminated and the records separated by an empty field. The first
+ * record is always the main worktree (or the bare repository).
+ */
+function parseWorktreeList(output) {
+  const worktrees = [];
+  let current = null;
+  for (const field of String(output || '').split('\0')) {
+    if (!field) {
+      if (current) worktrees.push(current);
+      current = null;
+      continue;
+    }
+    const space = field.indexOf(' ');
+    const key = space === -1 ? field : field.slice(0, space);
+    const value = space === -1 ? '' : field.slice(space + 1);
+    if (key === 'worktree') {
+      if (current) worktrees.push(current);
+      current = {
+        path: value, head: '', branch: '', detached: false, bare: false,
+        locked: false, lockReason: '', prunable: false, prunableReason: '',
+      };
+      continue;
+    }
+    if (!current) continue;
+    if (key === 'HEAD') current.head = value;
+    else if (key === 'branch') current.branch = value.replace(/^refs\/heads\//, '');
+    else if (key === 'detached') current.detached = true;
+    else if (key === 'bare') current.bare = true;
+    else if (key === 'locked') { current.locked = true; current.lockReason = value; }
+    else if (key === 'prunable') { current.prunable = true; current.prunableReason = value; }
+  }
+  if (current) worktrees.push(current);
+  worktrees.forEach((worktree, index) => { worktree.isMain = index === 0; });
+  return worktrees;
+}
+
+/** Every worktree of the repository that contains dir, main worktree first. */
+async function worktreeList(dir) {
+  let output;
+  try {
+    output = await runRaw(['worktree', 'list', '--porcelain', '-z'], dir);
+  } catch (err) {
+    // -z arrived in git 2.36; older versions answer with their usage text.
+    if (/unknown switch|usage: git worktree/i.test(err.message)) {
+      throw new Error('Listing worktrees needs git 2.36 or newer');
+    }
+    throw err;
+  }
+  return parseWorktreeList(output).map(worktree => ({ ...worktree, path: path.resolve(worktree.path) }));
+}
+
+async function worktreeLock(repo, targetPath, reason = '') {
+  const args = ['worktree', 'lock'];
+  if (reason) args.push('--reason', String(reason));
+  args.push(targetPath);
+  await run(args, repo);
+}
+
+async function worktreeUnlock(repo, targetPath) {
+  await run(['worktree', 'unlock', targetPath], repo);
+}
+
+/** Move a worktree. Git refuses a locked one and the main worktree. */
+async function worktreeMove(repo, fromPath, toPath, { force = false } = {}) {
+  const args = ['worktree', 'move'];
+  if (force) args.push('--force');
+  args.push(fromPath, toPath);
+  await run(args, repo);
+}
+
+/**
+ * Drop the records of worktrees whose folder is gone. With dryRun nothing
+ * changes. Returns what git reported: [{ name, reason }], where name is the
+ * worktree's entry under .git/worktrees. Git writes that report to stderr.
+ */
+async function worktreePrune(repo, { dryRun = false } = {}) {
+  const args = ['worktree', 'prune', '--verbose'];
+  if (dryRun) args.push('--dry-run');
+  const { stderr } = await runCapture(args, repo);
+  return stderr.split('\n').map(line => line.match(/^Removing worktrees\/(.+?): (.*)$/))
+    .filter(Boolean)
+    .map(match => ({ name: match[1], reason: match[2].trim() }));
+}
+
+/** Fix the links between the repository and its worktrees, e.g. after a manual move. */
+async function worktreeRepair(repo, paths = []) {
+  const { stdout, stderr } = await runCapture(['worktree', 'repair', ...paths], repo);
+  return [stdout, stderr].map(text => text.trim()).filter(Boolean).join('\n');
+}
+
+/** Delete a local branch. Without force git refuses one that is not merged. */
+async function deleteBranch(repo, name, { force = false } = {}) {
+  refuseOptionLike(name, 'Branch');
+  await run(['branch', force ? '-D' : '-d', name], repo);
+}
+
+/** True when git refused to delete a branch because it is not merged. */
+function isUnmergedBranchError(err) {
+  return /not fully merged/i.test(String(err?.message || ''));
+}
+
+/** True when git accepts name as a new branch name. */
+async function isValidBranchName(repo, name) {
+  if (typeof name !== 'string' || !name || name.startsWith('-')) return false;
+  try {
+    await run(['check-ref-format', '--branch', name], repo);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Local and remote-tracking branches, for picking what a new worktree checks
+ * out or starts from: { local: [{ name, head, upstream }], remote: [{ name, remote, head }] }.
+ */
+async function listBranches(repo) {
+  const [output, remoteNames] = await Promise.all([
+    runRaw([
+      'for-each-ref', '--format=%(refname)%00%(objectname:short)%00%(upstream:short)%00%(symref)',
+      'refs/heads', 'refs/remotes',
+    ], repo),
+    runOr(['remote'], repo, ''),
+  ]);
+  // A remote's name can hold a slash (team/fork), so match the longest one.
+  const remotes = remoteNames.split('\n').map(name => name.trim()).filter(Boolean).sort((a, b) => b.length - a.length);
+  const local = [];
+  const remote = [];
+  for (const line of output.split('\n')) {
+    if (!line) continue;
+    const [ref, head, upstream, symref] = line.split('\0');
+    if (symref) continue; // origin/HEAD only points at another branch
+    if (ref.startsWith('refs/heads/')) local.push({ name: ref.slice('refs/heads/'.length), head, upstream: upstream || '' });
+    else if (ref.startsWith('refs/remotes/')) {
+      const name = ref.slice('refs/remotes/'.length);
+      remote.push({ name, remote: remotes.find(r => name.startsWith(r + '/')) || name.split('/')[0], head });
+    }
+  }
+  return { local, remote };
+}
+
+/** Local branches whose tip is already contained in base. */
+async function mergedBranches(repo, base) {
+  refuseOptionLike(base, 'Base branch');
+  const output = await run(['for-each-ref', '--format=%(refname:short)', '--merged', base, 'refs/heads'], repo);
+  return output ? output.split('\n').filter(Boolean) : [];
+}
+
+/** The branch work is merged into: origin's default branch, else main or master. */
+async function defaultBranch(repo) {
+  try {
+    const remoteHead = await run(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], repo);
+    if (remoteHead) return remoteHead;
+  } catch {}
+  for (const name of ['main', 'master']) {
+    if (await branchExists(repo, name)) return name;
+  }
+  return '';
+}
+
+/** { hash, time (ms), subject } of the commit checked out in dir, or null. */
+async function lastCommit(dir) {
+  try {
+    const out = await run(['log', '-1', '--format=%H%x00%ct%x00%s'], dir);
+    if (!out) return null;
+    const [hash, seconds, subject] = out.split('\0');
+    return { hash, time: Number(seconds) * 1000, subject: subject || '' };
+  } catch {
+    return null;
+  }
 }
 
 /** The repository's shared .git directory, absolute, from any of its worktrees. */
@@ -437,6 +670,8 @@ async function blobAtRevision(dir, rev, relPath) {
 
 module.exports = {
   run, version, isGitRepo, repoRoot, branchExists,
+  parseWorktreeList, worktreeList, worktreeLock, worktreeUnlock, worktreeMove, worktreePrune, worktreeRepair,
+  deleteBranch, isUnmergedBranchError, isValidBranchName, listBranches, mergedBranches, defaultBranch, lastCommit,
   worktreeAdd, worktreeRemove, isDirtyWorktreeError, gitCommonDir, status,
   parsePorcelain, snapshot, fileDiff,
   toGitPath, safeRelativePath,

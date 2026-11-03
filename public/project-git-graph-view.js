@@ -369,6 +369,7 @@ function gitGraphPaint(project, state, body, opts = {}) {
 
   const repos = state.repositories || [];
   if (!repos.length) {
+    gitGraphWireRepoPicker(project, state, body);
     body.innerHTML = '<div class="gg-empty-state"><div class="gg-empty-title">No folders attached</div><div>Attach a repository to this project to see its history here.</div></div>';
     return;
   }
@@ -376,27 +377,27 @@ function gitGraphPaint(project, state, body, opts = {}) {
   state.selectedRepo = repo.path;
 
   if (repo.git === false) {
-    body.innerHTML = `<div class="gg-tab-shell">${gitGraphRepoPickerHtml(repos, repo)}<div class="gg-empty-state"><div class="gg-empty-title">Not a Git repository</div><div>${escapeHtml(repo.path)}</div></div></div>`;
+    body.innerHTML = `<div class="gg-tab-shell"><div class="gg-empty-state"><div class="gg-empty-title">Not a Git repository</div><div>${escapeHtml(repo.path)}</div></div></div>`;
     gitGraphWireRepoPicker(project, state, body);
     return;
   }
 
   if (state.error) {
-    body.innerHTML = `<div class="gg-tab-shell">${gitGraphRepoPickerHtml(repos, repo)}<div class="gg-error-state"><div class="gg-empty-title">History could not load this repository</div><div>${escapeHtml(state.error)}</div><button type="button" class="ws-btn" id="gg-retry">Retry</button></div></div>`;
+    body.innerHTML = `<div class="gg-tab-shell"><div class="gg-error-state"><div class="gg-empty-title">History could not load this repository</div><div>${escapeHtml(state.error)}</div><button type="button" class="ws-btn" id="gg-retry">Retry</button></div></div>`;
     body.querySelector('#gg-retry').onclick = () => gitGraphLoadGraph(project, state, body, { reset: true });
     gitGraphWireRepoPicker(project, state, body);
     return;
   }
 
   if (state.loading && !state.rows.length) {
-    body.innerHTML = `<div class="gg-tab-shell">${gitGraphRepoPickerHtml(repos, repo)}<div class="gg-loading"><span class="gg-loading-dot"></span>Loading commits…</div></div>`;
+    body.innerHTML = `<div class="gg-tab-shell"><div class="gg-loading"><span class="gg-loading-dot"></span>Loading commits…</div></div>`;
     gitGraphWireRepoPicker(project, state, body);
     return;
   }
 
   body.innerHTML = `
     <div class="gg-tab-shell">
-      ${gitGraphRepoPickerHtml(repos, repo)}
+
       ${gitGraphControlBarHtml(state)}
       ${gitGraphFindWidgetHtml(state)}
       <div class="gg-table-wrap">
@@ -425,22 +426,15 @@ function gitGraphPaint(project, state, body, opts = {}) {
   }
 }
 
-function gitGraphRepoPickerHtml(repos, active) {
-  if (repos.length <= 1) return '';
-  return `<div class="gg-repo-picker" role="tablist" aria-label="Repositories">${repos.map((r, i) => `<button type="button" class="gg-repo-option ${r.path === active.path ? 'active' : ''}" data-index="${i}" title="${escapeAttr(r.path)}">${escapeHtml(pathBasename(r.path) || r.path)}</button>`).join('')}</div>`;
-}
-
 function gitGraphWireRepoPicker(project, state, body) {
-  body.querySelectorAll('.gg-repo-option').forEach((btn) => {
-    const repo = (state.repositories || [])[Number(btn.dataset.index)];
-    if (!repo) return;
-    btn.onclick = () => {
-      state.selectedRepo = repo.path;
-      state.selectedHash = null;
-      state.detailsData = null;
-      gitGraphSaveUiPrefs(project.id, state);
-      gitGraphLoadGraph(project, state, body, { reset: true });
-    };
+  if (typeof updateGitWorkspaceRepositories !== 'function') return;
+  updateGitWorkspaceRepositories(project, body, state.repositories || [], state.selectedRepo, index => {
+    const repo = state.repositories[index];
+    state.selectedRepo = repo.path;
+    state.selectedHash = null;
+    state.detailsData = null;
+    gitGraphSaveUiPrefs(project.id, state);
+    gitGraphLoadGraph(project, state, body, { reset: true });
   });
 }
 
