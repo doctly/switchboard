@@ -168,6 +168,8 @@ function gitGraphRenderGraphSvg(rows, laneAssignments, opts = {}) {
   const rowY = Array.isArray(opts.rowY) && opts.rowY.length === rows.length ? opts.rowY : null;
   const yOf = i => (rowY ? rowY[i] : rowHeight / 2 + i * rowHeight);
   const height = rowY && opts.height ? opts.height : rows.length * rowHeight;
+  // A table row's own height: measured rows are taller than rowHeight.
+  const bendHeight = opts.bendHeight || rowHeight;
   const paths = [];
   const nodes = [];
 
@@ -182,15 +184,18 @@ function gitGraphRenderGraphSvg(rows, laneAssignments, opts = {}) {
       // An edge bends into its own lane on the first row, runs straight down,
       // and only bends again on the last row if its parent sits in another lane.
       // A parent that isn't loaded yet keeps the lane running off the bottom.
+      // Across an inline Commit Details panel a bend still takes one row's
+      // height, as everywhere else, and the line runs straight beside the panel.
       const via = laneWidth / 2 + (edge.viaLane != null ? edge.viaLane : edge.toLane) * laneWidth;
       const targetRow = byHash.get(edge.parentHash);
       const loaded = targetRow !== undefined;
       const tx = loaded ? laneWidth / 2 + edge.toLane * laneWidth : via;
       const ty = loaded ? yOf(targetRow) : height + rowHeight / 2;
       const endRow = loaded ? targetRow : rows.length;
-      const route = endRow - i > 1
-        ? { via, top: yOf(i + 1), bottom: loaded ? yOf(targetRow - 1) : height }
-        : null;
+      const span = endRow - i;
+      const top = Math.min(span > 1 ? yOf(i + 1) : ty, cy + bendHeight);
+      const bottom = loaded ? Math.max(top, span > 1 ? yOf(targetRow - 1) : top, ty - bendHeight) : height;
+      const route = span > 1 || ty - cy > bendHeight * 1.5 ? { via, top, bottom } : null;
       paths.push(gitGraphEdgePath(cx, cy, tx, ty, color, style, route));
     }
 

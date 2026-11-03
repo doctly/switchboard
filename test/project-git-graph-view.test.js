@@ -786,3 +786,120 @@ test('gitGraphEnsureWatcherBound binds once and repaints into the current Git Hi
     delete require.cache[modulePath];
   }
 });
+
+// === Inline Commit Details open under the clicked row and stay in view ===
+
+function inlineDetailsState(id) {
+  const state = view.gitGraphState(id);
+  state.repositories = [{ path: '/repo', git: true }];
+  state.selectedRepo = '/repo';
+  state.rows = [
+    { hash: 'c3', kind: 'commit', parents: ['c2'], subject: 'third' },
+    { hash: 'c2', kind: 'commit', parents: ['c1'], subject: 'second' },
+    { hash: 'c1', kind: 'commit', parents: [], subject: 'first' },
+  ];
+  state.layout = state.rows.map(() => ({ lane: 0, colorIndex: 0, edges: [] }));
+  return state;
+}
+
+/** Index of each row and of the inline panel in the rows markup. */
+function inlineOrder(html) {
+  return [...html.matchAll(/data-gg-hash="(c\d)" data-row-index|id="gg-details-inline"/g)].map(m => m[1] || 'details');
+}
+
+test('the inline Commit Details sit right under the clicked row, not after the last loaded one', () => {
+  const state = inlineDetailsState('proj-inline-1');
+  state.selectedHash = 'c2';
+  state.detailsData = { mode: 'single', hash: 'c2', kind: 'commit', commit: null, files: [] };
+  assert.deepEqual(inlineOrder(view.gitGraphRowsHtml(state)), ['c3', 'c2', 'details', 'c1']);
+});
+
+test('a comparison opens under the row clicked first, and a commit no longer loaded still shows its details at the end', () => {
+  const state = inlineDetailsState('proj-inline-2');
+  state.selectedHash = 'c3';
+  state.compareHash = 'c1';
+  state.detailsData = { mode: 'compare', fromHash: 'c1', toHash: 'c3', files: [] };
+  assert.deepEqual(inlineOrder(view.gitGraphRowsHtml(state)), ['c3', 'details', 'c2', 'c1']);
+
+  state.selectedHash = 'gone';
+  state.detailsData = { mode: 'single', hash: 'gone', kind: 'commit', commit: null, files: [] };
+  assert.deepEqual(inlineOrder(view.gitGraphRowsHtml(state)), ['c3', 'c2', 'c1', 'details']);
+});
+
+test('opening, loading and closing the inline details never jumps the table back to the top', async () => {
+  const state = inlineDetailsState('proj-inline-3');
+  const project = { id: 'proj-inline-3' };
+  const body = fakeScrollBody();
+  global.window = { api: { getGitGraphCommitDetail: () => Promise.resolve({ ok: true, commit: { hash: 'c2', parents: ['c1'] }, files: [] }) } };
+  body.querySelector('.gg-table-wrap').scrollTop = 400;
+
+  view.gitGraphOpenDetails(project, state, body, state.rows[1]);
+  assert.equal(body.querySelector('.gg-table-wrap').scrollTop, 400, 'the loading paint keeps the scroll position');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(state.detailsLoading, false);
+  assert.equal(body.querySelector('.gg-table-wrap').scrollTop, 400, 'the loaded paint keeps the scroll position');
+
+  view.gitGraphCloseDetails(project, state, body);
+  assert.equal(body.querySelector('.gg-table-wrap').scrollTop, 400, 'closing keeps the scroll position');
+});
+
+/** A wrap/row/panel trio with fixed geometry, in the wrap's own coordinates. */
+function centeringFixture({ scrollTop, clientHeight, headHeight, rowTop, rowHeight, panelHeight }) {
+  const wrap = {
+    scrollTop, clientHeight,
+    getBoundingClientRect: () => ({ top: 100 }),
+    querySelector: (sel) => (sel === '.gg-thead' ? { offsetHeight: headHeight } : null),
+  };
+  const at = (top, height) => () => ({ top: 100 + top - wrap.scrollTop, bottom: 100 + top + height - wrap.scrollTop });
+  const row = { classList: { contains: (c) => c === 'gg-row' }, getBoundingClientRect: at(rowTop, rowHeight) };
+  const panel = {
+    previousElementSibling: row,
+    closest: (sel) => (sel === '.gg-table-wrap' ? wrap : null),
+    getBoundingClientRect: at(rowTop + rowHeight, panelHeight),
+  };
+  return { wrap, panel };
+}
+
+test('auto-center waits for the loaded details, then centers the row and its panel inside the table only', () => {
+  const state = inlineDetailsState('proj-inline-4');
+  const { wrap, panel } = centeringFixture({ scrollTop: 0, clientHeight: 600, headHeight: 30, rowTop: 1000, rowHeight: 24, panelHeight: 200 });
+  state.detailsJustOpened = true;
+  state.detailsLoading = true;
+  view.gitGraphMaybeAutoCenterDetails(state, panel);
+  assert.equal(wrap.scrollTop, 0, 'a "Loading…" placeholder is not worth scrolling to');
+  assert.equal(state.detailsJustOpened, true);
+
+  state.detailsLoading = false;
+  view.gitGraphMaybeAutoCenterDetails(state, panel);
+  // 570px visible under the 30px header, a 224px block: (570 - 224) / 2 = 173 above it.
+  assert.equal(wrap.scrollTop, 1000 - 30 - 173);
+  assert.equal(state.detailsJustOpened, false, 'only once per open');
+
+  const before = wrap.scrollTop;
+  view.gitGraphMaybeAutoCenterDetails(state, panel);
+  assert.equal(wrap.scrollTop, before, 'a later repaint of the same open panel leaves the scroll alone');
+});
+
+test('a panel taller than the table puts its row at the top of the table', () => {
+  const { wrap, panel } = centeringFixture({ scrollTop: 0, clientHeight: 600, headHeight: 30, rowTop: 1000, rowHeight: 24, panelHeight: 900 });
+  const state = inlineDetailsState('proj-inline-5');
+  state.detailsJustOpened = true;
+  view.gitGraphMaybeAutoCenterDetails(state, panel);
+  assert.equal(wrap.scrollTop, 1000 - 30);
+});
+
+test('beside an inline panel a lane change still bends within one row, then the line runs straight', () => {
+  const rows = [{ hash: 'child', kind: 'commit', parents: ['parent'] }, { hash: 'parent', kind: 'commit', parents: [] }];
+  const layout = [
+    { lane: 1, colorIndex: 0, edges: [{ parentHash: 'parent', toLane: 0, viaLane: 1, style: 'same-lane' }] },
+    { lane: 0, colorIndex: 0, edges: [] },
+  ];
+  const pathOf = (svg) => /<path d="([^"]+)"/.exec(svg)[1];
+  // Rows 30px tall, side by side: one curve across the row gap, as always.
+  assert.doesNotMatch(pathOf(render.gitGraphRenderGraphSvg(rows, layout, { rowY: [15, 45], height: 60, bendHeight: 30 })), / L/);
+
+  // A 200px panel under the child: straight down its own lane, then one row's bend.
+  const d = pathOf(render.gitGraphRenderGraphSvg(rows, layout, { rowY: [15, 245], height: 260, bendHeight: 30 }));
+  const lane = (n) => render.GG_LANE_WIDTH / 2 + n * render.GG_LANE_WIDTH;
+  assert.equal(d, `M${lane(1)} 15 L${lane(1)} 45 L${lane(1)} 215 C${lane(1)} 230, ${lane(0)} 230, ${lane(0)} 245`);
+});

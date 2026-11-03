@@ -411,17 +411,17 @@ function gitGraphPaint(project, state, body, opts = {}) {
   gitGraphWireFindWidget(project, state, body);
   gitGraphWireHeader(project, state, body);
   gitGraphWireRows(project, state, body);
+  // Before the details: bringing a just-opened panel into view starts from here.
+  if (prevScrollTop != null) {
+    const newWrap = body.querySelector('.gg-table-wrap');
+    if (newWrap) newWrap.scrollTop = prevScrollTop;
+  }
   if (state.detailsData) {
     // The inline details markup already came back inside #gg-tbody's own
     // innerHTML (gitGraphRowsHtml/gitGraphInlineDetailsHtml), so only the
     // event wiring — not a second render — is needed here.
     const inline = body.querySelector('#gg-details-inline');
     if (inline) { gitGraphWireDetailsPanel(project, state, body, inline); gitGraphMaybeAutoCenterDetails(state, inline); }
-  }
-
-  if (prevScrollTop != null) {
-    const newWrap = body.querySelector('.gg-table-wrap');
-    if (newWrap) newWrap.scrollTop = prevScrollTop;
   }
 }
 
@@ -642,11 +642,22 @@ function gitGraphWireHeader(project, state, body) {
 
 // --- Rows ---
 
+/** The inline Commit Details open right under the row they belong to: the
+ * commit's own row, or for a comparison the row clicked first. Only when that
+ * row is no longer loaded do they fall to the end of the list. */
 function gitGraphRowsHtml(state) {
   if (!state.rows.length) return '<div class="gg-empty-row">No commits yet.</div>';
   const showCols = { date: state.columns.date, author: state.columns.author, commit: state.columns.commit };
-  return state.rows.map((row, index) => gitGraphRowHtml(row, state, showCols, index)).join('') +
-    (state.detailsData ? gitGraphInlineDetailsHtml(state) : '');
+  const data = state.detailsData;
+  const anchor = data ? (data.mode === 'compare' ? state.selectedHash : data.hash) : null;
+  let placed = false;
+  const html = state.rows.map((row, index) => {
+    const rowHtml = gitGraphRowHtml(row, state, showCols, index);
+    if (!data || placed || row.hash !== anchor) return rowHtml;
+    placed = true;
+    return rowHtml + gitGraphInlineDetailsHtml(state);
+  }).join('');
+  return html + (data && !placed ? gitGraphInlineDetailsHtml(state) : '');
 }
 
 function gitGraphRowHtml(row, state, showCols, index) {
@@ -682,13 +693,15 @@ function gitGraphWireRows(project, state, body) {
     // (every row repeating every other row's paths/circles) was O(rows²)
     // DOM nodes; this is O(rows).
     const rowY = [];
+    let rowHeight = 0;
     tbody.querySelectorAll('.gg-row[data-row-index]').forEach((el) => {
       rowY[Number(el.dataset.rowIndex)] = el.offsetTop + el.offsetHeight / 2;
+      rowHeight = rowHeight || el.offsetHeight;
     });
     const measured = rowY.length === state.rows.length && rowY.some(y => y > 0);
     const svg = gitGraphRenderGraphSvg(state.rows, state.layout, {
       style: state.graphStyle, uncommittedChangesStyle: state.uncommittedChangesStyle,
-      rowY: measured ? rowY : null, height: measured ? tbody.scrollHeight : null,
+      rowY: measured ? rowY : null, height: measured ? tbody.scrollHeight : null, bendHeight: measured ? rowHeight : null,
     });
     const clip = document.createElement('div');
     clip.className = 'gg-graph-clip'; // decorative only — clicks/right-clicks fall through to the row underneath
@@ -796,7 +809,7 @@ function gitGraphOpenDetails(project, state, body, row) {
   state.detailsLoading = true;
   state.detailsData = { mode: 'single', hash: row.hash, kind: row.kind };
   state.detailsJustOpened = true;
-  gitGraphPaint(project, state, body);
+  gitGraphPaintDetails(project, state, body);
   const fetch = row.kind === 'uncommitted'
     ? gitGraphApi('getGitGraphCompareDetail', project.id, repo.path, state.headHash, null)
     : gitGraphApi('getGitGraphCommitDetail', project.id, repo.path, row.hash);
@@ -808,7 +821,7 @@ function gitGraphOpenDetails(project, state, body, row) {
     } else {
       state.detailsData = { mode: 'single', hash: row.hash, kind: row.kind, error: (result && result.error) || 'Could not load commit details.' };
     }
-    gitGraphPaint(project, state, body);
+    gitGraphPaintDetails(project, state, body);
   });
 }
 
@@ -818,7 +831,7 @@ function gitGraphOpenComparison(project, state, body, fromHash, toHash) {
   state.detailsLoading = true;
   state.detailsData = { mode: 'compare', fromHash, toHash };
   state.detailsJustOpened = true;
-  gitGraphPaint(project, state, body);
+  gitGraphPaintDetails(project, state, body);
   const toArg = toHash === '#uncommitted' ? null : toHash;
   gitGraphApi('getGitGraphCompareDetail', project.id, repo.path, fromHash === '#uncommitted' ? toHash : fromHash, fromHash === '#uncommitted' ? null : toArg)
     .then((result) => {
@@ -826,8 +839,15 @@ function gitGraphOpenComparison(project, state, body, fromHash, toHash) {
       state.detailsLoading = false;
       if (result && result.ok) state.detailsData = { mode: 'compare', fromHash, toHash, files: result.files || [] };
       else state.detailsData = { mode: 'compare', fromHash, toHash, error: (result && result.error) || 'Could not load comparison.' };
-      gitGraphPaint(project, state, body);
+      gitGraphPaintDetails(project, state, body);
     });
+}
+
+/** The panel sits among the rows, so painting it repaints the table: that
+ * keeps the graph's lines measured around it, and the scroll position where it
+ * was (a fresh table starts at the top). */
+function gitGraphPaintDetails(project, state, body) {
+  gitGraphPaint(project, state, body, { preserveScroll: true });
 }
 
 function gitGraphInlineDetailsHtml(state) {
@@ -835,24 +855,32 @@ function gitGraphInlineDetailsHtml(state) {
 }
 
 function gitGraphRenderDetailsPanel(project, state, body) {
-  const container = body.querySelector('#gg-details-inline');
-  if (!container) return;
-  container.innerHTML = gitGraphDetailsBodyHtml(state);
-  gitGraphWireDetailsPanel(project, state, body, container);
+  // A new height (Tree/List, a folder folded) moves every row below the panel.
+  gitGraphPaintDetails(project, state, body);
 }
 
-/** Scrolls the panel into view exactly once per open — the moment it opens,
- * not on every subsequent repaint of an already-open panel.
- * `state.detailsJustOpened` is set by gitGraphOpenDetails/OpenComparison and
- * cleared the first time this runs *with the real content loaded*. The
- * request's first paint (still `detailsLoading`) shows only the tiny
- * "Loading…" placeholder, so centering on it would land short of where the
- * eventual, much taller panel actually ends up — wait for the repaint that
- * carries the real commit/diff content before centering and clearing it. */
+/** Brings the panel into view exactly once per open, not on every later
+ * repaint of an already-open panel: `state.detailsJustOpened` is set by
+ * gitGraphOpenDetails/OpenComparison and cleared the first time this runs
+ * *with the real content loaded*. The request's first paint (still
+ * `detailsLoading`) shows only the tiny "Loading…" placeholder, so centering
+ * on it would land short of where the eventual, much taller panel ends up.
+ * The clicked row and its panel are centered in the table, or the row goes to
+ * the top if they are taller than the table. Only the table scrolls, never
+ * the tab around it. */
 function gitGraphMaybeAutoCenterDetails(state, container) {
   if (!state.detailsJustOpened || state.detailsLoading) return;
   state.detailsJustOpened = false;
-  if (container && typeof container.scrollIntoView === 'function') container.scrollIntoView({ block: 'center' });
+  const wrap = container && typeof container.closest === 'function' ? container.closest('.gg-table-wrap') : null;
+  if (!wrap) return;
+  const head = wrap.querySelector('.gg-thead');
+  const headHeight = head ? head.offsetHeight : 0;
+  const origin = wrap.getBoundingClientRect().top - wrap.scrollTop;
+  const row = container.previousElementSibling;
+  const top = (row && row.classList && row.classList.contains('gg-row') ? row : container).getBoundingClientRect().top - origin;
+  const bottom = container.getBoundingClientRect().bottom - origin;
+  const room = wrap.clientHeight - headHeight - (bottom - top);
+  wrap.scrollTop = Math.max(0, top - headHeight - Math.max(0, room / 2));
 }
 
 function gitGraphDetailsBodyHtml(state) {
@@ -981,7 +1009,7 @@ function gitGraphCloseDetails(project, state, body) {
   state.detailsData = null;
   state.selectedHash = null;
   state.compareHash = null;
-  gitGraphPaint(project, state, body);
+  gitGraphPaintDetails(project, state, body);
 }
 
 function gitGraphOpenFileDiff(project, state, body, repo, filePath, opts = {}) {
@@ -1236,7 +1264,7 @@ if (typeof module !== 'undefined' && module.exports) {
     gitGraphLoadGraph, gitGraphLoadRepositories, gitGraphPaint, gitGraphApi, renderProjectGitGraphTab,
     gitGraphSingleCommitHeaderHtml, gitGraphLinkifyBody, gitGraphFileRowHtml, gitGraphFileListHtml,
     gitGraphOpenDetails, gitGraphOpenComparison, gitGraphCloseDetails,
-    gitGraphMaybeAutoCenterDetails, gitGraphIsAncestor, gitGraphHandleRowClick, gitGraphBindKeyboard,
+    gitGraphMaybeAutoCenterDetails, gitGraphRowsHtml, gitGraphIsAncestor, gitGraphHandleRowClick, gitGraphBindKeyboard,
     gitGraphSameBranchNeighbor, gitGraphAlternateBranchNeighbor, gitGraphMoveDetailsFocus,
     gitGraphSameStringSet, gitGraphRepoList, gitGraphEnsureWatcherBound,
   };
