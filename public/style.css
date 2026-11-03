@@ -10,11 +10,14 @@ html, body {
 
 body { display: flex; flex-direction: column; }
 
+/* The app shell never scrolls. With overflow: hidden it still could, from a
+   focus() or scrollIntoView() inside it, and then the whole window slid up
+   under the title bar. */
 #app-container {
   display: flex;
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  overflow: clip;
 }
 
 /* ========== UPDATE TOAST ========== */
@@ -170,6 +173,8 @@ body { display: flex; flex-direction: column; }
 }
 
 /* ========== SIDEBAR ========== */
+/* The sidebar and its handle take the app container's height, not 100vh: the
+   status bar sits below the container, and 100vh ran 22px past it. */
 #sidebar {
   width: 340px;
   min-width: 200px;
@@ -177,7 +182,7 @@ body { display: flex; flex-direction: column; }
   background: #18181f;
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  min-height: 0;
   border-right: none;
   flex-shrink: 0;
 }
@@ -186,7 +191,6 @@ body { display: flex; flex-direction: column; }
   width: 4px;
   cursor: col-resize;
   background: transparent;
-  height: 100vh;
   flex-shrink: 0;
   position: relative;
   z-index: 10;
