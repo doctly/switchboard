@@ -3269,6 +3269,7 @@ function sessionMenuItems(session) {
     session.type !== 'terminal' ? { label: 'View messages', icon: PICONS.messages(14), onClick: () => showJsonlViewer(session) } : null,
   ].filter(Boolean);
   const stateActions = [
+    { label: 'Rename…', icon: PICONS.pencil(14), onClick: () => renameSessionFlow(session) },
     { label: 'Copy session ID', onClick: () => window.api.writeClipboard(session.sessionId) },
     isDismissibleSession(session.sessionId) ? { label: 'Dismiss', icon: PICONS.x(14), hint: 'never started', onClick: () => dismissSession(session.sessionId) } : null,
     session.type !== 'terminal' ? { label: session.archived ? 'Unarchive' : 'Archive', icon: PICONS.archive(14), onClick: () => toggleArchiveSession(session) } : null,
@@ -3337,6 +3338,22 @@ async function renameTrackFlow(project, track) {
   if (!name || name === track.name) return;
   const result = await window.api.updateTrack(track.id, { name });
   if (result?.error) { alert(result.error); return; }
+  loadProjects();
+}
+
+/**
+ * Rename a session, the same as the Sessions tab does inline: the name is
+ * stored beside the transcript, and typing the session's own title back
+ * clears it, so the title follows the CLI's again.
+ */
+async function renameSessionFlow(session) {
+  const fallback = session.aiTitle || session.summary || '';
+  const current = session.name || fallback;
+  const name = await showPromptDialog({ title: 'Rename session', label: 'Name', value: current, confirm: 'Rename' });
+  if (!name || name === current) return;
+  const nameToSave = name === fallback ? null : name;
+  await window.api.renameSession(session.sessionId, nameToSave);
+  session.name = nameToSave;
   loadProjects();
 }
 
