@@ -15,6 +15,8 @@ const PREVIEW_ICON = '<svg stroke="currentColor" fill="currentColor" stroke-widt
 
 const GOTO_LINE_ICON = '<svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" xmlns="http://www.w3.org/2000/svg"><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M4.268 21a2 2 0 0 0 1.727 1H18a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v3"></path><path d="m9 18-1.5-1.5"></path><circle cx="5" cy="14" r="3"></circle><g stroke="currentColor" stroke-width="1" text-anchor="middle" font-family="monospace" font-size="8"><text x="10" y="10">1</text><text x="14" y="18">2</text></g></svg>';
 
+const SHARE_ICON = '<svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" xmlns="http://www.w3.org/2000/svg"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><path d="M16 6l-4-4-4 4"></path><path d="M12 2v13"></path></svg>';
+
 const OPEN_EXTERNAL_ICON = '<svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" xmlns="http://www.w3.org/2000/svg"><path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg>';
 
 const CLOSE_ICON = '<svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 512 512" width="14" height="14" xmlns="http://www.w3.org/2000/svg"><path d="M400 145.49 366.51 112 256 222.51 145.49 112 112 145.49 222.51 256 112 366.51 145.49 400 256 289.49 366.51 400 400 366.51 289.49 256 400 145.49z"></path></svg>';
@@ -68,6 +70,7 @@ function toggleMarkdownPreview({ editorEl, previewEl, toggleBtn, editorView, isP
  * @param {boolean} opts.preview      - Show preview toggle
  * @param {boolean} opts.wrap         - Show wrap toggle
  * @param {boolean} opts.save         - Show save button
+ * @param {boolean} opts.share        - Show share button
  * @param {boolean} opts.openExternal - Show open-in-default-app button
  * @param {boolean} opts.close        - Show close button
  * @param {boolean} opts.diffToggle   - Show diff mode toggle
@@ -79,6 +82,7 @@ function toggleMarkdownPreview({ editorEl, previewEl, toggleBtn, editorView, isP
  *   .previewBtn   - Preview button (or null)
  *   .wrapBtn      - Wrap button (or null)
  *   .saveBtn      - Save button (or null)
+ *   .shareBtn     - Share button (or null)
  *   .openExternalBtn - Open-in-default-app button (or null)
  *   .closeBtn     - Close button (or null)
  *   .copyPathBtn  - Copy path button (or null)
@@ -173,6 +177,16 @@ function createViewerToolbar(opts = {}) {
     controlsEl.appendChild(saveBtn);
   }
 
+  let shareBtn = null;
+  if (opts.share) {
+    shareBtn = document.createElement('button');
+    shareBtn.className = 'fp-toolbar-btn fp-icon-btn';
+    shareBtn.title = 'Share';
+    shareBtn.setAttribute('aria-label', shareBtn.title);
+    shareBtn.innerHTML = SHARE_ICON;
+    controlsEl.appendChild(shareBtn);
+  }
+
   let openExternalBtn = null;
   if (opts.openExternal) {
     openExternalBtn = document.createElement('button');
@@ -202,6 +216,7 @@ function createViewerToolbar(opts = {}) {
     previewBtn,
     wrapBtn,
     saveBtn,
+    shareBtn,
     openExternalBtn,
     closeBtn,
     copyPathBtn,

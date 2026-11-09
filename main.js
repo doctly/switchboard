@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, protocol, screen, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, protocol, screen, shell, ShareMenu } = require('electron');
 const { Worker } = require('worker_threads');
 const path = require('path');
 const fs = require('fs');
@@ -39,7 +39,7 @@ const { scanSchedules } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { resolveEffectiveSettings } = require('./resolve-effective-settings');
 const { listProjectDirectory, readProjectFile, readPreviewFile, openFileExternally } = require('./project-files');
-const { manageProjectEntry } = require('./file-management');
+const { manageProjectEntry, shareFile } = require('./file-management');
 const { resolveTerminalFiles } = require('./terminal-file-links');
 const { PREVIEW_SCHEME, PREVIEW_SCHEMES, handlePreviewAssetRequest } = require('./preview-assets');
 protocol.registerSchemesAsPrivileged(PREVIEW_SCHEMES);
@@ -550,6 +550,18 @@ ipcMain.handle('resolve-terminal-files', (_event, references, context) => resolv
 ipcMain.handle('open-file-externally', async (_event, filePath, projectRoot) => {
   try {
     return { ok: true, ...await openFileExternally(filePath, projectRoot, shell) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// Share a viewer panel's file through the macOS share menu (AirDrop, Mail,
+// Messages and any app with a share extension). Other systems have no such menu.
+ipcMain.handle('share-file', (event, filePath) => {
+  try {
+    if (process.platform !== 'darwin') throw new Error('Sharing files is only available on macOS');
+    const window = BrowserWindow.fromWebContents(event.sender);
+    return { ok: true, ...shareFile(filePath, { share: file => new ShareMenu({ filePaths: [file] }).popup({ window }) }) };
   } catch (err) {
     return { ok: false, error: err.message };
   }

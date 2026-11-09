@@ -15,7 +15,7 @@ function setup() {
     replaceChildren(...children) { this.children = children; },
   });
   const toolbar = { setTitle(title) { this.titleEl.textContent = title; }, setPath() {}, setWrapMode() {}, setPreviewMode() {} };
-  for (const key of ['el', 'titleEl', 'previewBtn', 'wrapBtn', 'saveBtn', 'gotoLineBtn', 'copyContentBtn', 'openExternalBtn']) toolbar[key] = element();
+  for (const key of ['el', 'titleEl', 'previewBtn', 'wrapBtn', 'saveBtn', 'gotoLineBtn', 'copyContentBtn', 'openExternalBtn', 'shareBtn']) toolbar[key] = element();
   const revoked = [];
   let nextUrl = 0;
   let saved = 0;
@@ -50,6 +50,26 @@ test('the toolbar opens the shown file in its default app and reports failures',
   api.openFileExternally = async () => ({ ok: false, error: 'No default application' });
   await toolbar.openExternalBtn.click();
   assert.deepEqual(alerts, ['No default application']);
+});
+
+test('the share button hands the shown file to the share menu, media included, and reports failures', async () => {
+  const { panel, toolbar, api, media, alerts } = setup();
+  const calls = [];
+  api.shareFile = async (...args) => { calls.push(args); return { ok: true }; };
+  await toolbar.shareBtn.click();
+  assert.deepEqual(calls, []);
+  panel.open('Plan', '/Users/me/plan.md', '# plan');
+  assert.equal(toolbar.shareBtn.style.display, '');
+  await toolbar.shareBtn.click();
+  panel.open('Image', '/Users/me/shot.png', undefined, media);
+  assert.equal(toolbar.shareBtn.style.display, '');
+  await toolbar.shareBtn.click();
+  assert.deepEqual(calls, [['/Users/me/plan.md'], ['/Users/me/shot.png']]);
+  api.shareFile = async () => ({ ok: false, error: 'The file does not exist' });
+  await toolbar.shareBtn.click();
+  assert.deepEqual(alerts, ['The file does not exist']);
+  panel.open('Nothing', '', '');
+  assert.equal(toolbar.shareBtn.style.display, 'none');
 });
 
 test('media previews cannot save binary files and switching files restores editing', async () => {
