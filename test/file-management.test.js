@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { manageProjectEntry } = require('../file-management');
+const { manageProjectEntry, shareFile } = require('../file-management');
 
 function fixture(t) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-file-actions-'));
@@ -108,4 +108,20 @@ test('replacing an item during confirmation cannot trash its replacement', async
   await assert.rejects(run('notes.md', 'trash'), /item changed/);
   assert.deepEqual(calls, []);
   assert.equal(fs.readFileSync(file, 'utf8'), 'replacement');
+});
+
+test('shareFile shares any existing absolute file, resolved, and nothing else', t => {
+  const { temp } = fixture(t);
+  const shared = [];
+  const share = file => shared.push(file);
+  const outside = path.join(fs.realpathSync(temp), 'elsewhere', 'plan.md');
+  fs.mkdirSync(path.dirname(outside));
+  fs.writeFileSync(outside, '# plan');
+  assert.deepEqual(shareFile(path.join(temp, 'elsewhere', '..', 'elsewhere', 'plan.md'), { share }), { filePath: outside });
+  assert.deepEqual(shared, [outside]);
+  assert.throws(() => shareFile('elsewhere/plan.md', { share }), /Invalid file path/);
+  assert.throws(() => shareFile(undefined, { share }), /Invalid file path/);
+  assert.throws(() => shareFile(path.join(temp, 'missing.md'), { share }), /does not exist/);
+  assert.throws(() => shareFile(path.dirname(outside), { share }), /Not a file/);
+  assert.equal(shared.length, 1);
 });

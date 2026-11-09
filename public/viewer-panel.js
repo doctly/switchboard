@@ -10,6 +10,7 @@
  *   - Images, PDFs and PowerPoint: read-only previews with text editing controls hidden
  *   - Wrap: shown for text (defaults on for markdown, off for others)
  *   - Save: shown if onSave is provided
+ *   - Share: macOS share menu, shown while a file is open
  *   - Open in default app: always shown
  *   - Close: shown if onClose is provided
  *   - Copy path/content: shown if opted in
@@ -53,6 +54,7 @@ class ViewerPanel {
       wrap: true,
       gotoLine: true,
       save: !!opts.onSave,
+      share: window.api.platform === 'darwin',
       openExternal: true,
       close: !!opts.onClose,
     });
@@ -112,6 +114,10 @@ class ViewerPanel {
       toolbar.saveBtn.addEventListener('click', () => this._save());
     }
 
+    if (toolbar.shareBtn) {
+      toolbar.shareBtn.addEventListener('click', () => this._share());
+    }
+
     if (toolbar.openExternalBtn) {
       toolbar.openExternalBtn.addEventListener('click', () => this._openExternally());
     }
@@ -151,6 +157,7 @@ class ViewerPanel {
     this.previewType = preview.previewType || (/\.html?$/i.test(filePath) ? 'html' : 'text');
     this.toolbar.setTitle(title);
     this.toolbar.setPath(filePath);
+    if (this.toolbar.shareBtn) this.toolbar.shareBtn.style.display = filePath ? '' : 'none';
 
     const isMd = this._isMarkdown(filePath);
     const isJson = this._isJson(filePath);
@@ -424,6 +431,17 @@ class ViewerPanel {
       if (!opened?.ok) throw new Error(opened?.error || 'Could not open the file in its default application.');
     } catch (error) {
       alert(error.message || 'Could not open the file in its default application.');
+    }
+  }
+
+  // Shares the file as saved on disk; unsaved edits stay in this editor.
+  async _share() {
+    if (!this.filePath) return;
+    try {
+      const shared = await window.api.shareFile(this.filePath);
+      if (!shared?.ok) throw new Error(shared?.error || 'Could not share the file.');
+    } catch (error) {
+      alert(error.message || 'Could not share the file.');
     }
   }
 

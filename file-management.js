@@ -57,4 +57,20 @@ async function manageProjectEntry(projectPath, relativePath, action, newName, { 
   return result;
 }
 
-module.exports = { manageProjectEntry, resolveManagedEntry };
+// Hand a viewer panel's file to the system share menu. Takes an absolute path,
+// since those panels also open files outside any project, and only shares a
+// file that exists.
+function shareFile(filePath, { share }) {
+  if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error('Invalid file path');
+  let resolved;
+  try {
+    resolved = fs.realpathSync(filePath);
+  } catch {
+    throw new Error('The file does not exist');
+  }
+  if (!fs.statSync(resolved).isFile()) throw new Error('Not a file');
+  share(resolved);
+  return { filePath: resolved };
+}
+
+module.exports = { manageProjectEntry, resolveManagedEntry, shareFile };
