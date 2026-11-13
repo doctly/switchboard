@@ -18,6 +18,11 @@ contextBridge.exposeInMainWorld('api', {
   getActiveSessions: () => ipcRenderer.invoke('get-active-sessions'),
   getActiveTerminals: () => ipcRenderer.invoke('get-active-terminals'),
   stopSession: (id) => ipcRenderer.invoke('stop-session', id),
+  // RAM task manager: memory per session/task tree, and the ways to end one
+  getProcessUsage: () => ipcRenderer.invoke('get-process-usage'),
+  stopOwner: (owner) => ipcRenderer.invoke('stop-owner', owner),
+  killOwnedProcess: (owner, pid, force) => ipcRenderer.invoke('kill-owned-process', owner, pid, force),
+  forceStopOwner: (owner) => ipcRenderer.invoke('force-stop-owner', owner),
   toggleStar: (id) => ipcRenderer.invoke('toggle-star', id),
   renameSession: (id, name) => ipcRenderer.invoke('rename-session', id, name),
   archiveSession: (id, archived) => ipcRenderer.invoke('archive-session', id, archived),

@@ -410,6 +410,22 @@ function createTaskManager(options) {
     return Object.fromEntries(projectPaths.map(projectPath => [projectPath, listTasks(projectPath)]));
   }
 
+  /** Every running task that owns a process (a compound only orchestrates its children). */
+  function listProcesses() {
+    const out = [];
+    for (const run of runs.values()) {
+      if (run.state !== 'running' || run.virtual || !run.process?.pid) continue;
+      out.push({
+        projectPath: run.projectPath,
+        label: run.label,
+        pid: run.process.pid,
+        startedAt: run.startedAt || null,
+        stopRequested: !!run.stopRequested,
+      });
+    }
+    return out;
+  }
+
   function shutdown() {
     for (const run of runs.values()) {
       if (run.state === 'running' && run.process) {
@@ -426,6 +442,7 @@ function createTaskManager(options) {
     getRun,
     listTasks,
     listTasksForProjects,
+    listProcesses,
     resize,
     restartTask,
     sendInput,

@@ -38,6 +38,7 @@ const memoryPanel = new ViewerPanel(memoryViewer, {
 });
 const terminalArea = document.getElementById('terminal-area');
 const settingsViewer = document.getElementById('settings-viewer');
+const processViewer = document.getElementById('process-viewer');
 const globalSettingsBtn = document.getElementById('global-settings-btn');
 const addProjectBtn = document.getElementById('add-project-btn');
 const projectsContent = document.getElementById('projects-content');
@@ -552,8 +553,8 @@ globalSettingsBtn.addEventListener('click', () => {
   openSettingsViewer('global');
 });
 
-// --- "More" button: Plans, Agent Files, Stats and Global settings share one
-// menu so the tab strip stays short. The tab buttons stay in the DOM, hidden,
+// --- "More" button: Plans, Agent Files, Stats, the Task Manager and Global
+// settings share one menu so the tab strip stays short. The tab buttons stay in the DOM, hidden,
 // so everything that clicks them (shortcuts, the quota gauge) keeps working.
 const sidebarMoreBtn = document.getElementById('sidebar-more-btn');
 const MORE_TABS = ['plans', 'memory', 'stats'];
@@ -578,6 +579,7 @@ sidebarMoreBtn.addEventListener('click', (e) => {
   showContextMenu([
     ...MORE_TABS.map(tabItem),
     { sep: true },
+    { label: 'Task Manager', icon: ICONS.memory(14), onClick: () => openProcessViewer() },
     { label: 'Global settings', icon: ICONS.gear(14), onClick: () => globalSettingsBtn.click() },
     { label: 'Join Slack', icon: slackLink.querySelector('svg').outerHTML, onClick: () => window.api.openExternal(slackLink.href) },
   ], { anchor: e.currentTarget });
@@ -1264,6 +1266,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
       planViewer.style.display = 'none';
       memoryViewer.style.display = 'none';
       settingsViewer.style.display = 'none';
+      processViewer.style.display = 'none';
       statsViewer.style.display = 'flex';
       loadStats();
     } else if (tabName === 'memory') {

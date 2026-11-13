@@ -135,3 +135,24 @@ test('stop all is scoped to one project and stops every running task there', asy
   assert.equal(manager.getRun('/other-project', 'api').state, 'running');
   manager.shutdown();
 });
+
+test('lists the process of each running task, for the RAM task manager', async () => {
+  const task = {
+    label: 'dev', type: 'shell', executable: 'npm', args: ['run', 'dev'],
+    cwd: process.cwd(), env: {}, useShell: true, dependsOn: [], dependsOrder: 'parallel', supported: true,
+  };
+  const { manager, spawns } = makeManager([task]);
+  assert.deepEqual(manager.listProcesses(), []);
+
+  manager.startTask('/project', 'dev');
+  await nextTurn();
+  spawns[0].process.pid = 4242;
+  const [listed] = manager.listProcesses();
+  assert.equal(listed.projectPath, '/project');
+  assert.equal(listed.label, 'dev');
+  assert.equal(listed.pid, 4242);
+  assert.equal(listed.stopRequested, false);
+
+  manager.stopTask('/project', 'dev');
+  assert.deepEqual(manager.listProcesses(), []);
+});

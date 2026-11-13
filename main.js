@@ -44,6 +44,7 @@ const { resolveTerminalFiles } = require('./terminal-file-links');
 const { PREVIEW_SCHEME, PREVIEW_SCHEMES, handlePreviewAssetRequest } = require('./preview-assets');
 protocol.registerSchemesAsPrivileged(PREVIEW_SCHEMES);
 const { createTaskManager } = require('./task-manager');
+const { createProcessMonitor } = require('./process-monitor');
 const { lastAssistantMessage } = require('./session-preview');
 
 
@@ -1163,6 +1164,102 @@ ipcMain.handle('stop-session', (_event, sessionId) => {
   session.stopRequested = true;
   session.pty.kill();
   return { ok: true };
+});
+
+// --- IPC: RAM task manager ---
+// What each live session and running task costs, measured over its whole
+// process tree (the CLI, its MCP servers, whatever it started), so the heavy
+// ones can be found and stopped. Root pids are always looked up here, never
+// taken from the renderer.
+const processMonitor = createProcessMonitor();
+
+/** The live session behind an id, also under the real id a fork or plan-accept gave it. */
+function ownedSession(sessionId) {
+  let session = activeSessions.get(sessionId);
+  if (!session) session = [...activeSessions.values()].find(s => s.realSessionId === sessionId);
+  return session && !session.exited ? session : null;
+}
+
+/** One entry per live session and per running task, each with the pid its tree hangs from. */
+function processOwners() {
+  const owners = [];
+  const seen = new Set();
+  for (const [key, session] of activeSessions) {
+    if (seen.has(session) || session.exited) continue;
+    seen.add(session);
+    owners.push({
+      kind: 'session',
+      id: session.realSessionId || key,
+      pid: session.pty?.pid || null,
+      type: session.isPlainTerminal ? 'terminal' : 'cli',
+      runtime: session.isPlainTerminal ? null : session.runtime || null,
+      projectPath: session.projectPath || null,
+      startedAt: session._openedAt || null,
+      busy: !!session._cliBusy,
+      stopRequested: !!session.stopRequested,
+    });
+  }
+  for (const task of taskManager.listProcesses()) {
+    owners.push({ kind: 'task', id: `${task.projectPath}\0${task.label}`, type: 'task', ...task });
+  }
+  return owners;
+}
+
+function ownerRootPid(owner) {
+  if (owner?.kind === 'session') return ownedSession(owner.id)?.pty?.pid || null;
+  if (owner?.kind === 'task') {
+    return taskManager.listProcesses().find(t => t.projectPath === owner.projectPath && t.label === owner.label)?.pid || null;
+  }
+  return null;
+}
+
+ipcMain.handle('get-process-usage', async () => {
+  const owners = await processMonitor.measure(processOwners());
+  // Switchboard's own Electron processes (main, window, GPU), for scale.
+  const metrics = app.getAppMetrics();
+  let appBytes = 0;
+  let appCpu = 0;
+  for (const metric of metrics) {
+    appBytes += (metric.memory?.workingSetSize || 0) * 1024;
+    appCpu += metric.cpu?.percentCPUUsage || 0;
+  }
+  return {
+    platform: process.platform,
+    totalMemBytes: os.totalmem(),
+    app: { rssBytes: appBytes, cpu: Math.round(appCpu * 10) / 10, processCount: metrics.length },
+    owners,
+    sampledAt: Date.now(),
+  };
+});
+
+// The Task Manager's Stop: the usual stop, then nothing of the tree left behind,
+// not even a child that ignored the hangup (see stopTree).
+ipcMain.handle('stop-owner', async (_event, owner) => {
+  const rootPid = ownerRootPid(owner);
+  if (!rootPid) return { ok: false, error: 'Not running' };
+  return processMonitor.stopTree(rootPid, () => {
+    if (owner.kind === 'task') return taskManager.stopTask(owner.projectPath, owner.label);
+    const session = ownedSession(owner.id);
+    if (!session) return null;
+    session.stopRequested = true;
+    return session.pty.kill();
+  });
+});
+
+// One process inside a session's or task's tree: SIGTERM, or SIGKILL when forced.
+ipcMain.handle('kill-owned-process', async (_event, owner, pid, force) => {
+  const rootPid = ownerRootPid(owner);
+  if (!rootPid) return { ok: false, error: 'Not running' };
+  return processMonitor.killInTree(rootPid, Number(pid), force ? 'SIGKILL' : 'SIGTERM');
+});
+
+// The way out when Stop is not enough: SIGKILL the whole tree, still counted as stopped by the user.
+ipcMain.handle('force-stop-owner', async (_event, owner) => {
+  const rootPid = ownerRootPid(owner);
+  if (!rootPid) return { ok: false, error: 'Not running' };
+  if (owner.kind === 'session') ownedSession(owner.id).stopRequested = true;
+  else taskManager.stopTask(owner.projectPath, owner.label);
+  return processMonitor.killTree(rootPid);
 });
 
 // --- IPC: toggle-star ---
