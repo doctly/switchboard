@@ -5,7 +5,7 @@
 // Depends on globals from app.js: openSessions, activeSessionId, sessionMap, activePtyIds,
 // sortedOrder, sidebarContent, terminalsEl, gridViewActive, gridViewer, gridViewerCount,
 // placeholder, terminalHeader, planViewer, statsViewer, memoryViewer, settingsViewer,
-// jsonlViewer, terminalArea, cachedProjects, isMac
+// processViewer, jsonlViewer, terminalArea, cachedProjects, isMac
 // Depends on: cleanDisplayName, formatDate (utils.js), fitAndScroll, showSession (terminal-manager.js)
 
 let gridCards = new Map(); // sessionId → card wrapper element
@@ -179,6 +179,7 @@ function showGridView() {
   statsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
+  processViewer.style.display = 'none';
   jsonlViewer.style.display = 'none';
   if (typeof jsonlSearch !== 'undefined') jsonlSearch?.close(false);
   terminalArea.style.display = '';

@@ -1,7 +1,7 @@
 // --- Plans & Memory viewers ---
 // Depends on globals: cachedPlans, plansContent, planPanel, planViewer,
 // memoryContent, memoryPanel, memoryViewer, placeholder, terminalArea,
-// statsViewer, settingsViewer, jsonlViewer (app.js)
+// statsViewer, settingsViewer, processViewer, jsonlViewer (app.js)
 // Depends on: formatDate (utils.js)
 
 let currentPlanContent = "";
@@ -121,6 +121,7 @@ async function openPlan(plan) {
   statsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
+  processViewer.style.display = 'none';
   planViewer.style.display = 'flex';
 
   planPanel.open(plan.title, currentPlanFilePath, currentPlanContent);
@@ -133,6 +134,7 @@ function hideViewerPanels() {
   statsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
+  processViewer.style.display = 'none';
   jsonlViewer.style.display = 'none';
   terminalArea.style.display = '';
 }
@@ -285,6 +287,7 @@ async function openMemory(file) {
   planViewer.style.display = 'none';
   statsViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
+  processViewer.style.display = 'none';
   memoryViewer.style.display = 'flex';
 
   memoryPanel.open(file.filename, file.filePath, content);
