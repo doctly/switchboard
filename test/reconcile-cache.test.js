@@ -135,12 +135,16 @@ test('reconcileCacheFromFilesystem indexes new and stale folders but skips up-to
     // never-indexed (no meta), stale (meta older than disk), and up-to-date folders
     writeSession(path.join(projectsDir, 'proj-new'), '/tmp/proj-new');
     writeSession(path.join(projectsDir, 'proj-stale'), '/tmp/proj-stale');
-    writeSession(path.join(projectsDir, 'proj-current'), '/tmp/proj-current');
+    // The up-to-date folder's project must exist on disk: a recorded project
+    // directory that is gone gets one re-check per run (tested below).
+    const currentCwd = path.join(projectsDir, 'cwd-current');
+    fs.mkdirSync(currentCwd);
+    writeSession(path.join(projectsDir, 'proj-current'), currentCwd);
 
     const metaMap = new Map();
     metaMap.set('proj-stale', { folder: 'proj-stale', projectPath: '/tmp/proj-stale', indexMtimeMs: 0 });
     metaMap.set('proj-current', {
-      folder: 'proj-current', projectPath: '/tmp/proj-current',
+      folder: 'proj-current', projectPath: currentCwd,
       indexMtimeMs: getFolderIndexMtimeMs(path.join(projectsDir, 'proj-current')),
     });
 
@@ -159,6 +163,47 @@ test('reconcileCacheFromFilesystem indexes new and stale folders but skips up-to
     assert.ok(fake.indexedFolders.has('proj-new'), 'new folder should be indexed');
     assert.ok(fake.indexedFolders.has('proj-stale'), 'stale folder (older indexMtimeMs) should be re-indexed');
     assert.ok(!fake.indexedFolders.has('proj-current'), 'up-to-date folder should be skipped');
+  } finally {
+    fs.rmSync(projectsDir, { recursive: true, force: true });
+  }
+});
+
+test('a folder recorded under a project directory that is gone is re-filed under the one that exists', () => {
+  // A project that moved: its folder still holds a transcript from the old
+  // location (sorting first by name), and the cache from an older build filed
+  // every session under that old, now missing, directory. Nothing changed on
+  // disk since, so only the missing-directory re-check gets it re-planned.
+  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-moved-'));
+  try {
+    const folder = 'C--work-Vault-Moved';
+    const folderPath = path.join(projectsDir, folder);
+    const oldCwd = path.join(projectsDir, 'old-location', 'Vault', 'Moved');
+    const newCwd = path.join(projectsDir, 'work', 'Vault', 'Moved');
+    fs.mkdirSync(newCwd, { recursive: true });
+    writeNamedSession(folderPath, oldCwd, '00000000-old', '2026-10-30T00:00:00Z');
+    writeNamedSession(folderPath, newCwd, 'ffffffff-new', '2026-11-20T00:00:00Z');
+    const oldTime = new Date('2026-10-30T00:00:00Z');
+    fs.utimesSync(path.join(folderPath, '00000000-old.jsonl'), oldTime, oldTime);
+
+    const metaMap = new Map([[folder, {
+      folder, projectPath: oldCwd, indexMtimeMs: getFolderIndexMtimeMs(folderPath),
+    }]]);
+    const fake = makeFakeDb(metaMap, { disabledHarnesses: ['codex'] });
+    sessionCache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(),
+      getMainWindow: () => null, log: console, db: fake.db });
+
+    sessionCache.reconcileCacheFromFilesystem();
+
+    assert.equal(metaMap.get(folder).projectPath, newCwd);
+    const rows = fake.cachedRows.filter(r => r.folder === folder);
+    assert.deepEqual(rows.map(r => r.sessionId).sort(), ['00000000-old', 'ffffffff-new'],
+      'every session, the old one included, is passed through again');
+    assert.ok(rows.every(r => r.projectPath === newCwd), 'and re-filed under the existing directory');
+
+    // Once per run: a second pass with nothing changed leaves the folder alone.
+    fake.indexedFolders.clear();
+    sessionCache.reconcileCacheFromFilesystem();
+    assert.ok(!fake.indexedFolders.has(folder));
   } finally {
     fs.rmSync(projectsDir, { recursive: true, force: true });
   }

@@ -115,16 +115,39 @@ function extractCwdFromJsonl(filePath) {
 }
 
 /** The project a folder belongs to, read out of any transcript it contains. */
+//
+// A folder can hold transcripts from more than one place on disk: a project
+// that was moved (or a transcript copied in from the folder of its old
+// location) keeps old sessions whose cwd no longer exists. Taking the first
+// file in directory order could pick such a stale cwd, and every New session
+// for the project would then fail with "project directory no longer exists".
+// So transcripts are tried newest first, and a cwd that still exists wins;
+// only when none of the newest few exist is the newest cwd returned as is.
+const DERIVE_CWD_CANDIDATES = 10;
+
 function deriveProjectPath(folderPath) {
   try {
     const entries = fs.readdirSync(folderPath, { withFileTypes: true });
-    // Check direct .jsonl files first
+    // Check direct .jsonl files first, newest first
+    const transcripts = [];
     for (const e of entries) {
-      if (e.isFile() && e.name.endsWith('.jsonl')) {
-        const cwd = extractCwdFromJsonl(path.join(folderPath, e.name));
-        if (cwd) return cwd;
-      }
+      if (!e.isFile() || !e.name.endsWith('.jsonl')) continue;
+      const filePath = path.join(folderPath, e.name);
+      let mtimeMs = 0;
+      try { mtimeMs = fs.statSync(filePath).mtimeMs; } catch { continue; }
+      transcripts.push({ filePath, mtimeMs });
     }
+    transcripts.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    let newest = null;
+    let tried = 0;
+    for (const { filePath } of transcripts) {
+      const cwd = extractCwdFromJsonl(filePath);
+      if (!cwd) continue;
+      if (!newest) newest = cwd;
+      if (fs.existsSync(cwd)) return cwd;
+      if (++tried >= DERIVE_CWD_CANDIDATES) break;
+    }
+    if (newest) return newest;
     // Check session subdirectories (UUID folders with subagent .jsonl files)
     for (const e of entries) {
       if (!e.isDirectory()) continue;

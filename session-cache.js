@@ -29,7 +29,7 @@ function resolveFolderPath(folder) {
 let PROJECTS_DIR, activeSessions, getMainWindow, log;
 let deleteCachedFolder, getCachedByFolder, getCachedSession, upsertCachedSessions, deleteCachedSession;
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
-let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, setSetting, getMeta, setName;
+let setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, setSetting, getMeta, setName;
 let updateCachedAiTitle, updateSearchTitle;
 let indexer = null;
 let withImmediateTransaction = null;
@@ -51,6 +51,8 @@ function init(ctx) {
   deleteSearchSession = ctx.db.deleteSearchSession;
   upsertSearchEntries = ctx.db.upsertSearchEntries;
   setFolderMeta = ctx.db.setFolderMeta;
+  getFolderMeta = ctx.db.getFolderMeta || (folder => ctx.db.getAllFolderMeta().get(folder) || null);
+  recheckedMissingProjects.clear();
   getAllFolderMeta = ctx.db.getAllFolderMeta;
   getAllMeta = ctx.db.getAllMeta;
   getAllCached = ctx.db.getAllCached;
@@ -248,6 +250,15 @@ function planFolderRefresh(folder, force = false) {
     return null;
   }
 
+  // The folder now resolves to a different project than the one its cached
+  // rows were filed under (deriveProjectPath moved off a cwd that no longer
+  // exists). Every transcript is passed through again so each row picks up the
+  // new projectPath; an unchanged one resumes at its end, so this costs no
+  // re-parse. Without it the old sessions would stay grouped under the stale
+  // path and keep launching into a directory that is gone.
+  const previousProject = getFolderMeta(folder)?.projectPath || null;
+  if (h.groupsByProject && previousProject && previousProject !== folderProject) force = true;
+
   // Get what's currently cached for this folder
   const cachedSessions = getCachedByFolder(folder);
   const cachedMap = new Map(); // sessionId → fileMtime ISO string (invalidation key)
@@ -427,6 +438,21 @@ function readInBackground(plans) {
 }
 
 /**
+ * A folder whose recorded project directory no longer exists is planned again
+ * once per run even though no transcript changed, so a cache written before
+ * deriveProjectPath preferred existing directories gets corrected without
+ * waiting for the next session in that folder. Once per run keeps a project
+ * that really was deleted from being re-derived on every pass.
+ */
+const recheckedMissingProjects = new Set();
+function needsMissingProjectRecheck(folder, meta) {
+  if (!meta?.projectPath || recheckedMissingProjects.has(folder)) return false;
+  if (!harnessForFolder(folder).groupsByProject) return false;
+  recheckedMissingProjects.add(folder);
+  return !fs.existsSync(meta.projectPath);
+}
+
+/**
  * Reconcile the cache with the filesystem.
  *
  * Re-indexes only folders that are new or whose newest .jsonl is newer than what
@@ -450,7 +476,8 @@ function reconcileCacheFromFilesystem() {
     try {
       const meta = metaMap.get(folder);
       const folderPath = resolveFolderPath(folder);
-      if (!meta || getFolderIndexMtimeMs(folderPath) > (meta.indexMtimeMs || 0)) {
+      if (!meta || getFolderIndexMtimeMs(folderPath) > (meta.indexMtimeMs || 0)
+          || needsMissingProjectRecheck(folder, meta)) {
         const plan = planFolderRefresh(folder);
         if (plan) plans.push(plan);
       }
@@ -734,7 +761,8 @@ async function indexFoldersInWorker({ folders, force = false, progress = () => {
     const folder = allFolders[i];
     const meta = metaMap.get(folder);
     if (!force && !folders && meta && fs.existsSync(resolveFolderPath(folder)) &&
-        getFolderIndexMtimeMs(resolveFolderPath(folder)) <= (meta.indexMtimeMs || 0)) continue;
+        getFolderIndexMtimeMs(resolveFolderPath(folder)) <= (meta.indexMtimeMs || 0) &&
+        !needsMissingProjectRecheck(folder, meta)) continue;
     progress({ text: `Indexing folders (${i + 1}/${allFolders.length})…`, count });
     try {
       const plan = planFolderRefresh(folder, force);
