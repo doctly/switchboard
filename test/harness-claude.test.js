@@ -1,5 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const claude = require('../harnesses/claude');
 const { getHarness, DEFAULT_HARNESS, availableHarnesses } = require('../harnesses');
@@ -353,4 +356,45 @@ test('initialPrompt is the last positional argument for a fresh session only', (
   assert.ok(!resumed.includes('Work on phase 2'), 'a resume keeps its conversation');
   const forked = H.buildLaunchArgs({ sessionId: 'new', isNew: true, options: { forkFrom: 'src', initialPrompt: 'x' } });
   assert.ok(!forked.includes('x'), 'a fork carries its parent prompt');
+});
+
+// A moved project's folder can still hold a transcript from the old location.
+// Directory order put it first, so every New session tried to start in a
+// directory that no longer exists (git-bug ec04b89).
+function writeTranscript(folderPath, name, cwd, mtime) {
+  const file = path.join(folderPath, name + '.jsonl');
+  fs.writeFileSync(file, JSON.stringify({ type: 'user', cwd, message: { content: 'hi' } }) + '\n');
+  fs.utimesSync(file, mtime, mtime);
+}
+
+test('deriveProjectPath prefers a cwd that still exists over a stale one listed first', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-derive-'));
+  try {
+    const folderPath = path.join(root, 'C--work-Vault-Moved');
+    fs.mkdirSync(folderPath);
+    const live = path.join(root, 'work', 'Vault', 'Moved');
+    fs.mkdirSync(live, { recursive: true });
+    const gone = path.join(root, 'old', 'Vault', 'Moved');
+    // The stale transcript sorts first by name AND is newer: existence wins.
+    writeTranscript(folderPath, '0000-old', gone, new Date('2026-11-23T00:00:00Z'));
+    writeTranscript(folderPath, 'ffff-new', live, new Date('2026-11-01T00:00:00Z'));
+    assert.equal(claude.deriveProjectPath(folderPath), live);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('deriveProjectPath falls back to the newest cwd when none exists', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-derive-'));
+  try {
+    const folderPath = path.join(root, 'proj');
+    fs.mkdirSync(folderPath);
+    const older = path.join(root, 'gone-older');
+    const newer = path.join(root, 'gone-newer');
+    writeTranscript(folderPath, '0000-a', older, new Date('2026-10-01T00:00:00Z'));
+    writeTranscript(folderPath, 'ffff-b', newer, new Date('2026-11-01T00:00:00Z'));
+    assert.equal(claude.deriveProjectPath(folderPath), newer);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

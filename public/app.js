@@ -1057,6 +1057,10 @@ async function launchNewSession(project, sessionOptions, { focus = true } = {}) 
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
     entry.closed = true;
+    // Show the terminal holding the error: without this the entry stays
+    // hidden and a failed launch looks like a New session button that does
+    // nothing.
+    if (focus) showSession(sessionId);
     return;
   }
   if (typeof setSessionMcpActive === 'function') setSessionMcpActive(sessionId, !!result.mcpActive);
