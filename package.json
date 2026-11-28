@@ -66,6 +66,7 @@
       "harnesses/**/*",
       "workers/**/*",
       "public/**/*",
+      "templates/**/*",
       "node_modules/**/*"
     ],
     "asarUnpack": [

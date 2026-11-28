@@ -203,13 +203,29 @@ function templatesRoot() {
   return templatesDir || path.join(dataDir(), 'templates');
 }
 
+/**
+ * Recursive copy for files that ship inside the app. In a packaged build they
+ * are in app.asar, which fs.cpSync cannot read; these calls can. Reading and
+ * writing also gives the copies normal permissions, which copyFileSync does not
+ * out of the archive.
+ */
+function copyBundledTree(from, to) {
+  fs.mkdirSync(to, { recursive: true });
+  for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+    const source = path.join(from, entry.name);
+    const target = path.join(to, entry.name);
+    if (entry.isDirectory()) copyBundledTree(source, target);
+    else fs.writeFileSync(target, fs.readFileSync(source));
+  }
+}
+
 /** Copy the bundled templates in when the folder does not exist yet. Never overwrites. */
 function seedTemplates() {
   const dir = templatesRoot();
   if (fs.existsSync(dir)) return false;
   if (!fs.existsSync(BUNDLED_TEMPLATES_DIR)) return false;
   try {
-    fs.cpSync(BUNDLED_TEMPLATES_DIR, dir, { recursive: true });
+    copyBundledTree(BUNDLED_TEMPLATES_DIR, dir);
     return true;
   } catch (err) {
     log.error?.(`[projects] could not seed templates into ${dir}`, err);

@@ -405,7 +405,10 @@
       window.api.listTemplates().then(result => {
         const dirEl = settingsViewerBody.querySelector('#sv-templates-dir');
         if (dirEl && result?.dir) dirEl.textContent = result.dir;
-        openTemplates.onclick = () => { if (result?.dir) window.api.openPath(result.dir); };
+        openTemplates.onclick = async () => {
+          const opened = result?.dir ? await window.api.openPath(result.dir) : result;
+          if (opened?.error) alert(`Could not open the templates folder: ${opened.error}`);
+        };
       }).catch(() => {});
     }
 

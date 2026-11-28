@@ -891,6 +891,26 @@ test('templates are seeded once into a missing folder and never overwritten', ()
   }
 });
 
+test('the packaged app ships the bundled templates', () => {
+  assert.ok(require('../package.json').build.files.includes('templates/**/*'));
+});
+
+test('templates are seeded without fs.cpSync, which cannot read the app archive', () => {
+  const dir = path.join(tmpDir('switchboard-tpl-'), 'templates');
+  const bundled = path.join(__dirname, '..', 'templates');
+  const cpSync = fs.cpSync;
+  try {
+    fs.cpSync = () => { throw Object.assign(new Error('not found in app.asar'), { code: 'ENOENT' }); };
+    projects.init({ db: makeFakeDb(), log: { info() {}, error() {} }, buildProjectsFromCache: () => [], templatesDir: dir });
+    assert.equal(projects.listTemplates().templates.length, 3);
+    const tree = root => fs.readdirSync(root, { recursive: true }).sort();
+    assert.deepEqual(tree(dir), tree(bundled), 'nested folders and files too');
+  } finally {
+    fs.cpSync = cpSync;
+    rm(path.dirname(dir));
+  }
+});
+
 test('projectsRoot expands ~ and falls back to ~/Switchboard', () => {
   const home = os.homedir();
   projects.init({ db: { getSetting: () => ({ projectsRoot: '~/Work/projects' }) }, buildProjectsFromCache: () => [] });
